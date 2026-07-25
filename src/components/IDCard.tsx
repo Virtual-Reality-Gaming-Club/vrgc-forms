@@ -1,9 +1,8 @@
 "use client";
 
 import React, { useState, useEffect } from 'react';
-import { auth, googleProvider, db } from '../lib/firebase';
+import { auth, googleProvider } from '../lib/firebase';
 import { signInWithPopup, signOut, onAuthStateChanged, User } from 'firebase/auth';
-import { collection, onSnapshot, doc, deleteDoc, updateDoc, setDoc, getDoc, addDoc, getDocs, query, orderBy, limit } from 'firebase/firestore';
 import { supabase } from '../lib/supabase';
 import { CONFIG } from '../lib/config';
 
@@ -137,7 +136,7 @@ const IDCard: React.FC<IDCardProps> = ({ onRedirect }) => {
     targetRegNo?: string
   ) => {
     try {
-      if (!db || !currentUser) return;
+      if (!currentUser) return;
       const logEntry: AdminActivityLog = {
         action,
         performedBy: currentUser.email || 'Admin',
@@ -147,20 +146,31 @@ const IDCard: React.FC<IDCardProps> = ({ onRedirect }) => {
         details,
         timestamp: new Date().toISOString()
       };
-      await addDoc(collection(db, 'admin_logs'), logEntry);
+      const { error } = await supabase
+  .from("admin_logs")
+  .insert([logEntry]);
+
+if (error) {
+  console.error(error);
+}
     } catch (err) {
       console.error("Failed to write admin activity log:", err);
     }
   };
 
   const handleDeleteLog = async (logId?: string) => {
-    if (!logId || !db) return;
+    if (!logId) return;
     const userEmail = (currentUser?.email || '').toLowerCase();
     if (userEmail !== 'abhinav.25bcy10254@vitbhopal.ac.in') {
       return;
     }
     try {
-      await deleteDoc(doc(db, 'admin_logs', logId));
+      const { error } = await supabase
+  .from("admin_logs")
+  .delete()
+  .eq("id", logId);
+
+if (error) throw error;
       setAdminLogs(prev => prev.filter(l => l.id !== logId));
       setSyncToastMessage("Activity log entry deleted.");
       setTimeout(() => setSyncToastMessage(null), 3000);
@@ -171,23 +181,20 @@ const IDCard: React.FC<IDCardProps> = ({ onRedirect }) => {
 
   // Real-time listener for admin_logs
   useEffect(() => {
-    if (!isAdmin || !db) return;
-    try {
-      const logsQuery = query(collection(db, 'admin_logs'), orderBy('timestamp', 'desc'), limit(100));
-      const unsubscribe = onSnapshot(logsQuery, (snapshot) => {
-        const logsList: AdminActivityLog[] = [];
-        snapshot.forEach(docSnap => {
-          logsList.push({ id: docSnap.id, ...docSnap.data() } as AdminActivityLog);
-        });
-        setAdminLogs(logsList);
-      }, (error) => {
-        console.warn("Real-time admin logs listener notice:", error);
-      });
-      return () => unsubscribe();
-    } catch (e) {
-      console.warn("Could not query admin_logs:", e);
-    }
-  }, [isAdmin]);
+  if (!isAdmin) return;
+
+  const loadLogs = async () => {
+    const { data, error } = await supabase
+      .from("admin_logs")
+      .select("*")
+      .order("timestamp", { ascending: false })
+      .limit(100);
+
+    if (!error) setAdminLogs(data || []);
+  };
+
+  loadLogs();
+}, [isAdmin]);
 
   // Close mobile 3-dots menu on outside click
   useEffect(() => {
@@ -322,38 +329,41 @@ const IDCard: React.FC<IDCardProps> = ({ onRedirect }) => {
 
   // Subscribe to real-time updates from 'id_cards' Firestore collection (Admins only)
   useEffect(() => {
-    if (!currentUser || !isAdmin) return;
+  if (!currentUser || !isAdmin) return;
 
+  const loadCandidates = async () => {
     setLoadingData(true);
-    const unsub = onSnapshot(collection(db, 'id_cards'), (snapshot) => {
-      const candidatesData: CandidateSubmission[] = [];
-      snapshot.forEach((doc) => {
-        candidatesData.push({ id: doc.id, ...doc.data() } as CandidateSubmission);
-      });
-      candidatesData.sort((a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime());
-      setCandidates(candidatesData);
-      setLoadingData(false);
-    }, (error) => {
-      console.error("Firestore subscription error:", error);
-      setLoadingData(false);
-    });
 
-    return () => unsub();
-  }, [currentUser, isAdmin]);
+    const { data, error } = await supabase
+      .from("id_cards")
+      .select("*")
+      .order("submittedAt", { ascending: false });
+
+    if (error) {
+      console.error(error);
+    } else {
+      setCandidates(data || []);
+    }
+
+    setLoadingData(false);
+  };
+
+  loadCandidates();
+}, [currentUser, isAdmin]);
 
   const checkExistingSubmission = async (email: string) => {
-    try {
-      const docRef = doc(db, 'id_cards', email.toLowerCase());
-      const docSnap = await getDoc(docRef);
-      if (docSnap.exists()) {
-        setExistingSubmission(docSnap.data() as CandidateSubmission);
-      } else {
-        setExistingSubmission(null);
-      }
-    } catch (err) {
-      console.error('Error checking existing submission:', err);
-    }
-  };
+  try {
+    const { data } = await supabase
+      .from("id_cards")
+      .select("*")
+      .eq("email", email.toLowerCase())
+      .single();
+
+    setExistingSubmission(data ?? null);
+  } catch (err) {
+    console.error("Error checking existing submission:", err);
+  }
+};
 
   const handleLogin = async () => {
     setAuthError('');
@@ -584,7 +594,13 @@ const IDCard: React.FC<IDCardProps> = ({ onRedirect }) => {
         status: 'Pending'
       };
 
-      await setDoc(doc(db, 'id_cards', (currentUser.email || '').toLowerCase()), submissionData);
+      const { error } = await supabase
+  .from("id_cards")
+  .upsert([submissionData], {
+    onConflict: "email",
+  });
+
+if (error) throw error;
 
       if (CONFIG.GOOGLE_SCRIPT_ID_CARD_URL) {
         const sheetSyncUrl = `${CONFIG.GOOGLE_SCRIPT_ID_CARD_URL}?action=sync_idcard&email=${encodeURIComponent(submissionData.email)}&name=${encodeURIComponent(submissionData.name)}&regNo=${encodeURIComponent(submissionData.registrationNumber)}&phone=${encodeURIComponent(submissionData.phone || '')}&team=${encodeURIComponent(submissionData.team || '')}&position=${encodeURIComponent(submissionData.position || 'Member')}&photoUrl=${encodeURIComponent(submissionData.photoUrl || '')}&avatarUrl=${encodeURIComponent(submissionData.avatarUrl || '')}&qrCodeUrl=${encodeURIComponent(submissionData.qrCodeUrl || '')}&submittedAt=${encodeURIComponent(submissionData.submittedAt || '')}&status=${encodeURIComponent(submissionData.status || 'Pending')}`;
@@ -609,16 +625,20 @@ const IDCard: React.FC<IDCardProps> = ({ onRedirect }) => {
     setReportStatus(null);
 
     try {
-      await addDoc(collection(db, 'data_reports'), {
-        name: memberData.name,
-        registrationNumber: memberData.registrationNumber,
-        email: currentUser.email,
-        team: memberData.team,
-        position: memberData.position,
-        reportedIssue: reportIssueText,
-        submittedAt: new Date().toISOString(),
-        status: 'Pending'
-      });
+      const { error } = await supabase
+  .from("data_reports")
+  .insert([{
+    name: memberData.name,
+    registrationNumber: memberData.registrationNumber,
+    email: currentUser.email,
+    team: memberData.team,
+    position: memberData.position,
+    reportedIssue: reportIssueText,
+    submittedAt: new Date().toISOString(),
+    status: "Pending"
+  }]);
+
+if (error) throw error;
 
       setReportStatus('success');
       setReportIssueText('');
@@ -672,9 +692,13 @@ const IDCard: React.FC<IDCardProps> = ({ onRedirect }) => {
 
     try {
       // Fetch latest active records from Firestore to ensure clean list (excluding deleted entries)
-      const querySnap = await getDocs(collection(db, 'id_cards'));
-      const activeCandidates: CandidateSubmission[] = [];
-      querySnap.forEach((d) => activeCandidates.push({ id: d.id, ...d.data() } as CandidateSubmission));
+      const { data, error } = await supabase
+  .from("id_cards")
+  .select("*");
+
+if (error) throw error;
+
+const activeCandidates: CandidateSubmission[] = data || [];
 
       // Update local state list
       const sortedCandidates = activeCandidates.sort((a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime());
@@ -811,7 +835,12 @@ const IDCard: React.FC<IDCardProps> = ({ onRedirect }) => {
       }
 
       // Delete from Firestore database
-      await deleteDoc(doc(db, 'id_cards', candidate.email.toLowerCase()));
+      const { error } = await supabase
+  .from("id_cards")
+  .delete()
+  .eq("email", candidate.email.toLowerCase());
+
+if (error) throw error;
 
       // Instantly remove from local candidates state array
       setCandidates(prev => prev.filter(c => c.email.toLowerCase() !== candidate.email.toLowerCase()));
@@ -852,9 +881,12 @@ const IDCard: React.FC<IDCardProps> = ({ onRedirect }) => {
     try {
       const currentStatus = candidate.status || 'Pending';
       const newStatus = currentStatus === 'Approved' ? 'Pending' : 'Approved';
-      await updateDoc(doc(db, 'id_cards', candidate.email.toLowerCase()), {
-        status: newStatus
-      });
+      const { error } = await supabase
+  .from("id_cards")
+  .update({ status: newStatus })
+  .eq("email", candidate.email.toLowerCase());
+
+if (error) throw error;
 
       // Log admin activity
       logAdminAction(
@@ -1603,10 +1635,7 @@ const IDCard: React.FC<IDCardProps> = ({ onRedirect }) => {
                 <h3 className="font-display-lg text-lg text-white font-bold uppercase tracking-wider flex flex-wrap items-center gap-2.5">
                   <span className="material-symbols-outlined text-primary text-base">admin_panel_settings</span>
                   <span>Candidate Dossier Submissions</span>
-                  <span className="px-3 py-1 rounded-full bg-purple-500/20 border border-purple-500/40 text-purple-300 text-xs font-bold font-code-sm shadow-[0_0_15px_rgba(168,85,247,0.2)] flex items-center gap-1.5">
-                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-                    {candidates.length} / {loadedMembersList.length  || 48} REGISTERED
-                  </span>
+                  
                 </h3>
                 <p className="text-xs text-on-surface-variant max-w-lg mt-0.5">
                   Select and verify candidate digital identity dossiers.
@@ -1732,7 +1761,7 @@ const IDCard: React.FC<IDCardProps> = ({ onRedirect }) => {
                   <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
                   <span className="text-white/80 font-bold">TOTAL REGISTERED:</span>
                   <span className="text-primary font-black text-sm">{candidates.length}</span>
-                  <span className="text-white/40 font-bold">/ {loadedMembersList.length  || 48}</span>
+                  <span className="text-white/40 font-bold">/ {loadedMembersList.length - 3|| 48}</span>
                 </div>
                 {filteredCandidates.length !== candidates.length && (
                   <div className="text-purple-300/90 text-[11px] font-medium bg-purple-500/10 border border-purple-500/20 px-2.5 py-0.5 rounded-full">

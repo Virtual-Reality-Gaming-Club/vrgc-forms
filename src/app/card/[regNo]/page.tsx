@@ -1,8 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from 'react';
-import { collection, query, where, getDocs } from 'firebase/firestore';
-import { db } from '@/lib/firebase';
+import { supabase } from "@/lib/supabase";
 import Link from 'next/link';
 
 interface PublicIDCardProps {
@@ -46,21 +45,17 @@ export default function VerifyCardPage({ params }: PublicIDCardProps) {
       setLoading(true);
       setError('');
       try {
-        if (db) {
-          const q = query(collection(db, 'id_cards'), where('registrationNumber', '==', regNo));
-          const snapshot = await getDocs(q);
-          if (snapshot.empty) {
-            setError(`No verified ID Card dossier found for registration number: ${regNo}`);
-          } else {
-            let foundDoc: any = null;
-            snapshot.forEach(doc => {
-              foundDoc = doc.data();
-            });
-            setMember(foundDoc);
-          }
-        } else {
-          setError(`No verified ID Card dossier found for registration number: ${regNo}`);
-        }
+        const { data, error } = await supabase
+  .from("members")
+  .select("*")
+  .eq("Registration Number", regNo)
+  .single();
+
+      if (error || !data) {
+        setError(`No verified ID Card dossier found for registration number: ${regNo}`);
+      } else {
+        setMember(data);
+      }
       } catch (err) {
         console.error("Error fetching public card:", err);
         setError("System calibration failed. Unable to fetch registry records.");
@@ -141,7 +136,7 @@ export default function VerifyCardPage({ params }: PublicIDCardProps) {
                     <div className="flex flex-col items-center justify-center my-3 relative z-10">
                       <div className="w-36 h-36 rounded-2xl border-2 border-[#a855f7]/30 p-1 bg-black/40 shadow-[0_0_20px_rgba(168,85,247,0.15)] relative overflow-hidden">
                         <img 
-                          src={member?.photoUrl} 
+                          src={member?.["Photo URL"]} 
                           alt="Member Avatar" 
                           className="w-full h-full object-cover rounded-xl"
                           referrerPolicy="no-referrer"
@@ -157,7 +152,7 @@ export default function VerifyCardPage({ params }: PublicIDCardProps) {
                       <div className="border-b border-white/5 pb-1.5 text-left">
                         <span className="font-code-sm text-[6px] text-[#a855f7] uppercase tracking-widest block mb-0.5 font-extrabold">NAME</span>
                         <h3 className="font-display-lg text-sm text-white font-extrabold tracking-wide uppercase truncate leading-none">
-                          {member?.name}
+                          {member?.Name}
                         </h3>
                       </div>
 
@@ -165,12 +160,12 @@ export default function VerifyCardPage({ params }: PublicIDCardProps) {
                         <div>
                           <span className="font-code-sm text-[6px] text-[#a855f7] uppercase tracking-widest block mb-0.5 font-extrabold">REGISTRATION NO.</span>
                           <span className="font-code-sm text-[10px] text-white font-bold tracking-wider block">
-                            {member?.registrationNumber}
+                            {member?.["Registration Number"]}
                           </span>
                         </div>
                         <div>
                           {(() => {
-                            const displayInfo = getAdminDisplayRoleOrTeam(member?.team, member?.position);
+                            const displayInfo = getAdminDisplayRoleOrTeam(member?.Team, member?.Position);
                             return (
                               <>
                                 <span className="font-code-sm text-[6px] text-[#a855f7] uppercase tracking-widest block mb-0.5 font-extrabold">{displayInfo.label === 'TEAM / DIVISION' ? 'TEAM' : displayInfo.label}</span>
@@ -187,8 +182,8 @@ export default function VerifyCardPage({ params }: PublicIDCardProps) {
                         <span className="w-1.5 h-1.5 rounded-full bg-[#a855f7] shadow-[0_0_8px_#a855f7] animate-pulse"></span>
                         <span className="font-code-sm text-[8px] text-[#ddb7ff] font-extrabold uppercase tracking-widest leading-none">
                           {(() => {
-                            const displayInfo = getAdminDisplayRoleOrTeam(member?.team, member?.position);
-                            return displayInfo.isSpecial ? displayInfo.value : (member?.position || 'CORE MEMBER');
+                            const displayInfo = getAdminDisplayRoleOrTeam(member?.Team, member?.Position);
+                            return displayInfo.isSpecial ? displayInfo.value : (member?.Position || 'CORE MEMBER');
                           })()}
                         </span>
                       </div>
@@ -203,10 +198,10 @@ export default function VerifyCardPage({ params }: PublicIDCardProps) {
                 {/* BACK OF THE ID CARD */}
                 <div className="absolute inset-0 w-full h-full [backface-visibility:hidden] [transform:rotateY(180deg)] select-none">
                   <div className="relative overflow-hidden w-full h-full rounded-3xl border border-[#a855f7]/35 bg-gradient-to-b from-[#12051e] via-[#05010a] to-[#0c0416] p-6 flex flex-col justify-between shadow-[0_0_50px_rgba(168,85,247,0.25)]">
-                    {member?.avatarUrl && (
+                    {member?.["Avatar URL"] && (
                       <div className="absolute inset-0 z-0 overflow-hidden pointer-events-none rounded-3xl">
                         <img 
-                          src={member.avatarUrl} 
+                          src={member["Avatar URL"]} 
                           alt="Avatar Watermark" 
                           className="w-full h-full object-cover opacity-95 brightness-110 contrast-105"
                           referrerPolicy="no-referrer"
@@ -223,7 +218,7 @@ export default function VerifyCardPage({ params }: PublicIDCardProps) {
                     <div className="my-3 flex flex-col items-center justify-center relative z-10">
                       <div className="w-28 h-28 rounded-xl border border-white/10 bg-white p-1.5 shadow-[0_0_25px_rgba(168,85,247,0.25)]">
                         <img 
-                          src={member?.qrCodeUrl || `https://api.qrserver.com/v1/create-qr-code/?size=140x140&color=0-0-0&bgcolor=ffffff&data=${encodeURIComponent(typeof window !== 'undefined' ? `${window.location.origin}/card/${member?.registrationNumber || ''}` : `https://vrgcforms.vercel.app/card/${member?.registrationNumber || ''}`)}`} 
+                          src={member?.["QR Code URL"] || `https://api.qrserver.com/v1/create-qr-code/?size=140x140&color=0-0-0&bgcolor=ffffff&data=${encodeURIComponent(typeof window !== 'undefined' ? `${window.location.origin}/card/${member?.["Registration Number"] || ''}` : `https://vrgcforms.vercel.app/card/${member?.["Registration Number"] || ''}`)}`} 
                           alt="Scan to Verify" 
                           className="w-full h-full object-contain"
                         />

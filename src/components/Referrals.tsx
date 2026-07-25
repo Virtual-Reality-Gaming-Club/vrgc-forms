@@ -2,9 +2,21 @@
 
 import React, { useState, useEffect } from 'react';
 import { CONFIG } from '../lib/config';
-import { auth, googleProvider, db } from '../lib/firebase';
+import { auth, googleProvider } from '../lib/firebase';
+import {
+  collection,
+  query,
+  orderBy,
+  onSnapshot,
+  doc,
+  updateDoc,
+  addDoc,
+} from "firebase/firestore";
+
+import { db } from "../lib/firebase";
+import { supabase } from '../lib/supabase';
 import { signInWithPopup, signOut, onAuthStateChanged, User } from 'firebase/auth';
-import { collection, addDoc, updateDoc, doc, onSnapshot, query, orderBy } from 'firebase/firestore';
+
 
 interface ReferralsProps {
   onRedirect: () => void;
@@ -323,7 +335,7 @@ const Referrals: React.FC<ReferralsProps> = ({ onRedirect }) => {
     };
 
     try {
-      await addDoc(collection(db, 'referrals'), candidateData);
+      await addDoc(collection(db, "referrals"), candidateData);
     } catch (err) {
       const updated = [candidateData, ...referrals];
       setReferrals(updated);
@@ -350,13 +362,14 @@ const Referrals: React.FC<ReferralsProps> = ({ onRedirect }) => {
     setIsUpdatingStatus(candidateRegNo);
     try {
       if (docId) {
-        const docRef = doc(db, 'referrals', docId);
-        await updateDoc(docRef, { status: newStatus });
+        await updateDoc(doc(db, "referrals", docId!), {
+  status: newStatus,
+});
       }
       setSyncToastMessage(`Candidate dossier status updated to ${newStatus.toUpperCase()}`);
       setTimeout(() => setSyncToastMessage(null), 4000);
     } catch (err) {
-      console.error('Error updating status in Firestore:', err);
+      console.error('Error updating status in Supabase:', err);
     } finally {
       setIsUpdatingStatus(null);
       setPendingStatusChange(null);
