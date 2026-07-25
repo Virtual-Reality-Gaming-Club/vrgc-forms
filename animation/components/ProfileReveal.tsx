@@ -4,10 +4,6 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, useReducedMotion } from 'framer-motion';
 import { Member } from '../lib/members';
 import {
-  Globe,
-  Youtube,
-  Instagram,
-  Linkedin,
   ExternalLink,
   ShieldCheck,
   Calendar,
@@ -16,10 +12,37 @@ import {
   Award,
   Hash,
   Star,
-  Sparkles,
   ChevronDown,
   ChevronUp,
 } from 'lucide-react';
+
+const GlobeIcon = ({ size, style }: { size: number; style?: React.CSSProperties }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={style}>
+    <circle cx="12" cy="12" r="10" />
+    <line x1="2" y1="12" x2="22" y2="12" />
+    <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+  </svg>
+);
+
+const YoutubeIcon = ({ size, style }: { size: number; style?: React.CSSProperties }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" style={style}>
+    <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/>
+  </svg>
+);
+
+const InstagramIcon = ({ size, style }: { size: number; style?: React.CSSProperties }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={style}>
+    <rect x="2" y="2" width="20" height="20" rx="5" ry="5" />
+    <path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z" />
+    <line x1="17.5" y1="6.5" x2="17.51" y2="6.5" />
+  </svg>
+);
+
+const LinkedinIcon = ({ size, style }: { size: number; style?: React.CSSProperties }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" style={style}>
+    <path d="M19 0h-14c-2.761 0-5 2.239-5 5v14c0 2.761 2.239 5 5 5h14c2.762 0 5-2.239 5-5v-14c0-2.761-2.238-5-5-5zm-11 19h-3v-11h3v11zm-1.5-12.268c-.966 0-1.75-.79-1.75-1.764s.784-1.764 1.75-1.764 1.75.79 1.75 1.764-.783 1.764-1.75 1.764zm13.5 12.268h-3v-5.604c0-3.368-4-3.113-4 0v5.604h-3v-11h3v1.765c1.396-2.586 7-2.777 7 2.476v6.759z"/>
+  </svg>
+);
 
 interface ProfileRevealProps {
   member: Member | null;
@@ -29,10 +52,8 @@ interface ProfileRevealProps {
 
 /* ─── Social Links ─── */
 const SOCIALS = [
-  { Icon: Globe, href: 'https://vrgc.vercel.app/', label: 'Website', accent: '#c084fc' },
-  { Icon: Youtube, href: 'https://www.youtube.com/@vrgcvitb', label: 'YouTube', accent: '#ff4444' },
-  { Icon: Instagram, href: 'https://www.instagram.com/vrgc.vitb', label: 'Instagram', accent: '#e040fb' },
-  { Icon: Linkedin, href: 'https://www.linkedin.com/company/vrgc-vitb', label: 'LinkedIn', accent: '#a855f7' },
+  { Icon: GlobeIcon, href: 'https://vrgc.vercel.app/', label: 'Website', accent: '#c084fc' },
+  { Icon: LinkedinIcon, href: 'https://www.linkedin.com/company/vrgc-vitb', label: 'LinkedIn', accent: '#a855f7' },
 ];
 
 function SocialButton({
@@ -141,7 +162,7 @@ export default function ProfileReveal({ member, isVisible, isComplete }: Profile
     .toUpperCase();
 
   // Choreographed vertical positioning for Name & Position canvas
-  const topCanvasTop = seqStep === 0 ? '42vh' : `${4 - scrollProgress * 2.5}vh`;
+  const topHeaderY = seqStep === 0 ? 'calc(50vh - 160px)' : 'clamp(68px, 10vh, 100px)';
   const topCanvasScale = seqStep === 0 ? 1 : 1 - scrollProgress * 0.08;
 
   const detailsCanvasTop = `${100 - scrollProgress * 52}vh`;
@@ -193,7 +214,7 @@ export default function ProfileReveal({ member, isVisible, isComplete }: Profile
         transition={{ duration: 0.45, ease: [0.16, 1, 0.3, 1] }}
         className="fixed left-1/2 flex flex-col items-center text-center w-[92%] max-w-[420px] px-5 py-3.5 rounded-2xl z-30 pointer-events-auto transition-all duration-500 ease-out"
         style={{
-          top: topCanvasTop,
+          top: topHeaderY,
           background: 'linear-gradient(145deg, rgba(4, 1, 12, 0.96) 0%, rgba(8, 14, 30, 0.94) 50%, rgba(16, 4, 32, 0.96) 100%)',
           backdropFilter: 'blur(16px)',
           WebkitBackdropFilter: 'blur(16px)',
@@ -207,7 +228,7 @@ export default function ProfileReveal({ member, isVisible, isComplete }: Profile
 
         {/* Header Tag */}
         <span className="font-mono text-[9px] uppercase tracking-[0.3em] text-[#c084fc] flex items-center gap-1.5 mb-1">
-          <Sparkles size={11} className="text-[#c084fc]" /> // MEMBER IDENTIFIED
+          <ShieldCheck size={11} className="text-[#c084fc]" /> // MEMBER IDENTIFIED
         </span>
 
         {/* Position / Role Badge & Team */}
