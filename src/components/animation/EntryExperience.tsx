@@ -281,8 +281,9 @@ export default function EntryExperience({ targetMember, otherMembers, onSkip }: 
         height: '100dvh',
         minHeight: '100vh',
         background: 'linear-gradient(135deg, #020006 0%, #080116 25%, #100228 50%, #0a011a 75%, #020006 100%)',
-        backgroundSize: '400% 400%',
-        animation: 'bg-shift 20s ease infinite',
+        WebkitBackfaceVisibility: 'hidden',
+        backfaceVisibility: 'hidden',
+        transform: 'translateZ(0)',
       }}
     >
 

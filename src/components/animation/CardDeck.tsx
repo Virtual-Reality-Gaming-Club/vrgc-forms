@@ -62,7 +62,7 @@ export default function CardDeck({ phase, onPhaseComplete, onMemberSelected, tar
 
   const [cardMembers, setCardMembers] = useState<Member[]>(() => {
     if (targetMember) {
-      const others = pool.filter(m => m.id !== targetMember.id).sort(() => Math.random() - 0.5).slice(0, CARD_COUNT - 1);
+      const others = pool.filter(m => m.id !== targetMember.id).slice(0, CARD_COUNT - 1);
       return [targetMember, ...others];
     }
     return pool.slice(0, CARD_COUNT);
@@ -70,10 +70,10 @@ export default function CardDeck({ phase, onPhaseComplete, onMemberSelected, tar
 
   useEffect(() => {
     if (targetMember) {
-      const others = pool.filter(m => m.id !== targetMember.id).sort(() => Math.random() - 0.5).slice(0, CARD_COUNT - 1);
+      const others = pool.filter(m => m.id !== targetMember.id).slice(0, CARD_COUNT - 1);
       setCardMembers([targetMember, ...others]);
     } else {
-      setCardMembers([...pool].sort(() => Math.random() - 0.5).slice(0, CARD_COUNT));
+      setCardMembers(pool.slice(0, CARD_COUNT));
     }
   }, [targetMember, pool]);
 

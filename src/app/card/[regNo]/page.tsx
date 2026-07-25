@@ -1,171 +1,175 @@
-"use client";
-
-import React, { useState, useEffect } from 'react';
+import React from 'react';
+import { Metadata } from 'next';
 import { collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
-import Link from 'next/link';
-import EntryExperience from '@/components/animation/EntryExperience';
+import VerifyCardClient from './VerifyCardClient';
 import { Member } from '@/components/animation/members';
 
-interface PublicIDCardProps {
+interface PageProps {
   params: Promise<{
     regNo: string;
   }>;
 }
 
-export default function VerifyCardPage({ params }: PublicIDCardProps) {
-  const [regNo, setRegNo] = useState<string>('');
-  const [member, setMember] = useState<any>(null);
-  const [otherMembers, setOtherMembers] = useState<Member[]>([]);
-  const [loading, setLoading] = useState<boolean>(true);
-  const [error, setError] = useState<string>('');
-  const [replayKey, setReplayKey] = useState<number>(0);
+const SUPABASE_STORAGE_BASE = 'https://fopyejijjeoumimsdgiz.supabase.co/storage/v1/object/public/id-cards';
 
-  useEffect(() => {
-    params.then(p => setRegNo(p.regNo));
-  }, [params]);
+function formatSupabaseUrl(urlOrPath: string): string {
+  if (!urlOrPath) return '';
+  const trimmed = urlOrPath.trim();
+  if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+    return trimmed;
+  }
+  const cleanPath = trimmed.startsWith('/') ? trimmed.slice(1) : trimmed;
+  if (cleanPath.startsWith('id-photos/') || cleanPath.startsWith('avatars/')) {
+    return `${SUPABASE_STORAGE_BASE}/${cleanPath}`;
+  }
+  return `${SUPABASE_STORAGE_BASE}/id-photos/${cleanPath}`;
+}
 
-  useEffect(() => {
-    const fetchMemberCard = async () => {
-      if (!regNo) return;
-      setLoading(true);
-      setError('');
-      try {
-        if (db) {
-          // Fetch target member card
-          const q = query(collection(db, 'id_cards'), where('registrationNumber', '==', regNo));
-          const snapshot = await getDocs(q);
-          if (snapshot.empty) {
-            setError(`No verified ID Card dossier found for registration number: ${regNo}`);
-          } else {
-            let foundDoc: any = null;
-            snapshot.forEach(doc => {
-              foundDoc = doc.data();
-            });
-            setMember(foundDoc);
+async function getMemberData(regNo: string) {
+  let member: any = null;
+  let otherMembers: Member[] = [];
+  let error: string | null = null;
 
-            // Fetch real avatars submitted by other club members for the orbital deck shuffle
-            try {
-              const allQ = query(collection(db, 'id_cards'));
-              const allSnapshot = await getDocs(allQ);
-              const roster: Member[] = [];
-              allSnapshot.forEach(docSnap => {
-                const d = docSnap.data();
-                if (d.registrationNumber) {
-                  roster.push({
-                    id: d.registrationNumber,
-                    name: d.name || 'Member',
-                    regNo: d.registrationNumber,
-                    phone: d.phone || 'N/A',
-                    photoUrl: d.photoUrl || '',
-                    avatarUrl: d.avatarUrl || d.photoUrl || '',
-                    assignedTeam: d.team || 'Development',
-                    role: d.position || 'Core Member',
-                    qrCodeUrl: d.qrCodeUrl || '',
-                    rating: 4.9,
-                    joinDate: d.submittedAt ? d.submittedAt.split('T')[0] : '2025-01-01',
-                    specialization: `${d.team || 'Member'} • ${d.position || 'Core'}`,
-                  });
-                }
-              });
-              setOtherMembers(roster);
-            } catch (rErr) {
-              console.warn("Could not load full roster for animation deck:", rErr);
-            }
-          }
-        } else {
-          setError(`No verified ID Card dossier found for registration number: ${regNo}`);
-        }
-      } catch (err) {
-        console.error("Error fetching public card:", err);
-        setError("System calibration failed. Unable to fetch registry records.");
-      } finally {
-        setLoading(false);
+  const regUpper = regNo.toUpperCase();
+  const regLower = regNo.toLowerCase();
+
+  try {
+    if (db) {
+      let q = query(collection(db, 'id_cards'), where('registrationNumber', '==', regUpper));
+      let snapshot = await getDocs(q);
+
+      if (snapshot.empty) {
+        q = query(collection(db, 'id_cards'), where('registrationNumber', '==', regNo));
+        snapshot = await getDocs(q);
       }
-    };
+      if (snapshot.empty) {
+        q = query(collection(db, 'id_cards'), where('registrationNumber', '==', regLower));
+        snapshot = await getDocs(q);
+      }
+      if (snapshot.empty) {
+        q = query(collection(db, 'id_cards'), where('regNo', '==', regUpper));
+        snapshot = await getDocs(q);
+      }
 
-    fetchMemberCard();
-  }, [regNo]);
+      if (!snapshot.empty) {
+        snapshot.forEach(doc => {
+          member = doc.data();
+        });
+
+        // Fetch remaining roster for orbital deck animation
+        try {
+          const allQ = query(collection(db, 'id_cards'));
+          const allSnapshot = await getDocs(allQ);
+          allSnapshot.forEach(docSnap => {
+            const d = docSnap.data();
+            const rNo = d.registrationNumber || d.regNo || docSnap.id;
+            if (rNo) {
+              const photo = formatSupabaseUrl(d.photoUrl || d.photo_url || d.photoURL || d.photo || d.image || d.imageUrl || '');
+              const avatar = formatSupabaseUrl(d.avatarUrl || d.avatar_url || d.avatarURL || d.avatar || d.gifUrl || photo);
+              otherMembers.push({
+                id: rNo,
+                name: d.name || 'Member',
+                regNo: rNo,
+                phone: d.phone || 'N/A',
+                photoUrl: photo,
+                avatarUrl: avatar,
+                assignedTeam: d.team || d.assignedTeam || 'Development',
+                role: d.position || d.role || 'Core Member',
+                qrCodeUrl: d.qrCodeUrl || d.qrCode || '',
+                rating: 4.9,
+                joinDate: d.submittedAt ? String(d.submittedAt).split('T')[0] : '2025-01-01',
+                specialization: `${d.team || 'Member'} • ${d.position || 'Core'}`,
+              });
+            }
+          });
+        } catch (rErr) {
+          console.warn("Server roster fetch error:", rErr);
+        }
+      } else {
+        error = `No verified ID Card dossier found for registration number: ${regNo}`;
+      }
+    }
+  } catch (err) {
+    console.error("Server fetch error:", err);
+    error = "System calibration failed. Unable to fetch registry records.";
+  }
+
+  return { member, otherMembers, error };
+}
+
+// Dynamic OpenGraph SEO Metadata for Social Media Sharing (SSR)
+export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
+  const { regNo } = await params;
+  const { member } = await getMemberData(regNo);
+
+  if (!member) {
+    return {
+      title: `Verification Failed | VRGC Member Portal`,
+      description: `No verified ID card dossier found for registration number ${regNo}.`,
+    };
+  }
+
+  const name = member.name || 'Member';
+  const role = member.position || 'Core Member';
+  const team = member.team || 'VRGC';
+  const photo = formatSupabaseUrl(member.photoUrl || member.photo_url || member.photoURL || member.photo || member.image || member.imageUrl || '');
+
+  return {
+    title: `${name} | VRGC Verified Member`,
+    description: `Official Verified Dossier for ${name} (${regNo}) — ${role} in ${team} Team at Virtual Reality & Gaming Club.`,
+    openGraph: {
+      title: `${name} • VRGC Official ID Card`,
+      description: `VRGC Verified Dossier • ${role} | ${team}`,
+      url: `https://vrgcforms.vercel.app/card/${regNo}`,
+      siteName: 'VRGC Member Registry',
+      images: photo ? [{ url: photo, width: 800, height: 800, alt: `${name} Profile Photo` }] : [],
+      type: 'profile',
+    },
+    twitter: {
+      card: 'summary_large_image',
+      title: `${name} | VRGC Verified ID Card`,
+      description: `Verified Member Dossier (${regNo}) • ${role} of ${team}`,
+      images: photo ? [photo] : [],
+    },
+  };
+}
+
+export default async function VerifyCardPage({ params }: PageProps) {
+  const { regNo } = await params;
+  const { member, otherMembers, error } = await getMemberData(regNo);
+
+  const photo = formatSupabaseUrl(member?.photoUrl || member?.photo_url || member?.photoURL || member?.photo || member?.image || member?.imageUrl || '');
+  const avatar = formatSupabaseUrl(member?.avatarUrl || member?.avatar_url || member?.avatarURL || member?.avatar || member?.gifUrl || photo);
 
   const scannedMember: Member | null = member ? {
-    id: member.registrationNumber || regNo,
+    id: member.registrationNumber || member.regNo || regNo,
     name: member.name || 'Member',
-    regNo: member.registrationNumber || regNo,
+    regNo: member.registrationNumber || member.regNo || regNo,
     phone: member.phone || '+91 98765 43210',
-    photoUrl: member.photoUrl || '',
-    avatarUrl: member.avatarUrl || member.photoUrl || '',
-    assignedTeam: member.team || 'Development',
-    role: member.position || 'Core Member',
-    qrCodeUrl: member.qrCodeUrl || '',
+    photoUrl: photo,
+    avatarUrl: avatar,
+    assignedTeam: member.team || member.assignedTeam || 'Development',
+    role: member.position || member.role || 'Core Member',
+    qrCodeUrl: member.qrCodeUrl || member.qrCode || '',
     rating: 4.9,
-    joinDate: member.submittedAt ? member.submittedAt.split('T')[0] : '2025-01-01',
+    joinDate: member.submittedAt ? String(member.submittedAt).split('T')[0] : '2025-01-01',
     specialization: `${member.team || 'VRGC Member'} • ${member.position || 'Core'}`,
   } : null;
 
-  if (loading) {
-    return (
-      <div className="flex flex-col items-center justify-center min-h-screen bg-mesh text-white p-6">
-        <div className="flex flex-col items-center justify-center py-20 space-y-4">
-          <div className="w-12 h-12 rounded-full border-2 border-t-2 border-t-[#a855f7] border-white/5 animate-spin"></div>
-          <p className="font-code-sm text-xs text-white/50 tracking-widest uppercase">FETCHING DIGITAL REGISTRY...</p>
-        </div>
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div className="flex flex-col items-center justify-center min-h-screen bg-mesh text-white p-6">
-        <div className="glass-panel p-8 rounded-3xl border border-red-500/20 bg-black/60 backdrop-blur-md space-y-6 max-w-md text-center">
-          <span className="material-symbols-outlined text-red-400 text-5xl animate-bounce">gavel</span>
-          <div className="space-y-2">
-            <h3 className="font-display-lg text-lg text-white font-extrabold tracking-widest uppercase">VERIFICATION FAILED</h3>
-            <p className="font-body-md text-xs text-red-400/80 leading-relaxed">{error}</p>
-          </div>
-          <Link 
-            href="/"
-            className="inline-block px-6 py-2.5 rounded-full bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 font-bold font-label-caps text-xs tracking-wider transition-all"
-          >
-            RETURN TO CONSOLE
-          </Link>
-        </div>
-      </div>
-    );
-  }
-
   return (
-    <div className="relative min-h-screen w-full bg-black overflow-hidden">
-      {scannedMember && (
-        <EntryExperience 
-          key={replayKey}
-          targetMember={scannedMember} 
-          otherMembers={otherMembers}
-          onSkip={() => setReplayKey(prev => prev + 1)}
-        />
+    <>
+      {scannedMember?.avatarUrl && (
+        <link rel="preload" as="image" href={scannedMember.avatarUrl} fetchPriority="high" />
       )}
-      
-      {/* Quick replay button */}
-      <div className="fixed top-4 left-4 z-[60]">
-        <button
-          type="button"
-          onClick={() => setReplayKey(prev => prev + 1)}
-          className="px-4 py-2 rounded-full border border-[#a855f7]/40 bg-black/80 backdrop-blur-md text-[#d8b4fe] font-code-sm text-xs tracking-wider uppercase hover:bg-[#a855f7]/20 transition-all cursor-pointer shadow-[0_0_15px_rgba(168,85,247,0.3)] flex items-center gap-2"
-        >
-          <span className="material-symbols-outlined text-sm">replay</span>
-          <span>Replay Cyber Reveal</span>
-        </button>
-      </div>
-
-      {/* Return home button */}
-      <div className="fixed top-4 right-4 z-[60]">
-        <Link
-          href="/"
-          className="px-4 py-2 rounded-full border border-purple-500/40 bg-black/80 backdrop-blur-md text-purple-300 font-code-sm text-xs tracking-wider uppercase hover:bg-purple-500/20 transition-all shadow-[0_0_15px_rgba(168,85,247,0.3)] inline-flex items-center gap-2"
-        >
-          <span className="material-symbols-outlined text-sm">home</span>
-          <span>Home</span>
-        </Link>
-      </div>
-    </div>
+      {scannedMember?.photoUrl && (
+        <link rel="preload" as="image" href={scannedMember.photoUrl} fetchPriority="high" />
+      )}
+      <VerifyCardClient 
+        scannedMember={scannedMember} 
+        otherMembers={otherMembers} 
+        error={error} 
+      />
+    </>
   );
 }
