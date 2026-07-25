@@ -66,7 +66,7 @@ const IDCard: React.FC<IDCardProps> = ({ onRedirect }) => {
 
   const getQrCodeImageUrl = (regNo?: string, savedQrUrl?: string) => {
     if (savedQrUrl && savedQrUrl.trim()) return savedQrUrl;
-    const origin = typeof window !== 'undefined' ? window.location.origin : (process.env.NEXT_PUBLIC_APP_URL || 'https://vrgcforms.vercel.app');
+    const origin = typeof window !== 'undefined' ? window.location.origin : (process.env.NEXT_PUBLIC_APP_URL || 'https://vrgcformsbackup.vercel.app');
     return `https://api.qrserver.com/v1/create-qr-code/?size=140x140&color=0-0-0&bgcolor=ffffff&data=${encodeURIComponent(`${origin}/card/${regNo || ''}`)}`;
   };
 
@@ -542,7 +542,7 @@ if (error) throw error;
       
       let qrCodePublicUrl = '';
       try {
-        const qrOrigin = typeof window !== 'undefined' ? window.location.origin : (process.env.NEXT_PUBLIC_APP_URL || 'https://vrgcforms.vercel.app');
+        const qrOrigin = typeof window !== 'undefined' ? window.location.origin : (process.env.NEXT_PUBLIC_APP_URL || 'https://vrgcformsbackup.vercel.app');
         const qrContent = `${qrOrigin}/card/${encodeURIComponent(memberData.registrationNumber)}`;
         const qrApiUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&color=0-0-0&bgcolor=ffffff&data=${encodeURIComponent(qrContent)}`;
 
