@@ -57,27 +57,21 @@ export const AnimatedCard = memo(({
     isSelected &&
     ['CARD_FLIP', 'AVATAR_REVEAL', 'PROFILE_EXPAND', 'COMPLETE'].includes(phase);
 
-  const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
-  const isAnimationFinished = phase === 'COMPLETE';
+  // Determine if target member avatar GIF should be revealed
+  const isGifRevealPhase = isSelected && ['AVATAR_REVEAL', 'PROFILE_EXPAND', 'COMPLETE'].includes(phase);
 
-  // Get static member photo URL (JPG/PNG - strictly NO GIF animations during shuffle on mobile)
-  const getStaticMemberPhoto = () => {
-    if (!cardMember) {
-      return `https://api.dicebear.com/9.x/pixel-art/svg?seed=member_${index}&backgroundColor=0a0a0f`;
-    }
-    const photo = cardMember.photoUrl || cardMember.imageUrl;
-    if (photo && !photo.toLowerCase().endsWith('.gif')) {
-      return photo;
-    }
-    return `https://api.dicebear.com/9.x/pixel-art/svg?seed=${encodeURIComponent(cardMember.name || cardMember.regNo)}&backgroundColor=0a0a0f`;
-  };
+  // Static JPG/PNG Member Photo of VRGC club members for 3D deck shuffle
+  const staticMemberPhoto =
+    cardMember?.photoUrl ||
+    cardMember?.imageUrl ||
+    `https://api.dicebear.com/9.x/pixel-art/svg?seed=member_${index}&backgroundColor=0a0a0f`;
 
-  // Card Image Source:
-  // On mobile during animation (phase !== 'COMPLETE'): Always display static member photo (JPG/PNG) of different VRGC club members!
-  // ONLY when phase === 'COMPLETE' (or on desktop): Display target avatar GIF!
-  const cardDisplayImage = (isMobile && !isAnimationFinished)
-    ? getStaticMemberPhoto()
-    : (cardMember?.avatarUrl || cardMember?.photoUrl || cardMember?.imageUrl || `https://api.dicebear.com/9.x/pixel-art/svg?seed=member_${index}&backgroundColor=0a0a0f`);
+  // Deterministic card image source for 100% SSR & Client hydration consistency:
+  // - While shuffling/picking: Render static member photos (NO GIF animation playback)
+  // - When picked & revealed: Reveal target member avatar GIF
+  const cardDisplayImage = isGifRevealPhase
+    ? (cardMember?.avatarUrl || staticMemberPhoto)
+    : staticMemberPhoto;
 
   const currentAspectRatio = isFlipped ? targetAspectRatio : 2 / 3;
 
