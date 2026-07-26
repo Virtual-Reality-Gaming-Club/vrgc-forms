@@ -73,14 +73,30 @@ function SocialButton({
 
 export default function ProfileReveal({ member, isVisible, isComplete, onReplay }: ProfileRevealProps) {
   const [seqStep, setSeqStep] = useState<number>(0);
-  const [targetProgress, setTargetProgress] = useState<number>(0);
+  const [showDossier, setShowDossier] = useState<boolean>(false);
   const [scrollProgress, setScrollProgress] = useState<number>(0);
   const [isMobile, setIsMobile] = useState<boolean>(false);
-  const touchStartRef = useRef<number | null>(null);
+
+  const dossierRef = useRef<HTMLDivElement | null>(null);
+  const touchStartYRef = useRef<number | null>(null);
 
   const targetProgressRef = useRef(0);
   const scrollProgressRef = useRef(0);
   const rafScrollRef = useRef<number | null>(null);
+
+  const toggleDossier = useCallback((open?: boolean) => {
+    setShowDossier((prev) => {
+      const next = open !== undefined ? open : !prev;
+      targetProgressRef.current = next ? 1 : 0;
+      return next;
+    });
+  }, []);
+
+  useEffect(() => {
+    const handleToggleCustom = () => toggleDossier();
+    window.addEventListener('toggle-dossier', handleToggleCustom);
+    return () => window.removeEventListener('toggle-dossier', handleToggleCustom);
+  }, [toggleDossier]);
 
   useEffect(() => {
     const check = () => setIsMobile(window.innerWidth < 768);
@@ -110,16 +126,11 @@ export default function ProfileReveal({ member, isVisible, isComplete, onReplay 
     };
   }, []);
 
-  const updateTargetProgress = useCallback((newVal: number) => {
-    const clamped = Math.max(0, Math.min(1, newVal));
-    targetProgressRef.current = clamped;
-    setTargetProgress(clamped);
-  }, []);
-
   useEffect(() => {
     if (!isVisible) {
       setSeqStep(0);
-      updateTargetProgress(0);
+      setShowDossier(false);
+      targetProgressRef.current = 0;
       scrollProgressRef.current = 0;
       setScrollProgress(0);
       return;
@@ -139,7 +150,7 @@ export default function ProfileReveal({ member, isVisible, isComplete, onReplay 
       clearTimeout(t1);
       clearTimeout(t2);
     };
-  }, [isVisible, updateTargetProgress]);
+  }, [isVisible]);
 
   // Lock mobile pull-to-refresh & page overscroll while dossier card active
   useEffect(() => {
@@ -150,41 +161,52 @@ export default function ProfileReveal({ member, isVisible, isComplete, onReplay 
     document.body.style.overscrollBehaviorY = 'none';
     document.body.style.overflow = 'hidden';
 
-    const preventPullToRefresh = (e: TouchEvent) => {
-      // Prevent browser default pull-to-refresh swipe down gesture while dossier is active
-      if (e.touches.length === 1 && targetProgressRef.current < 0.95) {
-        if (e.cancelable) e.preventDefault();
-      }
-    };
-
-    window.addEventListener('touchmove', preventPullToRefresh, { passive: false });
-
     return () => {
       document.body.style.overscrollBehaviorY = originalOverscroll;
       document.body.style.overflow = originalOverflow;
-      window.removeEventListener('touchmove', preventPullToRefresh);
     };
   }, [isVisible]);
 
   const handleWheel = useCallback((e: WheelEvent) => {
     if (seqStep < 2) return;
-    e.preventDefault();
-    const delta = e.deltaY * 0.0014;
-    updateTargetProgress(targetProgressRef.current + delta);
-  }, [seqStep, updateTargetProgress]);
+
+    if (!targetProgressRef.current || targetProgressRef.current < 0.5) {
+      if (e.deltaY > 5) {
+        toggleDossier(true);
+      }
+    } else {
+      const el = dossierRef.current;
+      if (el && el.scrollTop <= 5 && e.deltaY < -15) {
+        toggleDossier(false);
+      }
+    }
+  }, [seqStep, toggleDossier]);
 
   const handleTouchStart = useCallback((e: React.TouchEvent) => {
     if (seqStep < 2) return;
-    touchStartRef.current = e.touches[0].clientY;
+    touchStartYRef.current = e.touches[0].clientY;
   }, [seqStep]);
 
-  const handleTouchMove = useCallback((e: React.TouchEvent) => {
-    if (seqStep < 2 || touchStartRef.current === null) return;
-    const currentY = e.touches[0].clientY;
-    const diff = (touchStartRef.current - currentY) * 0.0032;
-    updateTargetProgress(targetProgressRef.current + diff);
-    touchStartRef.current = currentY;
-  }, [seqStep, updateTargetProgress]);
+  const handleTouchEnd = useCallback((e: React.TouchEvent) => {
+    if (seqStep < 2 || touchStartYRef.current === null) return;
+    const touchEndY = e.changedTouches[0].clientY;
+    const diff = touchStartYRef.current - touchEndY;
+    touchStartYRef.current = null;
+
+    if (targetProgressRef.current < 0.5) {
+      // First scroll/swipe up: Open details dossier
+      if (diff > 15) {
+        toggleDossier(true);
+      }
+    } else {
+      // Dossier is open:
+      // Swiping down to close ONLY triggers when dossier is scrolled to the absolute top (scrollTop <= 5)
+      const el = dossierRef.current;
+      if (diff < -25 && (!el || el.scrollTop <= 5)) {
+        toggleDossier(false);
+      }
+    }
+  }, [seqStep, toggleDossier]);
 
   useEffect(() => {
     if (!isVisible) return;
@@ -208,7 +230,7 @@ export default function ProfileReveal({ member, isVisible, isComplete, onReplay 
     <div
       className="fixed inset-0 pointer-events-auto z-30 overflow-hidden flex flex-col items-center justify-center transition-opacity duration-300"
       onTouchStart={handleTouchStart}
-      onTouchMove={handleTouchMove}
+      onTouchEnd={handleTouchEnd}
       style={{
         opacity: isVisible ? 1 : 0,
         pointerEvents: isVisible ? 'auto' : 'none',
@@ -284,6 +306,7 @@ export default function ProfileReveal({ member, isVisible, isComplete, onReplay 
 
       {/* ═══ BOTTOM DETAILS DOSSIER CANVAS ═══ */}
       <motion.div
+        ref={dossierRef}
         animate={{
           x: '-50%',
           opacity: seqStep === 2 ? detailsCanvasOpacity : 0,
@@ -453,17 +476,13 @@ export default function ProfileReveal({ member, isVisible, isComplete, onReplay 
           {/* Dossier Toggle Button */}
           <button
             type="button"
-            onClick={() => setScrollProgress((prev) => (prev > 0.5 ? 0 : 1))}
+            onClick={() => toggleDossier()}
             className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full border border-[#a855f7]/60 bg-[#04010a]/95 backdrop-blur-md text-[#d8b4fe] shadow-[0_0_20px_rgba(147,51,234,0.5)] transition-transform active:scale-95 cursor-pointer"
           >
             <span className="font-mono text-[9px] sm:text-[10px] uppercase tracking-widest font-semibold whitespace-nowrap">
-              {scrollProgress < 0.1
-                ? 'DOSSIER'
-                : scrollProgress < 0.9
-                ? 'SCROLLING...'
-                : 'CLOSE'}
+              {scrollProgress < 0.5 ? 'DOSSIER' : 'CLOSE'}
             </span>
-            {scrollProgress < 0.9 ? (
+            {scrollProgress < 0.5 ? (
               <ChevronDown size={13} className="animate-bounce text-[#c084fc]" />
             ) : (
               <ChevronUp size={13} className="animate-bounce text-[#c084fc]" />
