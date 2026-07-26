@@ -188,21 +188,32 @@ export default function HudOverlay({ phase }: HudOverlayProps) {
         </span>
       </div>
 
-      {/* Timestamp — isolated to ClockDisplay to prevent full overlay re-render each second */}
+      {/* Top-Right Home Button & Timestamp */}
       <div
-        className="absolute flex flex-col items-end"
+        className="absolute flex items-center gap-3 z-50 pointer-events-auto"
         style={{
-          top: 'clamp(36px, 5vh, 52px)',
-          right: 'clamp(10px, 2vw, 18px)',
+          top: 'clamp(20px, 3.5vh, 32px)',
+          right: 'clamp(12px, 2.5vw, 24px)',
         }}
       >
-        <span
-          className="font-mono"
-          style={{ fontSize: 'clamp(0.35rem, 1vw, 0.45rem)', color: 'rgba(192,132,252,0.45)', letterSpacing: '0.15em' }}
+        <a
+          href="/"
+          className="group flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[#0a0214]/85 hover:bg-[#a855f7]/25 border border-purple-500/40 hover:border-purple-400 text-purple-200 hover:text-white transition-all text-xs font-mono tracking-wider shadow-[0_0_15px_rgba(168,85,247,0.25)] hover:shadow-[0_0_25px_rgba(168,85,247,0.5)] active:scale-95 cursor-pointer"
+          title="Return to VRGC Forms Home"
         >
-          VRGC DOSSIER VERIFIED
-        </span>
-        <ClockDisplay />
+          <span className="material-symbols-outlined text-sm group-hover:scale-110 transition-transform">home</span>
+          <span className="font-bold text-[10px] uppercase tracking-widest hidden sm:inline">HOME</span>
+        </a>
+
+        <div className="flex flex-col items-end pointer-events-none">
+          <span
+            className="font-mono"
+            style={{ fontSize: 'clamp(0.35rem, 1vw, 0.45rem)', color: 'rgba(192,132,252,0.45)', letterSpacing: '0.15em' }}
+          >
+            VRGC DOSSIER VERIFIED
+          </span>
+          <ClockDisplay />
+        </div>
       </div>
 
       {/* Progress bar */}
