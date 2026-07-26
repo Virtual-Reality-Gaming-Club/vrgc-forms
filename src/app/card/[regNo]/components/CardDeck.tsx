@@ -362,10 +362,27 @@ export default function CardDeck({
       });
     });
 
+    // PRNG helper seeded by regNo for 100% deterministic SSR and client hydration matching
+    const prng = (() => {
+      let hash = 0;
+      const str = targetMember.regNo || 'vrgc';
+      for (let i = 0; i < str.length; i++) {
+        hash = (hash << 5) - hash + str.charCodeAt(i);
+        hash |= 0;
+      }
+      return () => {
+        hash = (hash + 0x6d2b79f5) | 0;
+        let t = Math.imul(hash ^ (hash >>> 15), 1 | hash);
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+    })();
+
     // Ensure pool has at least cardCount unique items (zero repeated images)
     while (pool.length < cardCount + 2) {
       const idx = pool.length + 1;
-      const photo = `https://api.dicebear.com/9.x/pixel-art/svg?seed=vrgc_unique_shuffle_slot_${idx}_${Math.random().toString(36).substring(2, 7)}&backgroundColor=0a0a0f`;
+      const seedHex = Math.floor(prng() * 1000000).toString(16);
+      const photo = `https://api.dicebear.com/9.x/pixel-art/svg?seed=vrgc_slot_${idx}_${seedHex}&backgroundColor=0a0a0f`;
       pool.push({
         id: `shuffle-gen-${idx}`,
         regNo: `25BCG100${idx}`,
@@ -386,10 +403,10 @@ export default function CardDeck({
       });
     }
 
-    // Randomize member pool ordering so fresh unique member cards appear on every reload / replay
+    // Deterministically shuffle member pool (100% identical SSR & Client hydration)
     const randomizedPool = [...pool];
     for (let i = randomizedPool.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
+      const j = Math.floor(prng() * (i + 1));
       [randomizedPool[i], randomizedPool[j]] = [randomizedPool[j], randomizedPool[i]];
     }
 
