@@ -363,9 +363,9 @@ export default function CardDeck({
     });
 
     // Ensure pool has at least cardCount unique items (zero repeated images)
-    while (pool.length < cardCount) {
+    while (pool.length < cardCount + 2) {
       const idx = pool.length + 1;
-      const photo = `https://api.dicebear.com/9.x/pixel-art/svg?seed=vrgc_unique_shuffle_slot_${idx}&backgroundColor=0a0a0f`;
+      const photo = `https://api.dicebear.com/9.x/pixel-art/svg?seed=vrgc_unique_shuffle_slot_${idx}_${Math.random().toString(36).substring(2, 7)}&backgroundColor=0a0a0f`;
       pool.push({
         id: `shuffle-gen-${idx}`,
         regNo: `25BCG100${idx}`,
@@ -386,7 +386,14 @@ export default function CardDeck({
       });
     }
 
-    return pool.slice(0, cardCount);
+    // Randomize member pool ordering so fresh unique member cards appear on every reload / replay
+    const randomizedPool = [...pool];
+    for (let i = randomizedPool.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [randomizedPool[i], randomizedPool[j]] = [randomizedPool[j], randomizedPool[i]];
+    }
+
+    return randomizedPool.slice(0, cardCount + 2);
   }, [targetMember, csvMembers, databaseMembers, cardCount]);
 
   const finalTargetMember = React.useMemo(() => {
