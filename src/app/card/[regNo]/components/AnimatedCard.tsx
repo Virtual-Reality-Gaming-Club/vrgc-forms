@@ -315,8 +315,9 @@ export const AnimatedCard = memo(({
   const getZIndex = (): number => {
     if (isActive) return 200;
     if (phase === 'ENTRY' || phase === 'DECK_APPEAR') {
-      if (index === 0) return 100;
-      if (index === 1) return 50;
+      // Card 1 is static on top (zIndex 100). Card 0 glides up BENEATH Card 1 (zIndex 50).
+      if (index === 1) return 100;
+      if (index === 0) return 50;
       return totalCards - index;
     }
     if (isOrbiting) return orbitalPosition.zIndex;

@@ -104,68 +104,63 @@ export default function CardDeck({
       });
     }
 
+    const usedImages = new Set<string>();
+    if (targetMember.photoUrl) usedImages.add(targetMember.photoUrl);
+    if (targetMember.imageUrl) usedImages.add(targetMember.imageUrl);
+
     // Filter database members excluding target member
-    const realDbOthers = (databaseMembers || [])
-      .filter((m) => m.regNo.toLowerCase() !== targetRegClean)
-      .map((m, i) => {
-        const realGif =
-          m.avatarUrl ||
-          m.imageUrl ||
-          m.photoUrl ||
-          REAL_CYBERPUNK_GIFS[i % REAL_CYBERPUNK_GIFS.length];
-        return {
-          ...m,
-          avatarUrl: realGif,
-          photoUrl: m.photoUrl || realGif,
-          imageUrl: m.imageUrl || realGif,
-        };
+    const pool: UnifiedMember[] = [];
+    (databaseMembers || []).forEach((m, i) => {
+      if (m.regNo.toLowerCase() === targetRegClean) return;
+      const photo = m.photoUrl || m.imageUrl || m.avatarUrl || REAL_CYBERPUNK_GIFS[i % REAL_CYBERPUNK_GIFS.length];
+      pool.push({
+        ...m,
+        photoUrl: photo,
+        imageUrl: photo,
+        avatarUrl: m.avatarUrl || photo,
       });
+      usedImages.add(photo);
+    });
 
-    const pool: UnifiedMember[] = [...realDbOthers];
-
-    // Enrich CSV members with database GIFs
+    // Enrich CSV members with unique photo assignments
     csvMembers.forEach((c, i) => {
       const regClean = c.registrationNumber.trim().toLowerCase();
-      const emailClean = c.email.trim().toLowerCase();
       if (regClean === targetRegClean) return;
+      if (pool.some((p) => p.regNo.toLowerCase() === regClean)) return;
 
-      const matchedDb = dbMap[regClean] || dbMap[emailClean];
-      const realGif =
-        matchedDb?.avatarUrl ||
-        matchedDb?.imageUrl ||
-        matchedDb?.photoUrl ||
-        (c as any).avatarUrl ||
-        (c as any).gifUrl ||
-        REAL_CYBERPUNK_GIFS[i % REAL_CYBERPUNK_GIFS.length];
-
-      if (!pool.some((p) => p.regNo.toLowerCase() === regClean)) {
-        pool.push({
-          id: c.registrationNumber || `csv-${i}`,
-          regNo: c.registrationNumber,
-          name: c.name,
-          phone: c.phone,
-          email: c.email,
-          assignedTeam: c.team,
-          position: c.position,
-          role: c.position || 'CORE MEMBER',
-          photoUrl: matchedDb?.photoUrl || realGif,
-          imageUrl: matchedDb?.imageUrl || realGif,
-          avatarUrl: realGif,
-          joinDate: matchedDb?.joinDate || '2024-08-01',
-          specialization: matchedDb?.specialization || `${c.team} Division`,
-          rating: matchedDb?.rating || (4.5 + (i % 5) * 0.1),
-          fromFirestore: Boolean(matchedDb),
-          fromCsv: true,
-        });
+      const matchedDb = dbMap[regClean] || dbMap[c.email.trim().toLowerCase()];
+      let photo = matchedDb?.photoUrl || matchedDb?.imageUrl || (c as any).photoUrl;
+      if (!photo || usedImages.has(photo)) {
+        photo = `https://api.dicebear.com/9.x/pixel-art/svg?seed=${encodeURIComponent(c.name || c.registrationNumber)}&backgroundColor=0a0a0f`;
       }
+      usedImages.add(photo);
+
+      pool.push({
+        id: c.registrationNumber || `csv-${i}`,
+        regNo: c.registrationNumber,
+        name: c.name,
+        phone: c.phone,
+        email: c.email,
+        assignedTeam: c.team,
+        position: c.position,
+        role: c.position || 'CORE MEMBER',
+        photoUrl: photo,
+        imageUrl: photo,
+        avatarUrl: matchedDb?.avatarUrl || photo,
+        joinDate: matchedDb?.joinDate || '2024-08-01',
+        specialization: matchedDb?.specialization || `${c.team} Division`,
+        rating: matchedDb?.rating || (4.5 + (i % 5) * 0.1),
+        fromFirestore: Boolean(matchedDb),
+        fromCsv: true,
+      });
     });
 
     const selectedOthers = pool.slice(0, cardCount - 1);
 
-    // Pad with real fallback GIF avatars if needed
+    // Pad with strictly unique fallback SVG avatars if deck needs more members
     while (selectedOthers.length < cardCount - 1) {
       const idx = selectedOthers.length + 1;
-      const realGif = REAL_CYBERPUNK_GIFS[idx % REAL_CYBERPUNK_GIFS.length];
+      const photo = `https://api.dicebear.com/9.x/pixel-art/svg?seed=vrgc_unique_member_${idx}&backgroundColor=0a0a0f`;
       selectedOthers.push({
         id: `db-gen-${idx}`,
         regNo: `25BCG100${idx}`,
@@ -175,9 +170,9 @@ export default function CardDeck({
         assignedTeam: 'Gaming',
         position: 'Core Member',
         role: 'Core Member',
-        photoUrl: realGif,
-        imageUrl: realGif,
-        avatarUrl: realGif,
+        photoUrl: photo,
+        imageUrl: photo,
+        avatarUrl: photo,
         joinDate: '2024-08-01',
         specialization: 'Game Dev & Esports',
         rating: 4.8,
