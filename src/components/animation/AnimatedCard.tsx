@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useMemo, useEffect } from 'react';
+import React, { useMemo, memo } from 'react';
 import { motion, useReducedMotion, TargetAndTransition } from 'framer-motion';
 
 export type CardPhase =
@@ -37,7 +37,7 @@ interface AnimatedCardProps {
   children?: React.ReactNode;
 }
 
-export const AnimatedCard: React.FC<AnimatedCardProps> = ({
+export const AnimatedCard = memo(({
   index,
   totalCards,
   isSelected,
@@ -46,20 +46,11 @@ export const AnimatedCard: React.FC<AnimatedCardProps> = ({
   avatarUrl,
   photoUrl,
   children,
-}) => {
+}: AnimatedCardProps) => {
   const prefersReduced = useReducedMotion();
-  const [isFlipped, setIsFlipped] = React.useState(false);
+  const isFlipped = isSelected && ['CARD_FLIP', 'AVATAR_REVEAL', 'PROFILE_EXPAND', 'COMPLETE'].includes(phase);
 
-  // Auto-flip when the animation reaches CARD_FLIP phase for the selected card.
-  // This drives the rotateY in AVATAR_REVEAL/PROFILE_EXPAND/COMPLETE below.
-  useEffect(() => {
-    if (isSelected && ['CARD_FLIP', 'AVATAR_REVEAL', 'PROFILE_EXPAND', 'COMPLETE'].includes(phase)) {
-      setIsFlipped(true);
-    }
-    if (!isSelected || ['ENTRY', 'DECK_APPEAR', 'ROTATING_SHUFFLE', 'SHUFFLE_ACCELERATE', 'COLLAPSE', 'CARD_PICK'].includes(phase)) {
-      setIsFlipped(false);
-    }
-  }, [phase, isSelected]);
+  const isMobile = typeof window !== 'undefined' && window.innerWidth <= 767;
 
   const revealX = 0;
   const revealY = 40;
@@ -113,7 +104,6 @@ export const AnimatedCard: React.FC<AnimatedCardProps> = ({
           scale: orbitalPosition.scale,
           opacity: orbitalPosition.opacity,
           rotateZ: orbitalPosition.rotateZ,
-          // Clamp to ±75° — prevents front face (member photo) from ever showing during shuffle
           rotateY: Math.max(-75, Math.min(75, orbitalPosition.x * 0.08)),
           rotateX: orbitalPosition.y * 0.12,
           transition: {
@@ -161,7 +151,6 @@ export const AnimatedCard: React.FC<AnimatedCardProps> = ({
               x: (index - totalCards / 2) * 35,
               y: 20 + index * 8,
               scale: 0.55,
-              // Replaced blur(3px) with lower opacity — avoids full GPU raster invalidation
               opacity: 0.1,
               rotateZ: 0,
               rotateY: 0,
@@ -233,7 +222,6 @@ export const AnimatedCard: React.FC<AnimatedCardProps> = ({
       default:
         return { x: 0, y: 0, scale: 1, opacity: 1, rotateY: 0, rotateZ: 0, rotateX: 0 };
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, isSelected, orbitalPosition.x, orbitalPosition.y, orbitalPosition.scale, orbitalPosition.opacity, orbitalPosition.rotateZ, prefersReduced, index, totalCards, isFlipped]);
 
   const isActive =
@@ -270,22 +258,19 @@ export const AnimatedCard: React.FC<AnimatedCardProps> = ({
         willChange: 'transform, opacity',
         zIndex: isActive ? totalCards + 10 : baseZIndex,
         borderRadius: '1rem',
-        contain: 'layout paint style',
+        contain: 'layout',
         transform: 'translateZ(0)',
       }}
     >
-      {/* ═══ FRONT FACE (100% Solid Non-Transparent Background) ═══ */}
       <div
         className="absolute inset-0 rounded-2xl overflow-hidden bg-[#06010d] opacity-100"
         style={{
           backgroundColor: '#06010d',
           backfaceVisibility: 'hidden',
           WebkitBackfaceVisibility: 'hidden',
-          // Must be rotateY(180deg) so it faces away from camera when card is at rotateY:0
-          // and faces the camera once the card flips to rotateY:180
           transform: 'rotateY(180deg) translateZ(0)',
           isolation: 'isolate',
-          contain: 'strict',
+          contain: 'layout',
         }}
       >
         {isRevealed && (
@@ -302,7 +287,6 @@ export const AnimatedCard: React.FC<AnimatedCardProps> = ({
           className="absolute inset-0 z-10 rounded-2xl overflow-hidden cursor-pointer"
           onClick={(e) => {
             e.stopPropagation();
-            setIsFlipped((prev) => !prev);
             if (typeof window !== 'undefined') {
               window.dispatchEvent(new CustomEvent('toggle-dossier'));
             }
@@ -319,7 +303,6 @@ export const AnimatedCard: React.FC<AnimatedCardProps> = ({
                 width: '30px',
                 height: '30px',
                 background: 'radial-gradient(circle, rgba(168,85,247,0.4) 0%, transparent 70%)',
-                // blur removed — replaced with stronger radial opacity; saves a GPU raster layer per card
                 opacity: 0.6,
                 animation: 'neon-pulse 2s infinite',
               }}
@@ -328,7 +311,6 @@ export const AnimatedCard: React.FC<AnimatedCardProps> = ({
         </div>
       </div>
 
-      {/* ═══ BACK FACE ═══ */}
       <div
         className="absolute inset-0 rounded-2xl"
         style={{
@@ -336,12 +318,10 @@ export const AnimatedCard: React.FC<AnimatedCardProps> = ({
           WebkitBackfaceVisibility: 'hidden',
         }}
       >
-        {/* Card Back Body — 100% Solid non-transparent background */}
         <div
           className={`absolute inset-0 rounded-2xl flex items-center justify-center overflow-hidden bg-[#06010d] opacity-100 cursor-pointer ${isActive ? 'animate-glow-bloom' : ''}`}
           onClick={(e) => {
             e.stopPropagation();
-            setIsFlipped((prev) => !prev);
             if (typeof window !== 'undefined') {
               window.dispatchEvent(new CustomEvent('toggle-dossier'));
             }
@@ -350,15 +330,14 @@ export const AnimatedCard: React.FC<AnimatedCardProps> = ({
             backgroundColor: '#06010d',
             border: isActive ? '1.5px solid #c084fc' : '1.5px solid rgba(168, 85, 247, 0.35)',
             boxShadow: isActive
-              ? '0 0 20px rgba(168,85,247,0.4), 0 6px 24px rgba(0,0,0,0.8)'
-              : '0 4px 16px rgba(0,0,0,0.5)',
+              ? '0 0 12px rgba(168,85,247,0.3), 0 4px 16px rgba(0,0,0,0.6)'
+              : '0 2px 8px rgba(0,0,0,0.4)',
             transition: 'border-color 0.3s ease-in-out',
             isolation: 'isolate',
-            contain: 'strict',
+            contain: isActive ? 'strict' : 'layout',
             transform: 'translateZ(0)',
           }}
         >
-          {/* Uploaded Avatar GIF during shuffle, candidate photo after reveal */}
           {(avatarUrl || photoUrl) ? (
             <div className="absolute inset-0 z-0 overflow-hidden pointer-events-none rounded-2xl">
               <img 
@@ -412,6 +391,6 @@ export const AnimatedCard: React.FC<AnimatedCardProps> = ({
       </div>
     </motion.div>
   );
-};
+});
 
 export default AnimatedCard;
