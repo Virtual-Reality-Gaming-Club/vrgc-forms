@@ -308,6 +308,13 @@ export default function CardDeck({
   const isOrbiting = phase === 'ROTATING_SHUFFLE' || phase === 'SHUFFLE_ACCELERATE';
   const isPicking = phase === 'CARD_PICK' || phase === 'CARD_FLIP';
 
+  const isRevealPhase = ['CARD_PICK', 'CARD_FLIP', 'AVATAR_REVEAL', 'PROFILE_EXPAND', 'COMPLETE'].includes(phase);
+
+  // Pool of VRGC club members excluding target member for mystery shuffle
+  const shuffleOthers = React.useMemo(() => {
+    return deckMembers.filter((m) => m.regNo.toLowerCase() !== targetMember.regNo.toLowerCase());
+  }, [deckMembers, targetMember]);
+
   return (
     <div
       className="relative w-full h-full flex items-center justify-center pointer-events-none"
@@ -317,31 +324,39 @@ export default function CardDeck({
         transition: 'perspective 1.2s ease-in-out, perspective-origin 1.2s ease-in-out',
       }}
     >
-      {deckMembers.map((member, i) => (
-        <AnimatedCard
-          key={member.id}
-          index={i}
-          totalCards={cardCount}
-          isSelected={i === selectedIndex}
-          phase={phase}
-          orbitalPosition={orbitalPositions[i] || NEUTRAL}
-          targetAspectRatio={i === selectedIndex ? targetAspectRatio : 2 / 3}
-          cardMember={member}
-        >
-          <MemberCard
-            member={member}
-            isRevealed={
-              i === selectedIndex &&
-              ['CARD_FLIP', 'AVATAR_REVEAL', 'PROFILE_EXPAND', 'COMPLETE'].includes(phase)
-            }
-            onAspectRatioChange={(ratio) => {
-              if (i === selectedIndex) {
-                setTargetAspectRatio(ratio);
+      {deckMembers.map((member, i) => {
+        // Hide target member identity during entrance & 3D shuffle!
+        // Show random club member cards during shuffle. Target member is ONLY assigned upon card pick/reveal!
+        const cardMemberData = (isRevealPhase && i === selectedIndex)
+          ? deckMembers[0]
+          : (shuffleOthers[i % shuffleOthers.length] || member);
+
+        return (
+          <AnimatedCard
+            key={member.id}
+            index={i}
+            totalCards={cardCount}
+            isSelected={i === selectedIndex}
+            phase={phase}
+            orbitalPosition={orbitalPositions[i] || NEUTRAL}
+            targetAspectRatio={i === selectedIndex ? targetAspectRatio : 2 / 3}
+            cardMember={cardMemberData}
+          >
+            <MemberCard
+              member={cardMemberData}
+              isRevealed={
+                i === selectedIndex &&
+                ['CARD_FLIP', 'AVATAR_REVEAL', 'PROFILE_EXPAND', 'COMPLETE'].includes(phase)
               }
-            }}
-          />
-        </AnimatedCard>
-      ))}
+              onAspectRatioChange={(ratio) => {
+                if (i === selectedIndex) {
+                  setTargetAspectRatio(ratio);
+                }
+              }}
+            />
+          </AnimatedCard>
+        );
+      })}
     </div>
   );
 }
