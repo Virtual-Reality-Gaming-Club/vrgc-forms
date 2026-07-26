@@ -12,6 +12,12 @@ interface AssetPreloaderProps {
   onComplete: () => void;
 }
 
+declare global {
+  interface Window {
+    __VRGC_IMAGE_CACHE__?: HTMLImageElement[];
+  }
+}
+
 export default function AssetPreloader({
   targetMember,
   csvMembers = [],
@@ -21,45 +27,77 @@ export default function AssetPreloader({
   const [progress, setProgress] = useState(0);
 
   useEffect(() => {
-    // Collect image/GIF asset URLs to preload into browser cache
-    const urlsToPreload: string[] = [];
+    if (typeof window === 'undefined') return;
 
-    if (targetMember.avatarUrl) urlsToPreload.push(targetMember.avatarUrl);
-    if (targetMember.photoUrl) urlsToPreload.push(targetMember.photoUrl);
-    if (targetMember.imageUrl) urlsToPreload.push(targetMember.imageUrl);
+    window.__VRGC_IMAGE_CACHE__ = window.__VRGC_IMAGE_CACHE__ || [];
+
+    // Collect unique image/GIF asset URLs to preload into browser memory
+    const rawUrls = [
+      targetMember.avatarUrl,
+      targetMember.photoUrl,
+      targetMember.imageUrl,
+      '/vrgc-logo.png',
+      '/icon.svg',
+    ];
 
     databaseMembers.forEach((m) => {
-      if (m.avatarUrl) urlsToPreload.push(m.avatarUrl);
-      if (m.photoUrl) urlsToPreload.push(m.photoUrl);
+      if (m.avatarUrl) rawUrls.push(m.avatarUrl);
+      if (m.photoUrl) rawUrls.push(m.photoUrl);
     });
 
-    urlsToPreload.push('/vrgc-logo.png', '/icon.svg');
+    const uniqueUrls = Array.from(new Set(rawUrls.filter(Boolean))) as string[];
+    let loadedCount = 0;
+    const totalAssets = uniqueUrls.length || 1;
+    let completed = false;
 
-    // Preload images into browser memory
-    urlsToPreload.forEach((url) => {
-      if (url && typeof window !== 'undefined') {
-        const img = new Image();
-        img.src = url;
+    const finish = () => {
+      if (!completed) {
+        completed = true;
+        setProgress(100);
+        setTimeout(() => {
+          onComplete();
+        }, 20);
       }
+    };
+
+    // Preload each image with async decoding and high fetch priority
+    uniqueUrls.forEach((url) => {
+      const img = new Image();
+      img.decoding = 'async';
+      (img as any).fetchPriority = 'high';
+
+      const handleDone = () => {
+        loadedCount++;
+        const pct = Math.min(100, Math.floor((loadedCount / totalAssets) * 100));
+        setProgress((prev) => Math.max(prev, pct));
+        if (loadedCount >= totalAssets) {
+          finish();
+        }
+      };
+
+      img.onload = handleDone;
+      img.onerror = handleDone;
+      img.src = url;
+
+      window.__VRGC_IMAGE_CACHE__!.push(img);
     });
 
-    // High-performance 0.4 second progress animation (400ms total fast preloader burst)
+    // High-performance ultra-snappy progress animation (350ms max cap)
     const startTime = performance.now();
-    const duration = 400;
+    const duration = 350;
 
     let animationFrameId: number;
 
     const updateProgress = (currentTime: number) => {
+      if (completed) return;
       const elapsed = currentTime - startTime;
       const pct = Math.min(100, Math.floor((elapsed / duration) * 100));
-      setProgress(pct);
+      setProgress((prev) => Math.max(prev, pct));
 
       if (elapsed < duration) {
         animationFrameId = requestAnimationFrame(updateProgress);
       } else {
-        setTimeout(() => {
-          onComplete();
-        }, 30);
+        finish();
       }
     };
 

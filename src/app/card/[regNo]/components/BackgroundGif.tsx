@@ -36,8 +36,11 @@ export default function BackgroundGif({ avatarUrl, isVisible }: BackgroundGifPro
             src={avatarUrl}
             alt="Cyberpunk Avatar Background (PC)"
             className="w-full h-full object-cover filter brightness-105 contrast-110 saturate-125"
+            loading="eager"
+            decoding="async"
             style={{
               objectPosition: 'center 35%',
+              willChange: 'transform, opacity',
             }}
             referrerPolicy="no-referrer"
           />
@@ -51,8 +54,11 @@ export default function BackgroundGif({ avatarUrl, isVisible }: BackgroundGifPro
             src={avatarUrl}
             alt="Cyberpunk Avatar Background (Mobile)"
             className="w-full h-full object-cover filter brightness-105 contrast-110 saturate-125"
+            loading="eager"
+            decoding="async"
             style={{
               objectPosition: 'center center',
+              willChange: 'transform, opacity',
             }}
             referrerPolicy="no-referrer"
           />

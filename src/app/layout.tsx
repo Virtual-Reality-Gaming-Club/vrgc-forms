@@ -20,6 +20,9 @@ export default function RootLayout({
     <html lang="en" className="dark">
       <head>
         <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+        <link rel="preconnect" href="https://fopyejijjeoumimsdgiz.supabase.co" crossOrigin="anonymous" />
+        <link rel="preconnect" href="https://media.giphy.com" crossOrigin="anonymous" />
+        <link rel="preconnect" href="https://api.dicebear.com" crossOrigin="anonymous" />
         <link
           rel="stylesheet"
           href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0&display=swap"
