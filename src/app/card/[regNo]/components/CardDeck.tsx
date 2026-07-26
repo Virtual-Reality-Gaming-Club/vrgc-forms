@@ -38,15 +38,27 @@ function computeOrbitalPositions(
   });
 }
 
+const REAL_CYBERPUNK_GIFS = [
+  'https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExbnY5aG51aWVrcTFldGJhYjRycndzYnlvcmV6aGlsYzRxeXUwdDNtZyZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/LqT855y03dANy/giphy.gif',
+  'https://media.giphy.com/media/26tn33aiTi1jkl6H6/giphy.gif',
+  'https://media.giphy.com/media/3oKIPnAiaMCws8nOsE/giphy.gif',
+  'https://media.giphy.com/media/d9A3XKqxodGjC/giphy.gif',
+  'https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExM3Zsd24ybjRhNDRnbnJraGlnNHZwcmhrMHR4ZnpuaHczOTI3dnA2ZyZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/13Hgw8hCXKvhwQ/giphy.gif',
+  'https://media.giphy.com/media/xT9IgzoKnwFNmISR8I/giphy.gif',
+  'https://media.giphy.com/media/3o7TKSjRrfIPjeiVyM/giphy.gif',
+  'https://media.giphy.com/media/l41YoV54ZT606Bwzv/giphy.gif',
+];
+
 interface CardDeckProps {
   phase: CardPhase;
   targetMember: UnifiedMember;
   csvMembers: CsvMember[];
+  databaseMembers?: UnifiedMember[];
   onPhaseComplete: (phase: CardPhase) => void;
   onMemberSelected?: (member: UnifiedMember) => void;
 }
 
-export default function CardDeck({ phase, targetMember, csvMembers, onPhaseComplete, onMemberSelected }: CardDeckProps) {
+export default function CardDeck({ phase, targetMember, csvMembers, databaseMembers, onPhaseComplete, onMemberSelected }: CardDeckProps) {
   const [isMobile, setIsMobile] = useState<boolean>(false);
   const cardCount = isMobile ? 5 : 8;
 
@@ -70,16 +82,55 @@ export default function CardDeck({ phase, targetMember, csvMembers, onPhaseCompl
   const timeRef = useRef(0);
   const rafRef = useRef<number | null>(null);
 
-  // Construct deck cards: targetMember at index 0, followed by CSV member avatars
-  // Lightweight SVG & avatar thumbnails used for background deck cards to guarantee smooth mobile FPS
+  // Construct deck cards using real GIF avatars from database
   const deckMembers = React.useMemo(() => {
-    const others = csvMembers
-      .filter((m) => m.registrationNumber.toLowerCase() !== targetMember.regNo.toLowerCase())
-      .slice(0, cardCount - 1)
-      .map((c, i) => {
-        const seed = encodeURIComponent(c.name || c.registrationNumber);
-        const avatarThumb = (c as any).avatarUrl || `https://api.dicebear.com/9.x/pixel-art/svg?seed=${seed}&backgroundColor=0a0a0f`;
+    const targetRegClean = targetMember.regNo.toLowerCase();
+
+    // Map database members by regNo / email for quick lookup
+    const dbMap: Record<string, UnifiedMember> = {};
+    if (databaseMembers) {
+      databaseMembers.forEach((m) => {
+        if (m.regNo) dbMap[m.regNo.toLowerCase()] = m;
+        if (m.email) dbMap[m.email.toLowerCase()] = m;
+      });
+    }
+
+    // Filter database members excluding target member
+    const realDbOthers = (databaseMembers || [])
+      .filter((m) => m.regNo.toLowerCase() !== targetRegClean)
+      .map((m, i) => {
+        const realGif =
+          m.avatarUrl ||
+          m.imageUrl ||
+          m.photoUrl ||
+          REAL_CYBERPUNK_GIFS[i % REAL_CYBERPUNK_GIFS.length];
         return {
+          ...m,
+          avatarUrl: realGif,
+          photoUrl: m.photoUrl || realGif,
+          imageUrl: m.imageUrl || realGif,
+        };
+      });
+
+    const pool: UnifiedMember[] = [...realDbOthers];
+
+    // Enrich CSV members with database GIFs
+    csvMembers.forEach((c, i) => {
+      const regClean = c.registrationNumber.trim().toLowerCase();
+      const emailClean = c.email.trim().toLowerCase();
+      if (regClean === targetRegClean) return;
+
+      const matchedDb = dbMap[regClean] || dbMap[emailClean];
+      const realGif =
+        matchedDb?.avatarUrl ||
+        matchedDb?.imageUrl ||
+        matchedDb?.photoUrl ||
+        (c as any).avatarUrl ||
+        (c as any).gifUrl ||
+        REAL_CYBERPUNK_GIFS[i % REAL_CYBERPUNK_GIFS.length];
+
+      if (!pool.some((p) => p.regNo.toLowerCase() === regClean)) {
+        pool.push({
           id: c.registrationNumber || `csv-${i}`,
           regNo: c.registrationNumber,
           name: c.name,
@@ -88,22 +139,26 @@ export default function CardDeck({ phase, targetMember, csvMembers, onPhaseCompl
           assignedTeam: c.team,
           position: c.position,
           role: c.position || 'CORE MEMBER',
-          photoUrl: avatarThumb,
-          imageUrl: avatarThumb,
-          avatarUrl: avatarThumb,
-          joinDate: '2024-08-01',
-          specialization: `${c.team} Division`,
-          rating: 4.5 + (i % 5) * 0.1,
-          fromFirestore: false,
+          photoUrl: matchedDb?.photoUrl || realGif,
+          imageUrl: matchedDb?.imageUrl || realGif,
+          avatarUrl: realGif,
+          joinDate: matchedDb?.joinDate || '2024-08-01',
+          specialization: matchedDb?.specialization || `${c.team} Division`,
+          rating: matchedDb?.rating || (4.5 + (i % 5) * 0.1),
+          fromFirestore: Boolean(matchedDb),
           fromCsv: true,
-        };
-      });
+        });
+      }
+    });
 
-    while (others.length < cardCount - 1) {
-      const idx = others.length + 1;
-      const avatarThumb = `https://api.dicebear.com/9.x/pixel-art/svg?seed=vrgc_member_${idx}&backgroundColor=0a0a0f`;
-      others.push({
-        id: `gen-${idx}`,
+    const selectedOthers = pool.slice(0, cardCount - 1);
+
+    // Pad with real fallback GIF avatars if needed
+    while (selectedOthers.length < cardCount - 1) {
+      const idx = selectedOthers.length + 1;
+      const realGif = REAL_CYBERPUNK_GIFS[idx % REAL_CYBERPUNK_GIFS.length];
+      selectedOthers.push({
+        id: `db-gen-${idx}`,
         regNo: `25BCG100${idx}`,
         name: `VRGC Member ${idx}`,
         phone: '+91 90000 00000',
@@ -111,19 +166,31 @@ export default function CardDeck({ phase, targetMember, csvMembers, onPhaseCompl
         assignedTeam: 'Gaming',
         position: 'Core Member',
         role: 'Core Member',
-        photoUrl: avatarThumb,
-        imageUrl: avatarThumb,
-        avatarUrl: avatarThumb,
+        photoUrl: realGif,
+        imageUrl: realGif,
+        avatarUrl: realGif,
         joinDate: '2024-08-01',
         specialization: 'Game Dev & Esports',
-        rating: 4.6,
-        fromFirestore: false,
+        rating: 4.8,
+        fromFirestore: true,
         fromCsv: false,
       });
     }
 
-    return [targetMember, ...others];
-  }, [targetMember, csvMembers, cardCount]);
+    const realTargetAvatar =
+      targetMember.avatarUrl ||
+      targetMember.imageUrl ||
+      targetMember.photoUrl ||
+      REAL_CYBERPUNK_GIFS[0];
+
+    const finalTargetMember: UnifiedMember = {
+      ...targetMember,
+      avatarUrl: realTargetAvatar,
+      photoUrl: targetMember.photoUrl || realTargetAvatar,
+    };
+
+    return [finalTargetMember, ...selectedOthers];
+  }, [targetMember, csvMembers, databaseMembers, cardCount]);
 
   const onMemberSelectedRef = useRef(onMemberSelected);
   onMemberSelectedRef.current = onMemberSelected;

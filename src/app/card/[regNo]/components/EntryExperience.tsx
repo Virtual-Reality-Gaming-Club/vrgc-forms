@@ -164,9 +164,10 @@ function FloatingGeometries() {
 interface EntryExperienceProps {
   targetMember: UnifiedMember;
   csvMembers: CsvMember[];
+  databaseMembers?: UnifiedMember[];
 }
 
-export default function EntryExperience({ targetMember, csvMembers }: EntryExperienceProps) {
+export default function EntryExperience({ targetMember, csvMembers, databaseMembers }: EntryExperienceProps) {
   const [phase, setPhase] = useState<CardPhase>('ENTRY');
   const [selectedMember, setSelectedMember] = useState<UnifiedMember>(targetMember);
   const [isMobile, setIsMobile] = useState(false);
@@ -259,6 +260,7 @@ export default function EntryExperience({ targetMember, csvMembers }: EntryExper
               phase={phase}
               targetMember={targetMember}
               csvMembers={csvMembers}
+              databaseMembers={databaseMembers}
               onPhaseComplete={handlePhaseComplete}
               onMemberSelected={handleMemberSelected}
             />
