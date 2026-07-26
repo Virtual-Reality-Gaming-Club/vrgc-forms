@@ -272,7 +272,7 @@ export default function CardDeck({
         timer = setTimeout(() => handlePhaseComplete('DECK_APPEAR'), 600);
         break;
       case 'ROTATING_SHUFFLE':
-        timer = setTimeout(() => handlePhaseComplete('ROTATING_SHUFFLE'), 2500);
+        timer = setTimeout(() => handlePhaseComplete('ROTATING_SHUFFLE'), 3750);
         break;
       case 'SHUFFLE_ACCELERATE':
         timer = setTimeout(() => handlePhaseComplete('SHUFFLE_ACCELERATE'), 1400);
