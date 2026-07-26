@@ -7,6 +7,7 @@ import ProfileReveal from './ProfileReveal';
 import HudOverlay from './HudOverlay';
 import WelcomePopup from './WelcomePopup';
 import BackgroundGif from './BackgroundGif';
+import AssetPreloader from './AssetPreloader';
 import { CardPhase } from './AnimatedCard';
 import { UnifiedMember } from '../types';
 import { CsvMember } from '../utils/csvParser';
@@ -168,6 +169,7 @@ interface EntryExperienceProps {
 }
 
 export default function EntryExperience({ targetMember, csvMembers, databaseMembers }: EntryExperienceProps) {
+  const [isPreloading, setIsPreloading] = useState(true);
   const [phase, setPhase] = useState<CardPhase>('ENTRY');
   const [selectedMember, setSelectedMember] = useState<UnifiedMember>(targetMember);
   const [isMobile, setIsMobile] = useState(false);
@@ -190,6 +192,7 @@ export default function EntryExperience({ targetMember, csvMembers, databaseMemb
   }, []);
 
   const handleReplay = useCallback(() => {
+    setIsPreloading(true);
     setPhase('ENTRY');
   }, []);
 
@@ -202,26 +205,37 @@ export default function EntryExperience({ targetMember, csvMembers, databaseMemb
   const particleIntensity = isShuffling ? 1.2 : isRevealPhase ? 0.6 : showBurst ? 1.5 : 0.8;
 
   return (
-    <div
-      className="relative flex flex-col items-center justify-center overflow-hidden w-full min-h-screen"
-      style={{
-        width: '100vw',
-        height: '100dvh',
-        minHeight: '100vh',
-        background: 'linear-gradient(135deg, #020006 0%, #080116 25%, #100228 50%, #0a011a 75%, #020006 100%)',
-        backgroundSize: isMobile ? '100% 100%' : '400% 400%',
-        animation: isMobile ? 'none' : 'bg-shift 20s ease infinite',
-      }}
-    >
-      {/* Background GIF rendered behind full screen after animation complete */}
-      <BackgroundGif
-        avatarUrl={targetMember.avatarUrl}
-        isVisible={isProfileVisible}
-      />
+    <>
+      <AnimatePresence mode="wait">
+        {isPreloading && (
+          <AssetPreloader
+            targetMember={targetMember}
+            csvMembers={csvMembers}
+            databaseMembers={databaseMembers}
+            onComplete={() => setIsPreloading(false)}
+          />
+        )}
+      </AnimatePresence>
 
-      {/* Camera breathing wrapper */}
-      <div className="absolute inset-0 w-full h-full pointer-events-none z-0" style={{ animation: isMobile ? 'none' : 'camera-breathe 12s ease-in-out infinite' }}>
-          
+      <div
+        className="relative flex flex-col items-center justify-center overflow-hidden w-full min-h-screen"
+        style={{
+          width: '100vw',
+          height: '100dvh',
+          minHeight: '100vh',
+          background: 'linear-gradient(135deg, #020006 0%, #080116 25%, #100228 50%, #0a011a 75%, #020006 100%)',
+          backgroundSize: isMobile ? '100% 100%' : '400% 400%',
+          animation: isMobile ? 'none' : 'bg-shift 20s ease infinite',
+        }}
+      >
+        {/* Background GIF rendered behind full screen after animation complete */}
+        <BackgroundGif
+          avatarUrl={targetMember.avatarUrl}
+          isVisible={isProfileVisible}
+        />
+
+        {/* Camera breathing wrapper */}
+        <div className="absolute inset-0 w-full h-full pointer-events-none z-0" style={{ animation: isMobile ? 'none' : 'camera-breathe 12s ease-in-out infinite' }}>
           <EnergyOrbs phase={phase} />
           <FloatingGeometries />
           <Particles intensity={particleIntensity} />
@@ -278,23 +292,24 @@ export default function EntryExperience({ targetMember, csvMembers, databaseMemb
           
           <WelcomePopup phase={phase} />
           <HudOverlay phase={phase} />
-      </div>
+        </div>
 
-      {/* Phase dots */}
-      <motion.div
-        className="absolute bottom-4 left-1/2 flex items-center gap-1.5 z-40 pointer-events-none"
-        initial={{ x: '-50%' }}
-        animate={{ x: '-50%', opacity: phase === 'COMPLETE' ? 0 : 0.3 }}
-      >
-        {PHASE_ORDER.slice(0, -1).map(p => (
-          <motion.div key={p} className="rounded-full transition-all" animate={{
-            width: phase === p ? 12 : 4,
-            height: 4,
-            backgroundColor: phase === p ? '#c084fc' : 'rgba(255,255,255,0.3)',
-            boxShadow: phase === p ? '0 0 8px rgba(192,132,252,0.8)' : '0 0 0px rgba(0,0,0,0)',
-          }} transition={{ type: 'spring', stiffness: 300, damping: 25 }} />
-        ))}
-      </motion.div>
-    </div>
+        {/* Phase dots */}
+        <motion.div
+          className="absolute bottom-4 left-1/2 flex items-center gap-1.5 z-40 pointer-events-none"
+          initial={{ x: '-50%' }}
+          animate={{ x: '-50%', opacity: phase === 'COMPLETE' ? 0 : 0.3 }}
+        >
+          {PHASE_ORDER.slice(0, -1).map(p => (
+            <motion.div key={p} className="rounded-full transition-all" animate={{
+              width: phase === p ? 12 : 4,
+              height: 4,
+              backgroundColor: phase === p ? '#c084fc' : 'rgba(255,255,255,0.3)',
+              boxShadow: phase === p ? '0 0 8px rgba(192,132,252,0.8)' : '0 0 0px rgba(0,0,0,0)',
+            }} transition={{ type: 'spring', stiffness: 300, damping: 25 }} />
+          ))}
+        </motion.div>
+      </div>
+    </>
   );
 }
