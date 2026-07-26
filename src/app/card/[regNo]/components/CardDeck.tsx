@@ -403,7 +403,8 @@ export default function CardDeck({
     };
   }, [targetMember]);
 
-  const isRevealPhase = ['CARD_PICK', 'CARD_FLIP', 'AVATAR_REVEAL', 'PROFILE_EXPAND', 'COMPLETE'].includes(phase);
+  // Target member is excluded from initial ENTRY & DECK_APPEAR animation, but included in 3D shuffle and lands at centre screen!
+  const isShuffleOrRevealPhase = ['ROTATING_SHUFFLE', 'SHUFFLE_ACCELERATE', 'COLLAPSE', 'CARD_PICK', 'CARD_FLIP', 'AVATAR_REVEAL', 'PROFILE_EXPAND', 'COMPLETE'].includes(phase);
 
   return (
     <div
@@ -415,8 +416,9 @@ export default function CardDeck({
       }}
     >
       {deckMembers.map((member, i) => {
-        // Assign strictly unique non-target member cards during shuffle. Target member is ONLY assigned on card pick/reveal!
-        const cardMemberData = (isRevealPhase && i === selectedIndex)
+        // Exclude target member from initial decking animation (ENTRY & DECK_APPEAR).
+        // Target member joins during 3D shuffle and lands at centre screen upon pick & reveal!
+        const cardMemberData = (isShuffleOrRevealPhase && i === selectedIndex)
           ? finalTargetMember
           : (shuffleOthers[i] || member);
 
