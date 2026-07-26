@@ -1,6 +1,6 @@
 'use client';
 
-import React from 'react';
+import React, { memo } from 'react';
 import { motion, useReducedMotion, TargetAndTransition } from 'framer-motion';
 import { UnifiedMember } from '../types';
 
@@ -38,7 +38,7 @@ interface AnimatedCardProps {
   children?: React.ReactNode;
 }
 
-export const AnimatedCard: React.FC<AnimatedCardProps> = ({
+export const AnimatedCard = memo(({
   index,
   totalCards,
   isSelected,
@@ -47,7 +47,7 @@ export const AnimatedCard: React.FC<AnimatedCardProps> = ({
   targetAspectRatio = 2 / 3,
   cardMember,
   children,
-}) => {
+}: AnimatedCardProps) => {
   const prefersReduced = useReducedMotion();
 
   const revealX = 0;
@@ -111,7 +111,7 @@ export const AnimatedCard: React.FC<AnimatedCardProps> = ({
           scale: orbitalPosition.scale,
           opacity: orbitalPosition.opacity,
           rotateZ: orbitalPosition.rotateZ,
-          rotateY: orbitalPosition.x * 0.08,
+          rotateY: Math.max(-75, Math.min(75, orbitalPosition.x * 0.08)),
           rotateX: orbitalPosition.y * 0.12,
           transition: {
             type: 'spring' as const,
@@ -158,11 +158,10 @@ export const AnimatedCard: React.FC<AnimatedCardProps> = ({
               x: (index - totalCards / 2) * 35,
               y: 20 + index * 8,
               scale: 0.55,
-              opacity: 0.15,
+              opacity: 0.1,
               rotateZ: 0,
               rotateY: 0,
               rotateX: 15,
-              filter: 'blur(3px)',
               transition: {
                 type: 'spring' as const,
                 stiffness: 200,
@@ -189,11 +188,10 @@ export const AnimatedCard: React.FC<AnimatedCardProps> = ({
               x: (index - totalCards / 2) * 40,
               y: 30,
               scale: 0.5,
-              opacity: 0.12,
+              opacity: 0.08,
               rotateZ: 0,
               rotateY: 0,
               rotateX: 18,
-              filter: 'blur(3px)',
               transition: { duration: 0.5 },
             };
 
@@ -219,11 +217,10 @@ export const AnimatedCard: React.FC<AnimatedCardProps> = ({
               x: (index - totalCards / 2) * 45,
               y: 35 + Math.sin(index) * 10,
               scale: 0.4,
-              opacity: 0.08,
+              opacity: 0.05,
               rotateZ: (index - totalCards / 2) * 3,
               rotateY: 0,
               rotateX: 20,
-              filter: 'blur(3px)',
               transition: { duration: 0.2 },
             };
 
@@ -270,6 +267,8 @@ export const AnimatedCard: React.FC<AnimatedCardProps> = ({
         width: 'clamp(200px, 58vw, 320px)',
         willChange: 'transform, opacity',
         zIndex: isActive ? totalCards + 10 : baseZIndex,
+        contain: 'layout',
+        transform: 'translateZ(0)',
         animation: isIdleFloat ? 'card-idle-float 3s ease-in-out infinite' : 'none',
       }}
     >
@@ -300,10 +299,9 @@ export const AnimatedCard: React.FC<AnimatedCardProps> = ({
           <div 
             className="absolute inset-0 rounded-2xl pointer-events-none"
             style={{
-              filter: 'blur(30px)',
               transform: 'scale(1.05)',
-              background: 'radial-gradient(circle, rgba(168,85,247,0.5) 0%, rgba(124,58,237,0.4) 100%)',
-              opacity: 0.45,
+              background: 'radial-gradient(circle, rgba(168,85,247,0.4) 0%, rgba(124,58,237,0.3) 100%)',
+              opacity: 0.5,
             }}
           />
         )}
@@ -313,9 +311,11 @@ export const AnimatedCard: React.FC<AnimatedCardProps> = ({
             backgroundColor: '#05020c',
             border: isActive ? '1.5px solid #c084fc' : '1.5px solid rgba(168, 85, 247, 0.45)',
             boxShadow: isActive
-              ? '0 0 25px rgba(168,85,247,0.5), 0 8px 32px rgba(0,0,0,0.85)'
-              : '0 4px 20px rgba(0,0,0,0.6), inset 0 1px 0 rgba(192,132,252,0.15)',
+              ? '0 0 20px rgba(168,85,247,0.4), 0 6px 24px rgba(0,0,0,0.8)'
+              : '0 4px 16px rgba(0,0,0,0.5)',
             transition: 'border-color 0.5s ease-in-out',
+            contain: isActive ? 'strict' : 'layout',
+            transform: 'translateZ(0)',
           }}
         >
           {/* Member Avatar GIF Canvas */}
@@ -369,6 +369,7 @@ export const AnimatedCard: React.FC<AnimatedCardProps> = ({
       </div>
     </motion.div>
   );
-};
+});
 
 export default AnimatedCard;
+
