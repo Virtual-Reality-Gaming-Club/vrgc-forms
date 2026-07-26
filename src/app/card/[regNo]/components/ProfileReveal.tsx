@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { motion } from 'framer-motion';
 import { UnifiedMember } from '../types';
+import Link from 'next/link';
 import {
   Globe,
   ExternalLink,
@@ -20,12 +21,15 @@ import {
   Camera,
   Share2,
   User,
+  RotateCcw,
+  Home,
 } from 'lucide-react';
 
 interface ProfileRevealProps {
   member: UnifiedMember | null;
   isVisible: boolean;
   isComplete: boolean;
+  onReplay?: () => void;
 }
 
 const SOCIALS = [
@@ -67,7 +71,7 @@ function SocialButton({
   );
 }
 
-export default function ProfileReveal({ member, isVisible, isComplete }: ProfileRevealProps) {
+export default function ProfileReveal({ member, isVisible, isComplete, onReplay }: ProfileRevealProps) {
   const [seqStep, setSeqStep] = useState<number>(0);
   const [scrollProgress, setScrollProgress] = useState<number>(0);
   const [isMobile, setIsMobile] = useState<boolean>(false);
@@ -362,26 +366,50 @@ export default function ProfileReveal({ member, isVisible, isComplete }: Profile
         <div className="absolute bottom-2 right-2 w-3 h-3 border-b-2 border-r-2 border-[#c084fc]/70 pointer-events-none" />
       </motion.div>
 
-      {/* ═══ SCROLL PROMPT BUTTON ═══ */}
+      {/* ═══ BOTTOM ACTION CONTROLS ═══ */}
       {seqStep === 2 && (
-        <button
-          type="button"
-          onClick={() => setScrollProgress((prev) => (prev > 0.5 ? 0 : 1))}
-          className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 pointer-events-auto flex items-center gap-1.5 px-3.5 py-1.5 rounded-full border border-[#a855f7]/60 bg-[#04010a]/95 backdrop-blur-md text-[#d8b4fe] shadow-[0_0_20px_rgba(147,51,234,0.5)] transition-transform active:scale-95 cursor-pointer"
-        >
-          <span className="font-mono text-[9px] sm:text-[10px] uppercase tracking-widest font-semibold">
-            {scrollProgress < 0.1
-              ? 'SWIPE / SCROLL DOWN FOR DOSSIER'
-              : scrollProgress < 0.9
-              ? 'SCROLLING DOSSIER...'
-              : 'SCROLL UP TO CLOSE'}
-          </span>
-          {scrollProgress < 0.9 ? (
-            <ChevronDown size={13} className="animate-bounce text-[#c084fc]" />
-          ) : (
-            <ChevronUp size={13} className="animate-bounce text-[#c084fc]" />
+        <div className="fixed bottom-3 sm:bottom-4 left-1/2 -translate-x-1/2 z-50 pointer-events-auto flex items-center justify-center gap-2 sm:gap-3 max-w-[95vw]">
+          {/* Replay Animation Button */}
+          {onReplay && (
+            <button
+              type="button"
+              onClick={onReplay}
+              className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full border border-purple-500/70 bg-[#070214]/95 backdrop-blur-xl text-purple-300 hover:text-white hover:border-purple-400 hover:scale-105 active:scale-95 transition-all shadow-[0_0_20px_rgba(168,85,247,0.4)] font-mono text-[9px] sm:text-[10px] font-bold tracking-wider cursor-pointer"
+            >
+              <RotateCcw size={13} className="text-purple-400" />
+              <span className="whitespace-nowrap">REPLAY ANIMATION</span>
+            </button>
           )}
-        </button>
+
+          {/* Main Portal Button */}
+          <Link
+            href="/"
+            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full border border-white/30 bg-black/90 backdrop-blur-xl text-slate-200 hover:text-white hover:border-white/60 hover:scale-105 active:scale-95 transition-all shadow-[0_0_20px_rgba(255,255,255,0.15)] font-mono text-[9px] sm:text-[10px] font-bold tracking-wider cursor-pointer"
+          >
+            <Home size={13} className="text-purple-400" />
+            <span className="whitespace-nowrap">MAIN PORTAL</span>
+          </Link>
+
+          {/* Dossier Toggle Button */}
+          <button
+            type="button"
+            onClick={() => setScrollProgress((prev) => (prev > 0.5 ? 0 : 1))}
+            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full border border-[#a855f7]/60 bg-[#04010a]/95 backdrop-blur-md text-[#d8b4fe] shadow-[0_0_20px_rgba(147,51,234,0.5)] transition-transform active:scale-95 cursor-pointer"
+          >
+            <span className="font-mono text-[9px] sm:text-[10px] uppercase tracking-widest font-semibold whitespace-nowrap">
+              {scrollProgress < 0.1
+                ? 'DOSSIER'
+                : scrollProgress < 0.9
+                ? 'SCROLLING...'
+                : 'CLOSE'}
+            </span>
+            {scrollProgress < 0.9 ? (
+              <ChevronDown size={13} className="animate-bounce text-[#c084fc]" />
+            ) : (
+              <ChevronUp size={13} className="animate-bounce text-[#c084fc]" />
+            )}
+          </button>
+        </div>
       )}
     </div>
   );

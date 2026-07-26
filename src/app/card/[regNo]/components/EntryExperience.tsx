@@ -188,6 +188,10 @@ export default function EntryExperience({ targetMember, csvMembers }: EntryExper
     setSelectedMember(member);
   }, []);
 
+  const handleReplay = useCallback(() => {
+    setPhase('ENTRY');
+  }, []);
+
   const isRevealPhase = ['AVATAR_REVEAL','PROFILE_EXPAND','COMPLETE'].includes(phase);
   const isProfileVisible = ['PROFILE_EXPAND','COMPLETE'].includes(phase);
   const isShuffling = ['ROTATING_SHUFFLE','SHUFFLE_ACCELERATE'].includes(phase);
@@ -266,6 +270,7 @@ export default function EntryExperience({ targetMember, csvMembers }: EntryExper
               member={selectedMember}
               isVisible={isProfileVisible}
               isComplete={phase === 'COMPLETE'}
+              onReplay={handleReplay}
             />
           </div>
           
