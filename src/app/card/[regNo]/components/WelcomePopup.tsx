@@ -19,17 +19,17 @@ export default function WelcomePopup({ phase, isPreloading = false }: WelcomePop
 
     const timers: ReturnType<typeof setTimeout>[] = [];
 
-    // 1. WELCOME
-    timers.push(setTimeout(() => setActiveWord('WELCOME'), 100));
-    timers.push(setTimeout(() => setActiveWord(null), 550));
+    // 1. WELCOME (0.15s - 0.90s)
+    timers.push(setTimeout(() => setActiveWord('WELCOME'), 150));
 
-    // 2. TO
-    timers.push(setTimeout(() => setActiveWord('TO'), 650));
-    timers.push(setTimeout(() => setActiveWord(null), 1050));
+    // 2. TO (0.90s - 1.65s)
+    timers.push(setTimeout(() => setActiveWord('TO'), 900));
 
-    // 3. VRGC
-    timers.push(setTimeout(() => setActiveWord('VRGC'), 1150));
-    timers.push(setTimeout(() => setActiveWord(null), 1850));
+    // 3. VRGC (1.65s - 2.50s)
+    timers.push(setTimeout(() => setActiveWord('VRGC'), 1650));
+
+    // Complete (2.50s)
+    timers.push(setTimeout(() => setActiveWord(null), 2500));
 
     return () => timers.forEach(clearTimeout);
   }, [isPreloading]);
