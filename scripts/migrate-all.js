@@ -2,55 +2,33 @@ const { initializeApp } = require('firebase/app');
 const { getFirestore, collection, getDocs, doc, setDoc } = require('firebase/firestore');
 const { createClient } = require('@supabase/supabase-js');
 
-const path = require('path');
-const fs = require('fs');
-
-function loadEnv() {
-  const envPath = path.join(__dirname, '..', '.env.local');
-  if (fs.existsSync(envPath)) {
-    const content = fs.readFileSync(envPath, 'utf8');
-    content.split('\n').forEach(line => {
-      const trimmed = line.trim();
-      if (trimmed && !trimmed.startsWith('#') && trimmed.includes('=')) {
-        const idx = trimmed.indexOf('=');
-        const key = trimmed.substring(0, idx).trim();
-        const val = trimmed.substring(idx + 1).trim();
-        if (key && !process.env[key]) {
-          process.env[key] = val;
-        }
-      }
-    });
-  }
-}
-loadEnv();
-
 // 1. Old Firebase Config
 const oldFirebaseConfig = {
-  apiKey: process.env.OLD_FIREBASE_API_KEY || "",
-  authDomain: process.env.OLD_FIREBASE_AUTH_DOMAIN || "",
-  projectId: process.env.OLD_FIREBASE_PROJECT_ID || "",
-  storageBucket: process.env.OLD_FIREBASE_STORAGE_BUCKET || "",
-  messagingSenderId: process.env.OLD_FIREBASE_MESSAGING_SENDER_ID || "",
-  appId: process.env.OLD_FIREBASE_APP_ID || ""
+  apiKey: "AIzaSyA9IuuKniQtjMLODY71YxqnQXsmtqvnGPI",
+  authDomain: "vrgc-forms.firebaseapp.com",
+  projectId: "vrgc-forms",
+  storageBucket: "vrgc-forms.firebasestorage.app",
+  messagingSenderId: "417600749438",
+  appId: "1:417600749438:web:c95ec2840619d478d5bd2f"
 };
 
 // 2. New Firebase Config
 const newFirebaseConfig = {
-  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY || "",
-  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN || "",
-  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID || "",
-  storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET || "",
-  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID || "",
-  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID || ""
+  apiKey: "AIzaSyANu9lQsIX2JXGoViJ_Oag66Cltd0YzXI0",
+  authDomain: "vrgc-form.firebaseapp.com",
+  projectId: "vrgc-form",
+  storageBucket: "vrgc-form.firebasestorage.app",
+  messagingSenderId: "830392164988",
+  appId: "1:830392164988:web:9613ae484e4ab64d281ff9"
 };
 
 // 3. Old Supabase Config
-const oldSupabaseUrl = process.env.OLD_SUPABASE_URL || "";
-const oldSupabaseKey = process.env.OLD_SUPABASE_ANON_KEY || "";
+const oldSupabaseUrl = "https://rpecopoisqjkrxwcccxc.supabase.co";
+const oldSupabaseKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJwZWNvcG9pc3Fqa3J4d2NjY3hjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ2NDgwMzUsImV4cCI6MjEwMDIyNDAzNX0.IjndZHhClKb8hpL-xnhhat99QUeC7gydZ5krcytUI80";
 
 // 4. New Supabase Config
-const newSupabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
-const newSupabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
+const newSupabaseUrl = "https://fopyejijjeoumimsdgiz.supabase.co";
+const newSupabaseKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZvcHllamlqamVvdW1pbXNkZ2l6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ3Mjg4NDMsImV4cCI6MjEwMDMwNDg0M30.NQVEJKOzJnNoFGs8tgDTkbMrc4OgE_w9bhSpsZ4Cxm4";
 
 async function runMigration() {
   console.log("🚀 Updating Firestore URLs to point to NEW Supabase domain...");

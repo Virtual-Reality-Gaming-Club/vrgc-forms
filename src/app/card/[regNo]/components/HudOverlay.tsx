@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState, memo } from 'react';
+import React, { useEffect, useState } from 'react';
 import type { CardPhase } from './AnimatedCard';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -14,11 +14,9 @@ const PHASE_ORDER: CardPhase[] = [
 ];
 
 const HEX_DATA = '0A F3 7B 00 C1 E8 2D 9F 4A B6 1C D7 3E 88 5F 02'.split(' ');
-// Single pass — overflow:hidden clips the rest; duplicate removed (was 640 DOM nodes, now 320)
 const DATA_COLUMN = [...Array(20)].map(() => HEX_DATA).flat();
 
-// Isolated clock so setInterval only re-renders this tiny component
-const ClockDisplay = memo(function ClockDisplay() {
+export default function HudOverlay({ phase }: HudOverlayProps) {
   const [time, setTime] = useState<string>('');
 
   useEffect(() => {
@@ -33,33 +31,22 @@ const ClockDisplay = memo(function ClockDisplay() {
     return () => clearInterval(interval);
   }, []);
 
-  return (
-    <span
-      className="font-mono"
-      style={{ fontSize: 'clamp(0.4rem, 1.2vw, 0.5rem)', color: 'rgba(168,85,247,0.35)', letterSpacing: '0.12em' }}
-    >
-      {time}
-    </span>
-  );
-});
+  const getStatusText = (p: CardPhase) => {
+    switch (p) {
+      case 'ENTRY': return 'INITIALIZING...';
+      case 'DECK_APPEAR': return 'DECK LOADED';
+      case 'ROTATING_SHUFFLE':
+      case 'SHUFFLE_ACCELERATE': return 'SHUFFLING...';
+      case 'COLLAPSE': return 'SELECTING...';
+      case 'CARD_PICK': return 'CARD SELECTED';
+      case 'CARD_FLIP': return 'REVEALING...';
+      case 'AVATAR_REVEAL':
+      case 'PROFILE_EXPAND': return 'PROFILE LOADED';
+      case 'COMPLETE': return 'SYSTEM READY';
+      default: return 'ACTIVE';
+    }
+  };
 
-function getStatusText(p: CardPhase): string {
-  switch (p) {
-    case 'ENTRY': return 'INITIALIZING...';
-    case 'DECK_APPEAR': return 'DECK LOADED';
-    case 'ROTATING_SHUFFLE':
-    case 'SHUFFLE_ACCELERATE': return 'SHUFFLING...';
-    case 'COLLAPSE': return 'SELECTING...';
-    case 'CARD_PICK': return 'CARD SELECTED';
-    case 'CARD_FLIP': return 'REVEALING...';
-    case 'AVATAR_REVEAL':
-    case 'PROFILE_EXPAND': return 'PROFILE LOADED';
-    case 'COMPLETE': return 'SYSTEM READY';
-    default: return 'ACTIVE';
-  }
-}
-
-export default function HudOverlay({ phase }: HudOverlayProps) {
   const phaseIndex = PHASE_ORDER.indexOf(phase);
   const progressPercent = Math.max(0, Math.min(100, (phaseIndex / (PHASE_ORDER.length - 1)) * 100));
   const isComplete = phase === 'COMPLETE';
@@ -78,7 +65,7 @@ export default function HudOverlay({ phase }: HudOverlayProps) {
         }}
       />
 
-      {/* Data stream columns — single DATA_COLUMN (no duplicate), overflow:hidden clips remainder */}
+      {/* Data stream columns */}
       {!isEntry && (
         <>
           <div className="absolute left-[4px] top-1/2 -translate-y-1/2 h-[60vh] w-[14px] overflow-hidden hidden sm:flex justify-center pointer-events-none">
@@ -91,7 +78,7 @@ export default function HudOverlay({ phase }: HudOverlayProps) {
                 animation: 'data-stream 20s linear infinite'
               }}
             >
-              {DATA_COLUMN.map((hex, i) => (
+              {[...DATA_COLUMN, ...DATA_COLUMN].map((hex, i) => (
                 <div key={i}>{hex}</div>
               ))}
             </div>
@@ -106,31 +93,11 @@ export default function HudOverlay({ phase }: HudOverlayProps) {
                 animation: 'data-stream 20s linear infinite'
               }}
             >
-              {DATA_COLUMN.map((hex, i) => (
+              {[...DATA_COLUMN, ...DATA_COLUMN].map((hex, i) => (
                 <div key={i}>{hex}</div>
               ))}
             </div>
           </div>
-        </>
-      )}
-
-      {/* HUD circles */}
-      {!isEntry && (
-        <>
-          <div 
-            className="absolute bottom-[20%] left-[8%] w-[30px] h-[30px] sm:w-[50px] sm:h-[50px] rounded-full pointer-events-none"
-            style={{ 
-              border: '1px dashed rgba(168,85,247,0.1)',
-              animation: 'hud-ring-spin 25s linear infinite' 
-            }} 
-          />
-          <div 
-            className="absolute top-[25%] right-[10%] w-[20px] h-[20px] sm:w-[35px] sm:h-[35px] rounded-full pointer-events-none"
-            style={{ 
-              border: '1px dashed rgba(192,132,252,0.1)',
-              animation: 'hud-ring-spin 20s linear infinite reverse' 
-            }} 
-          />
         </>
       )}
 
@@ -188,32 +155,26 @@ export default function HudOverlay({ phase }: HudOverlayProps) {
         </span>
       </div>
 
-      {/* Top-Right Home Button & Timestamp */}
+      {/* Timestamp */}
       <div
-        className="absolute flex items-center gap-3 z-50 pointer-events-auto"
+        className="absolute flex flex-col items-end"
         style={{
-          top: 'clamp(20px, 3.5vh, 32px)',
-          right: 'clamp(12px, 2.5vw, 24px)',
+          top: 'clamp(36px, 5vh, 52px)',
+          right: 'clamp(10px, 2vw, 18px)',
         }}
       >
-        <a
-          href="/"
-          className="group flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[#0a0214]/85 hover:bg-[#a855f7]/25 border border-purple-500/40 hover:border-purple-400 text-purple-200 hover:text-white transition-all text-xs font-mono tracking-wider shadow-[0_0_15px_rgba(168,85,247,0.25)] hover:shadow-[0_0_25px_rgba(168,85,247,0.5)] active:scale-95 cursor-pointer"
-          title="Return to VRGC Forms Home"
+        <span
+          className="font-mono"
+          style={{ fontSize: 'clamp(0.35rem, 1vw, 0.45rem)', color: 'rgba(192,132,252,0.45)', letterSpacing: '0.15em' }}
         >
-          <span className="material-symbols-outlined text-sm group-hover:scale-110 transition-transform">home</span>
-          <span className="font-bold text-[10px] uppercase tracking-widest hidden sm:inline">HOME</span>
-        </a>
-
-        <div className="flex flex-col items-end pointer-events-none">
-          <span
-            className="font-mono"
-            style={{ fontSize: 'clamp(0.35rem, 1vw, 0.45rem)', color: 'rgba(192,132,252,0.45)', letterSpacing: '0.15em' }}
-          >
-            VRGC DOSSIER VERIFIED
-          </span>
-          <ClockDisplay />
-        </div>
+          VRGC NEXUS v2.0
+        </span>
+        <span
+          className="font-mono"
+          style={{ fontSize: 'clamp(0.4rem, 1.2vw, 0.5rem)', color: 'rgba(168,85,247,0.35)', letterSpacing: '0.12em' }}
+        >
+          {time}
+        </span>
       </div>
 
       {/* Progress bar */}

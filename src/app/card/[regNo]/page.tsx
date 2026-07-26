@@ -3,7 +3,7 @@ import { Metadata } from 'next';
 import { collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import VerifyCardClient from './VerifyCardClient';
-import { Member } from '@/components/animation/members';
+import { UnifiedMember } from './types';
 
 interface PageProps {
   params: Promise<{
@@ -31,7 +31,7 @@ function formatSupabaseUrl(urlOrPath: string, isAvatar: boolean = false): string
 
 async function getMemberData(regNo: string) {
   let member: any = null;
-  let otherMembers: Member[] = [];
+  let otherMembers: UnifiedMember[] = [];
   let error: string | null = null;
 
   const regUpper = regNo.toUpperCase();
@@ -75,14 +75,18 @@ async function getMemberData(regNo: string) {
                 name: d.name || 'Member',
                 regNo: rNo,
                 phone: d.phone || 'N/A',
+                email: d.email || '',
                 photoUrl: photo,
+                imageUrl: photo,
                 avatarUrl: avatar,
                 assignedTeam: d.team || d.assignedTeam || 'Development',
+                position: d.position || d.role || 'Core Member',
                 role: d.position || d.role || 'Core Member',
-                qrCodeUrl: d.qrCodeUrl || d.qrCode || '',
                 rating: 4.9,
                 joinDate: d.submittedAt ? String(d.submittedAt).split('T')[0] : '2025-01-01',
                 specialization: `${d.team || 'Member'} • ${d.position || 'Core'}`,
+                fromFirestore: true,
+                fromCsv: false,
               });
             }
           });
@@ -145,19 +149,23 @@ export default async function VerifyCardPage({ params }: PageProps) {
   const photo = formatSupabaseUrl(member?.photoUrl || member?.photo_url || member?.photoURL || member?.photo || member?.image || member?.imageUrl || '');
   const avatar = formatSupabaseUrl(member?.gifUrl || member?.avatarUrl || member?.avatar_url || member?.avatarURL || member?.avatar || '', true) || photo;
 
-  const scannedMember: Member | null = member ? {
+  const scannedMember: UnifiedMember | null = member ? {
     id: member.registrationNumber || member.regNo || regNo,
     name: member.name || 'Member',
     regNo: member.registrationNumber || member.regNo || regNo,
     phone: member.phone || '+91 98765 43210',
+    email: member.email || '',
     photoUrl: photo,
+    imageUrl: photo,
     avatarUrl: avatar,
     assignedTeam: member.team || member.assignedTeam || 'Development',
+    position: member.position || member.role || 'Core Member',
     role: member.position || member.role || 'Core Member',
-    qrCodeUrl: member.qrCodeUrl || member.qrCode || '',
     rating: 4.9,
     joinDate: member.submittedAt ? String(member.submittedAt).split('T')[0] : '2025-01-01',
     specialization: `${member.team || 'VRGC Member'} • ${member.position || 'Core'}`,
+    fromFirestore: true,
+    fromCsv: false,
   } : null;
 
   return (
@@ -171,7 +179,8 @@ export default async function VerifyCardPage({ params }: PageProps) {
       <VerifyCardClient 
         scannedMember={scannedMember} 
         otherMembers={otherMembers} 
-        error={error} 
+        initialError={error}
+        regNo={regNo}
       />
     </>
   );
