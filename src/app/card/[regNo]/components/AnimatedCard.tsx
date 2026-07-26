@@ -99,31 +99,70 @@ export const AnimatedCard = memo(({
 
     switch (phase) {
       case 'ENTRY':
+        if (isMobile) {
+          // Mobile Entry: Card 1 (non-selected member) is ALREADY static at center (x:0, y:0, opacity:1).
+          // Card 0 (selected target member) starts below screen (y:350, opacity:0).
+          // All other cards (2+) are hidden (opacity:0).
+          return {
+            x: 0,
+            y: index === 0 ? 350 : 0,
+            scale: index === 1 ? 1 : 0.7,
+            opacity: index === 1 ? 1 : 0,
+            rotateY: 0,
+            rotateZ: 0,
+            rotateX: 0,
+            transition: { duration: 0 },
+          };
+        }
         return {
           x: 0,
-          y: isMobile ? (index === 0 ? 350 : 0) : (500 + index * 25),
+          y: 500 + index * 25,
           scale: 0.6,
-          opacity: isMobile ? (index === 0 ? 0 : 0) : 0,
+          opacity: 0,
           rotateY: 0,
-          rotateZ: isMobile ? 0 : (index - totalCards / 2) * 4,
+          rotateZ: (index - totalCards / 2) * 4,
           rotateX: 0,
           transition: { duration: 0 },
         };
 
       case 'DECK_APPEAR':
         if (isMobile) {
-          // Mobile Optimization: Single top card glides into place while non-top cards stay static behind it
+          // Card 1: Stays static at center
+          if (index === 1) {
+            return {
+              x: 0,
+              y: 0,
+              scale: 1,
+              opacity: 1,
+              rotateY: 0,
+              rotateZ: 0,
+              rotateX: 0,
+              transition: { duration: 0 },
+            };
+          }
+          // Card 0 (Selected member): Animates up to center, overlapping Card 1
+          if (index === 0) {
+            return {
+              x: 0,
+              y: 0,
+              scale: 1,
+              opacity: 1,
+              rotateY: 0,
+              rotateZ: 0,
+              rotateX: 0,
+              transition: { type: 'spring' as const, stiffness: 180, damping: 22 },
+            };
+          }
+          // Cards 2+: Remain hidden behind until 3D shuffle starts
           return {
             x: 0,
-            y: index * -1.8,
+            y: index * -1.5,
             scale: 1 - index * 0.01,
-            opacity: 1,
+            opacity: 0,
             rotateY: 0,
             rotateZ: 0,
             rotateX: 0,
-            transition: index === 0
-              ? { type: 'spring' as const, stiffness: 200, damping: 24 }
-              : { duration: 0.1 },
+            transition: { duration: 0 },
           };
         }
         return {
