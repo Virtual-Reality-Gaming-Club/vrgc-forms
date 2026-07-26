@@ -60,7 +60,7 @@ interface CardDeckProps {
 
 export default function CardDeck({ phase, targetMember, csvMembers, databaseMembers, onPhaseComplete, onMemberSelected }: CardDeckProps) {
   const [isMobile, setIsMobile] = useState<boolean>(false);
-  const cardCount = isMobile ? 5 : 8;
+  const cardCount = isMobile ? 5 : 6;
 
   useEffect(() => {
     const checkMobile = () => {
@@ -72,7 +72,7 @@ export default function CardDeck({ phase, targetMember, csvMembers, databaseMemb
   }, []);
 
   const [orbitalPositions, setOrbitalPositions] = useState<OrbitalPosition[]>(
-    () => Array.from({ length: 8 }, () => ({ ...NEUTRAL })),
+    () => Array.from({ length: cardCount }, () => ({ ...NEUTRAL })),
   );
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [targetAspectRatio, setTargetAspectRatio] = useState<number>(2 / 3);
@@ -201,8 +201,8 @@ export default function CardDeck({ phase, targetMember, csvMembers, databaseMemb
       const vw = window.innerWidth;
       const vh = window.innerHeight;
       setDims({
-        rx: Math.min(vw * 0.40, isMobile ? 180 : 320),
-        ry: Math.min(vh * 0.18, isMobile ? 110 : 160),
+        rx: Math.min(vw * 0.35, isMobile ? 140 : 260),
+        ry: Math.min(vh * 0.16, isMobile ? 90 : 130),
       });
     };
     update();
@@ -258,35 +258,35 @@ export default function CardDeck({ phase, targetMember, csvMembers, databaseMemb
     let timer: ReturnType<typeof setTimeout> | undefined;
     switch (phase) {
       case 'ENTRY':
-        timer = setTimeout(() => handlePhaseComplete('ENTRY'), 300);
+        timer = setTimeout(() => handlePhaseComplete('ENTRY'), 250);
         break;
       case 'DECK_APPEAR':
-        timer = setTimeout(() => handlePhaseComplete('DECK_APPEAR'), 700);
+        timer = setTimeout(() => handlePhaseComplete('DECK_APPEAR'), 400);
         break;
       case 'ROTATING_SHUFFLE':
-        timer = setTimeout(() => handlePhaseComplete('ROTATING_SHUFFLE'), 3400);
+        timer = setTimeout(() => handlePhaseComplete('ROTATING_SHUFFLE'), 1600);
         break;
       case 'SHUFFLE_ACCELERATE':
-        timer = setTimeout(() => handlePhaseComplete('SHUFFLE_ACCELERATE'), 1800);
+        timer = setTimeout(() => handlePhaseComplete('SHUFFLE_ACCELERATE'), 900);
         break;
       case 'COLLAPSE':
         setOrbitalPositions(Array.from({ length: cardCount }, () => ({ ...NEUTRAL })));
-        timer = setTimeout(() => handlePhaseComplete('COLLAPSE'), 600);
+        timer = setTimeout(() => handlePhaseComplete('COLLAPSE'), 350);
         break;
       case 'CARD_PICK':
         selectedIndexRef.current = 0;
         setSelectedIndex(0);
         onMemberSelectedRef.current?.(targetMember);
-        timer = setTimeout(() => handlePhaseComplete('CARD_PICK'), 1100);
+        timer = setTimeout(() => handlePhaseComplete('CARD_PICK'), 650);
         break;
       case 'CARD_FLIP':
-        timer = setTimeout(() => handlePhaseComplete('CARD_FLIP'), 1000);
+        timer = setTimeout(() => handlePhaseComplete('CARD_FLIP'), 600);
         break;
       case 'AVATAR_REVEAL':
-        timer = setTimeout(() => handlePhaseComplete('AVATAR_REVEAL'), 600);
+        timer = setTimeout(() => handlePhaseComplete('AVATAR_REVEAL'), 350);
         break;
       case 'PROFILE_EXPAND':
-        timer = setTimeout(() => handlePhaseComplete('PROFILE_EXPAND'), 1000);
+        timer = setTimeout(() => handlePhaseComplete('PROFILE_EXPAND'), 500);
         break;
     }
     return () => { if (timer) clearTimeout(timer); };

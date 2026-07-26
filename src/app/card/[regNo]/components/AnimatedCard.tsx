@@ -326,6 +326,8 @@ export const AnimatedCard: React.FC<AnimatedCardProps> = ({
               referrerPolicy="no-referrer"
               className="w-full h-full object-cover rounded-xl shadow-lg border border-purple-500/30 block"
               loading="eager"
+              decoding="async"
+              style={{ willChange: 'transform, opacity' }}
             />
 
             {/* Holographic Scanline */}

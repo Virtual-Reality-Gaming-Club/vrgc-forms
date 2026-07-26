@@ -73,9 +73,14 @@ function SocialButton({
 
 export default function ProfileReveal({ member, isVisible, isComplete, onReplay }: ProfileRevealProps) {
   const [seqStep, setSeqStep] = useState<number>(0);
+  const [targetProgress, setTargetProgress] = useState<number>(0);
   const [scrollProgress, setScrollProgress] = useState<number>(0);
   const [isMobile, setIsMobile] = useState<boolean>(false);
   const touchStartRef = useRef<number | null>(null);
+
+  const targetProgressRef = useRef(0);
+  const scrollProgressRef = useRef(0);
+  const rafScrollRef = useRef<number | null>(null);
 
   useEffect(() => {
     const check = () => setIsMobile(window.innerWidth < 768);
@@ -84,9 +89,39 @@ export default function ProfileReveal({ member, isVisible, isComplete, onReplay 
     return () => window.removeEventListener('resize', check);
   }, []);
 
+  // Butter-smooth Lerp momentum scrolling RAF loop
+  useEffect(() => {
+    const updateSmoothScroll = () => {
+      const diff = targetProgressRef.current - scrollProgressRef.current;
+      if (Math.abs(diff) > 0.0003) {
+        scrollProgressRef.current += diff * 0.14; // Silky lerp dampening
+        setScrollProgress(scrollProgressRef.current);
+      } else if (scrollProgressRef.current !== targetProgressRef.current) {
+        scrollProgressRef.current = targetProgressRef.current;
+        setScrollProgress(targetProgressRef.current);
+      }
+      rafScrollRef.current = requestAnimationFrame(updateSmoothScroll);
+    };
+
+    rafScrollRef.current = requestAnimationFrame(updateSmoothScroll);
+
+    return () => {
+      if (rafScrollRef.current) cancelAnimationFrame(rafScrollRef.current);
+    };
+  }, []);
+
+  const updateTargetProgress = useCallback((newVal: number) => {
+    const clamped = Math.max(0, Math.min(1, newVal));
+    targetProgressRef.current = clamped;
+    setTargetProgress(clamped);
+  }, []);
+
   useEffect(() => {
     if (!isVisible) {
       setSeqStep(0);
+      updateTargetProgress(0);
+      scrollProgressRef.current = 0;
+      setScrollProgress(0);
       return;
     }
 
@@ -104,14 +139,39 @@ export default function ProfileReveal({ member, isVisible, isComplete, onReplay 
       clearTimeout(t1);
       clearTimeout(t2);
     };
+  }, [isVisible, updateTargetProgress]);
+
+  // Lock mobile pull-to-refresh & page overscroll while dossier card active
+  useEffect(() => {
+    if (!isVisible) return;
+
+    const originalOverscroll = document.body.style.overscrollBehaviorY;
+    const originalOverflow = document.body.style.overflow;
+    document.body.style.overscrollBehaviorY = 'none';
+    document.body.style.overflow = 'hidden';
+
+    const preventPullToRefresh = (e: TouchEvent) => {
+      // Prevent browser default pull-to-refresh swipe down gesture while dossier is active
+      if (e.touches.length === 1 && targetProgressRef.current < 0.95) {
+        if (e.cancelable) e.preventDefault();
+      }
+    };
+
+    window.addEventListener('touchmove', preventPullToRefresh, { passive: false });
+
+    return () => {
+      document.body.style.overscrollBehaviorY = originalOverscroll;
+      document.body.style.overflow = originalOverflow;
+      window.removeEventListener('touchmove', preventPullToRefresh);
+    };
   }, [isVisible]);
 
   const handleWheel = useCallback((e: WheelEvent) => {
     if (seqStep < 2) return;
     e.preventDefault();
-    const delta = e.deltaY * 0.0012;
-    setScrollProgress((prev) => Math.max(0, Math.min(1, prev + delta)));
-  }, [seqStep]);
+    const delta = e.deltaY * 0.0014;
+    updateTargetProgress(targetProgressRef.current + delta);
+  }, [seqStep, updateTargetProgress]);
 
   const handleTouchStart = useCallback((e: React.TouchEvent) => {
     if (seqStep < 2) return;
@@ -121,10 +181,10 @@ export default function ProfileReveal({ member, isVisible, isComplete, onReplay 
   const handleTouchMove = useCallback((e: React.TouchEvent) => {
     if (seqStep < 2 || touchStartRef.current === null) return;
     const currentY = e.touches[0].clientY;
-    const diff = (touchStartRef.current - currentY) * 0.003;
-    setScrollProgress((prev) => Math.max(0, Math.min(1, prev + diff)));
+    const diff = (touchStartRef.current - currentY) * 0.0032;
+    updateTargetProgress(targetProgressRef.current + diff);
     touchStartRef.current = currentY;
-  }, [seqStep]);
+  }, [seqStep, updateTargetProgress]);
 
   useEffect(() => {
     if (!isVisible) return;
