@@ -1,7 +1,7 @@
 'use client';
 
-import React, { useState, useCallback, useMemo } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import React, { useState, useCallback, useMemo, useEffect } from 'react';
+import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
 import CardDeck from './CardDeck';
 import ProfileReveal from './ProfileReveal';
 import HudOverlay from './HudOverlay';
@@ -14,9 +14,25 @@ const PHASE_ORDER: CardPhase[] = [
   'COLLAPSE','CARD_PICK','CARD_FLIP','AVATAR_REVEAL','PROFILE_EXPAND','COMPLETE',
 ];
 
+// SSR-safe touch detection: starts false (matches server), updates after mount
+function useIsTouchDevice(): boolean {
+  const [isTouch, setIsTouch] = useState(false);
+  useEffect(() => {
+    setIsTouch(window.matchMedia('(hover: none)').matches);
+  }, []);
+  return isTouch;
+}
+
 function Particles({ intensity }: { intensity: number }) {
+  const isTouch = useIsTouchDevice();
+
+  // Particle arrays are deterministic (no Math.random) so server/client HTML matches.
+  // After hydration, isTouch updates via useEffect and React re-renders harmlessly on client.
   const particles = useMemo(() => {
-    const std = Array.from({ length: 32 }, (_, i) => ({
+    // Mobile: 16 particles; desktop: 44 particles
+    const stdCount = isTouch ? 12 : 32;
+    const microCount = isTouch ? 4 : 12;
+    const std = Array.from({ length: stdCount }, (_, i) => ({
       id: i,
       left: `${(i * 11 + 7) % 100}%`,
       size: 3 + (i % 3) * 2,
@@ -26,8 +42,8 @@ function Particles({ intensity }: { intensity: number }) {
       up: i % 2 === 0,
       isMicro: false
     }));
-    const micro = Array.from({ length: 12 }, (_, i) => ({
-      id: i + 32,
+    const micro = Array.from({ length: microCount }, (_, i) => ({
+      id: i + stdCount,
       left: `${(i * 17 + 3) % 100}%`,
       size: 1 + (i % 2),
       delay: (i * 0.5) % 4,
@@ -37,7 +53,7 @@ function Particles({ intensity }: { intensity: number }) {
       isMicro: true
     }));
     return [...std, ...micro];
-  }, []);
+  }, [isTouch]);
 
   return (
     <div className="absolute inset-0 pointer-events-none overflow-hidden z-[1]">
@@ -49,8 +65,9 @@ function Particles({ intensity }: { intensity: number }) {
             left: p.left,
             bottom: p.up ? '-4px' : 'auto',
             top: p.up ? 'auto' : '-4px',
-            width: p.size * intensity,
-            height: p.size * intensity,
+            // px suffix prevents React from omitting 'px' on numeric 0 — but these are never 0
+            width: `${p.size * intensity}px`,
+            height: `${p.size * intensity}px`,
             backgroundColor: p.color,
             boxShadow: `0 0 ${6 * intensity}px ${p.color}`,
             opacity: p.isMicro ? 0.9 * Math.min(intensity, 1) : 0.7 * Math.min(intensity, 1),
@@ -64,6 +81,7 @@ function Particles({ intensity }: { intensity: number }) {
 
 function EnergyOrbs({ phase }: { phase: CardPhase }) {
   const isActive = !['ENTRY','COMPLETE'].includes(phase);
+  // Mobile CSS class suppresses orbs 3+4 via .energy-orb:nth-child(n+3) in globals.css
   return (
     <div className="absolute inset-0 pointer-events-none overflow-hidden z-[1]">
       {[
@@ -74,7 +92,8 @@ function EnergyOrbs({ phase }: { phase: CardPhase }) {
       ].map((orb, i) => (
         <div
           key={i}
-          className="absolute rounded-full"
+          // energy-orb class used by mobile CSS to hide orbs 3 & 4
+          className="absolute rounded-full energy-orb"
           style={{
             left: orb.x, top: orb.y,
             width: orb.size, height: orb.size,
@@ -92,11 +111,12 @@ function EnergyOrbs({ phase }: { phase: CardPhase }) {
 }
 
 function FogLayers() {
+  // fog-layer class used by mobile CSS to suppress these entirely on narrow screens
   return (
     <div className="absolute inset-0 pointer-events-none z-[1] overflow-hidden">
-      <div className="absolute rounded-full" style={{ width: '60vmax', height: '60vmax', top: '-10%', left: '-10%', backgroundColor: 'rgba(124,58,237,0.04)', filter: 'blur(80px)', animation: 'fog-drift-1 30s infinite' }} />
-      <div className="absolute rounded-full" style={{ width: '70vmax', height: '70vmax', top: '20%', right: '-15%', backgroundColor: 'rgba(109,40,217,0.03)', filter: 'blur(80px)', animation: 'fog-drift-2 35s infinite' }} />
-      <div className="absolute rounded-full" style={{ width: '50vmax', height: '50vmax', bottom: '-10%', left: '20%', backgroundColor: 'rgba(91,33,182,0.03)', filter: 'blur(80px)', animation: 'fog-drift-1 25s infinite reverse' }} />
+      <div className="absolute rounded-full fog-layer" style={{ width: '60vmax', height: '60vmax', top: '-10%', left: '-10%', backgroundColor: 'rgba(124,58,237,0.04)', filter: 'blur(80px)', animation: 'fog-drift-1 30s infinite' }} />
+      <div className="absolute rounded-full fog-layer" style={{ width: '70vmax', height: '70vmax', top: '20%', right: '-15%', backgroundColor: 'rgba(109,40,217,0.03)', filter: 'blur(80px)', animation: 'fog-drift-2 35s infinite' }} />
+      <div className="absolute rounded-full fog-layer" style={{ width: '50vmax', height: '50vmax', bottom: '-10%', left: '20%', backgroundColor: 'rgba(91,33,182,0.03)', filter: 'blur(80px)', animation: 'fog-drift-1 25s infinite reverse' }} />
     </div>
   );
 }
@@ -117,7 +137,8 @@ function FloatingGeometries() {
   return (
     <div className="absolute inset-0 pointer-events-none z-[1] overflow-hidden">
       {shapes.map((s, i) => (
-        <div key={i} className="absolute flex items-center justify-center" style={{ top: s.top, left: s.left, animation: `${s.anim} ${s.dur} ${s.delay} ease-in-out infinite` }}>
+        // floating-geo-item class used by mobile CSS to hide items 5-7
+        <div key={i} className="absolute flex items-center justify-center floating-geo-item" style={{ top: s.top, left: s.left, animation: `${s.anim} ${s.dur} ${s.delay} ease-in-out infinite` }}>
           {s.type === 'hexagon' && (
             <svg width={s.size} height={s.size} viewBox="0 0 24 24" fill="none" stroke={s.stroke} strokeWidth="1">
               <polygon points="12 2 22 8.5 22 15.5 12 22 2 15.5 2 8.5" />
@@ -163,17 +184,18 @@ function HudRings({ phase }: { phase: CardPhase }) {
 }
 
 function SparkBurst({ active }: { active: boolean }) {
+  // Deterministic values (no Math.random) — prevents hydration mismatch
   const sparks = useMemo(() =>
     Array.from({ length: 16 }, (_, i) => {
-      const angle = (Math.PI * 2 / 16) * i + (Math.random() - 0.5) * 0.4;
-      const dist = 80 + Math.random() * 120;
+      const angle = (Math.PI * 2 / 16) * i;
+      const dist = 80 + (i % 5) * 24; // 80, 104, 128, 152, 176 repeating
       return {
         id: i,
         sx: `${Math.cos(angle) * dist}px`,
         sy: `${Math.sin(angle) * dist}px`,
         color: ['#e879f9','#c084fc','#a855f7','#d8b4fe','#9333ea','#7c3aed'][i % 6],
-        delay: Math.random() * 0.15,
-        size: 3 + Math.random() * 4,
+        delay: (i % 4) * 0.04,   // 0, 0.04, 0.08, 0.12
+        size: 3 + (i % 4),       // 3, 4, 5, 6
       };
     }),
   []);
@@ -249,11 +271,16 @@ interface EntryExperienceProps {
   targetMember?: Member | null;
   otherMembers?: Member[];
   onSkip?: () => void;
+  /** URL of the member's GIF/avatar image — used as full-screen cover background */
+  backgroundGifUrl?: string;
 }
 
-export default function EntryExperience({ targetMember, otherMembers, onSkip }: EntryExperienceProps) {
+export default function EntryExperience({ targetMember, otherMembers, onSkip, backgroundGifUrl }: EntryExperienceProps) {
   const [phase, setPhase] = useState<CardPhase>('ENTRY');
   const [selectedMember, setSelectedMember] = useState<Member | null>(targetMember || null);
+  const prefersReduced = useReducedMotion();
+  // Track GIF load to fade in smoothly (avoids FOUC)
+  const [gifLoaded, setGifLoaded] = useState(false);
 
   const handlePhaseComplete = useCallback((completedPhase: CardPhase) => {
     const idx = PHASE_ORDER.indexOf(completedPhase);
@@ -273,29 +300,86 @@ export default function EntryExperience({ targetMember, otherMembers, onSkip }: 
 
   const particleIntensity = isShuffling ? 1.4 : isRevealPhase ? 0.6 : showBurst ? 1.8 : 0.8;
 
+  // Phase indicator dots: memoized to avoid recomputing on every render
+  const phaseDots = useMemo(() => PHASE_ORDER.slice(0, -1), []);
+
   return (
     <div
-      className="relative flex flex-col items-center justify-center overflow-hidden w-full min-h-screen"
+      className="relative flex flex-col items-center justify-center w-full min-h-screen"
       style={{
-        width: '100vw',
+        width: '100%',
         height: '100dvh',
         minHeight: '100vh',
-        background: 'linear-gradient(135deg, #020006 0%, #080116 25%, #100228 50%, #0a011a 75%, #020006 100%)',
+        // Background is transparent — the dark overlay div below (z-index:0) is the
+        // sole background controller so the GIF at z-index:-1 can always show through.
+        // The body element provides the ultimate dark fallback (#05010a).
+        background: 'transparent',
         WebkitBackfaceVisibility: 'hidden',
         backfaceVisibility: 'hidden',
         transform: 'translateZ(0)',
+        overflowX: 'hidden',
+        touchAction: 'pan-y',
       }}
     >
+      {/* ── GIF FULL-SCREEN COVER BACKGROUND ── */}
+      {/* Pre-loaded immediately so it's ready when reveal starts, but opacity stays 0 until reveal */}
+      {backgroundGifUrl && (
+        /* GIF layer — fixed, object-fit:cover, covers full viewport on all screen sizes */
+        <img
+          src={backgroundGifUrl}
+          alt=""
+          aria-hidden="true"
+          referrerPolicy="no-referrer"
+          onLoad={() => setGifLoaded(true)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            width: '100%',
+            height: '100%',
+            objectFit: 'cover',
+            objectPosition: 'center top',
+            zIndex: -1,
+            // Only reveal after AVATAR_REVEAL phase — stays invisible during entire shuffle
+            opacity: (gifLoaded && isRevealPhase) ? 0.42 : 0,
+            transition: 'opacity 1.4s ease-in-out',
+            pointerEvents: 'none',
+            transform: 'scale(1.02)',
+            willChange: 'opacity',
+          }}
+        />
+      )}
+
+      {/* Dark overlay — always present, controls the visible background colour.
+          Before reveal: near-opaque (looks like the original dark gradient).
+          After reveal: partially transparent, letting the GIF show through.
+          Without backgroundGifUrl: always near-opaque (same visual as before). */}
+      <div
+        aria-hidden="true"
+        style={{
+          position: 'fixed',
+          inset: 0,
+          zIndex: 0,
+          background: (backgroundGifUrl && isRevealPhase)
+            ? 'linear-gradient(135deg, rgba(2,0,6,0.72) 0%, rgba(8,1,22,0.65) 40%, rgba(16,2,40,0.6) 70%, rgba(2,0,6,0.72) 100%)'
+            : 'linear-gradient(135deg, rgba(2,0,6,0.97) 0%, rgba(8,1,22,0.96) 40%, rgba(16,2,40,0.96) 70%, rgba(2,0,6,0.97) 100%)',
+          transition: 'background 1.4s ease-in-out',
+          pointerEvents: 'none',
+        }}
+      />
 
       {/* Camera breathing wrapper */}
-      <div className="absolute inset-0 w-full h-full pointer-events-none z-0" style={{ animation: 'camera-breathe 12s ease-in-out infinite' }}>
+      <div
+        className="absolute inset-0 w-full h-full pointer-events-none z-[1]"
+        style={{ animation: 'camera-breathe 12s ease-in-out infinite', overflowX: 'hidden' }}
+      >
           
-          <EnergyOrbs phase={phase} />
-          <FogLayers />
-          <FloatingGeometries />
-          <HudRings phase={phase} />
+          {/* Expensive blur effects — conditionally suppressed by prefersReduced and mobile CSS */}
+          {!prefersReduced && <EnergyOrbs phase={phase} />}
+          {!prefersReduced && <FogLayers />}
+          {!prefersReduced && <FloatingGeometries />}
+          {!prefersReduced && <HudRings phase={phase} />}
           <Particles intensity={particleIntensity} />
-          <LightStreaks phase={phase} />
+          {!prefersReduced && <LightStreaks phase={phase} />}
           
           <div 
             className="absolute w-full h-[2px] z-[2] pointer-events-none"
@@ -374,33 +458,41 @@ export default function EntryExperience({ targetMember, otherMembers, onSkip }: 
           <WelcomePopup phase={phase} />
           <HudOverlay phase={phase} />
 
+          {/* Vignette gradients — filter:blur removed (gradient alone is sufficient) */}
           <div className="absolute top-0 left-0 right-0 h-[15%] pointer-events-none z-[3]"
             style={{ 
               background: 'linear-gradient(to bottom, rgba(10,1,24,0.5) 0%, transparent 100%)',
-              filter: 'blur(1px)'
             }} 
           />
 
           <div className="absolute bottom-0 left-0 right-0 h-[15%] pointer-events-none z-[3]"
             style={{ 
               background: 'linear-gradient(to top, rgba(10,1,24,0.5) 0%, transparent 100%)',
-              filter: 'blur(1px)'
             }} 
           />
       </div>
 
+      {/* Phase progress dots */}
       <motion.div
         className="absolute bottom-4 left-1/2 flex items-center gap-1.5 z-40"
         initial={{ x: '-50%' }}
         animate={{ x: '-50%', opacity: phase === 'COMPLETE' ? 0 : 0.3 }}
       >
-        {PHASE_ORDER.slice(0, -1).map(p => (
-          <motion.div key={p} className="rounded-full transition-all" animate={{
-            width: phase === p ? 12 : 4,
-            height: 4,
-            backgroundColor: phase === p ? '#c084fc' : 'rgba(255,255,255,0.3)',
-            boxShadow: phase === p ? '0 0 8px rgba(192,132,252,0.8)' : '0 0 0px rgba(0,0,0,0)',
-          }} transition={{ type: 'spring', stiffness: 300, damping: 25 }} />
+        {phaseDots.map(p => (
+          <motion.div
+            key={p}
+            className="rounded-full transition-all"
+            animate={{
+              width: phase === p ? 12 : 4,
+              height: 4,
+              backgroundColor: phase === p ? '#c084fc' : 'rgba(255,255,255,0.3)',
+              // boxShadow removed from Framer Motion animate — moved to static conditional style
+            }}
+            style={{
+              boxShadow: phase === p ? '0 0 8px rgba(192,132,252,0.8)' : undefined,
+            }}
+            transition={{ type: 'spring', stiffness: 300, damping: 25 }}
+          />
         ))}
       </motion.div>
     </div>

@@ -13,7 +13,7 @@ interface PageProps {
 
 const SUPABASE_STORAGE_BASE = 'https://fopyejijjeoumimsdgiz.supabase.co/storage/v1/object/public/id-cards';
 
-function formatSupabaseUrl(urlOrPath: string): string {
+function formatSupabaseUrl(urlOrPath: string, isAvatar: boolean = false): string {
   if (!urlOrPath) return '';
   const trimmed = urlOrPath.trim();
   if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
@@ -22,6 +22,9 @@ function formatSupabaseUrl(urlOrPath: string): string {
   const cleanPath = trimmed.startsWith('/') ? trimmed.slice(1) : trimmed;
   if (cleanPath.startsWith('id-photos/') || cleanPath.startsWith('avatars/')) {
     return `${SUPABASE_STORAGE_BASE}/${cleanPath}`;
+  }
+  if (isAvatar || cleanPath.toLowerCase().endsWith('.gif')) {
+    return `${SUPABASE_STORAGE_BASE}/avatars/${cleanPath}`;
   }
   return `${SUPABASE_STORAGE_BASE}/id-photos/${cleanPath}`;
 }
@@ -66,7 +69,7 @@ async function getMemberData(regNo: string) {
             const rNo = d.registrationNumber || d.regNo || docSnap.id;
             if (rNo) {
               const photo = formatSupabaseUrl(d.photoUrl || d.photo_url || d.photoURL || d.photo || d.image || d.imageUrl || '');
-              const avatar = formatSupabaseUrl(d.avatarUrl || d.avatar_url || d.avatarURL || d.avatar || d.gifUrl || photo);
+              const avatar = formatSupabaseUrl(d.gifUrl || d.avatarUrl || d.avatar_url || d.avatarURL || d.avatar || '', true) || photo;
               otherMembers.push({
                 id: rNo,
                 name: d.name || 'Member',
@@ -140,7 +143,7 @@ export default async function VerifyCardPage({ params }: PageProps) {
   const { member, otherMembers, error } = await getMemberData(regNo);
 
   const photo = formatSupabaseUrl(member?.photoUrl || member?.photo_url || member?.photoURL || member?.photo || member?.image || member?.imageUrl || '');
-  const avatar = formatSupabaseUrl(member?.avatarUrl || member?.avatar_url || member?.avatarURL || member?.avatar || member?.gifUrl || photo);
+  const avatar = formatSupabaseUrl(member?.gifUrl || member?.avatarUrl || member?.avatar_url || member?.avatarURL || member?.avatar || '', true) || photo;
 
   const scannedMember: Member | null = member ? {
     id: member.registrationNumber || member.regNo || regNo,

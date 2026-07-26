@@ -54,7 +54,11 @@ export default function CardDeck({ phase, onPhaseComplete, onMemberSelected, tar
   const selectedIndexRef = useRef(-1);
   const deckAngleRef = useRef(0);
   const timeRef = useRef(0);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // rAF handle + last-tick timestamp for throttling
+  const rafRef = useRef<number | null>(null);
+  const lastTickRef = useRef<number>(0);
+  // Minimum ms between orbital state updates (~20 fps)
+  const TICK_MS = 50;
 
   const pool = useMemo(() => {
     return (otherMembers && otherMembers.length > 0) ? otherMembers : MEMBERS;
@@ -85,6 +89,7 @@ export default function CardDeck({ phase, onPhaseComplete, onMemberSelected, tar
 
   const [dims, setDims] = useState({ rx: 120, ry: 60 });
   useEffect(() => {
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
     const update = () => {
       const vw = window.innerWidth;
       if (vw >= 1024) setDims({ rx: 280, ry: 130 });
@@ -92,15 +97,23 @@ export default function CardDeck({ phase, onPhaseComplete, onMemberSelected, tar
       else if (vw >= 480) setDims({ rx: 140, ry: 70 });
       else setDims({ rx: 105, ry: 50 });
     };
+    const onResize = () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(update, 16);
+    };
     update();
-    window.addEventListener('resize', update);
-    return () => window.removeEventListener('resize', update);
+    window.addEventListener('resize', onResize);
+    return () => {
+      window.removeEventListener('resize', onResize);
+      if (debounceTimer) clearTimeout(debounceTimer);
+    };
   }, []);
 
+  // Orbital animation loop — rAF-based, throttled to ~20 fps
   useEffect(() => {
-    if (intervalRef.current) {
-      clearInterval(intervalRef.current);
-      intervalRef.current = null;
+    if (rafRef.current) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
     }
 
     const isOrbiting = phase === 'ROTATING_SHUFFLE' || phase === 'SHUFFLE_ACCELERATE';
@@ -110,20 +123,28 @@ export default function CardDeck({ phase, onPhaseComplete, onMemberSelected, tar
       ? { speed: 0.11, spread: 1.8, chaos: 0.7 }
       : { speed: 0.055, spread: 1.0, chaos: 0.15 };
 
-    intervalRef.current = setInterval(() => {
-      deckAngleRef.current += config.speed;
-      timeRef.current += 0.05;
-      setOrbitalPositions(
-        computeOrbitalPositions(
-          deckAngleRef.current, CARD_COUNT,
-          dims.rx, dims.ry,
-          config.spread, config.chaos,
-          timeRef.current,
-        ),
-      );
-    }, 50);
+    const tick = (timestamp: number) => {
+      // Throttle: only compute + setState at target cadence
+      if (timestamp - lastTickRef.current >= TICK_MS) {
+        lastTickRef.current = timestamp;
+        deckAngleRef.current += config.speed;
+        timeRef.current += 0.05;
+        setOrbitalPositions(
+          computeOrbitalPositions(
+            deckAngleRef.current, CARD_COUNT,
+            dims.rx, dims.ry,
+            config.spread, config.chaos,
+            timeRef.current,
+          ),
+        );
+      }
+      rafRef.current = requestAnimationFrame(tick);
+    };
 
-    return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
+    rafRef.current = requestAnimationFrame(tick);
+    return () => {
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    };
   }, [phase, dims]);
 
   const handlePhaseComplete = useCallback(onPhaseComplete, [onPhaseComplete]);

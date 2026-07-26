@@ -41,11 +41,12 @@ export default function VerifyCardClient({
   }
 
   return (
-    <main key={replayKey} className="relative w-full min-h-[100dvh] bg-[#05010a] overflow-hidden">
+    <main key={replayKey} className="relative w-full min-h-[100dvh] bg-[#05010a]" style={{ overflowX: 'hidden' }}>
       {/* Dynamic Cyber Experience */}
       <EntryExperience
         targetMember={scannedMember}
         otherMembers={otherMembers}
+        backgroundGifUrl={scannedMember.avatarUrl || undefined}
       />
 
       {/* Floating Action Controls */}

@@ -55,6 +55,7 @@ export default function WelcomePopup({ phase }: WelcomePopupProps) {
               width: '50vmin',
               height: '50vmin',
               background: 'radial-gradient(circle, rgba(192, 132, 252, 0.85) 0%, rgba(168, 85, 247, 0.6) 35%, rgba(124, 58, 237, 0.35) 60%, transparent 80%)',
+              // boxShadow is static here — not animated — so it's fine as a style prop
               boxShadow: '0 0 120px rgba(168, 85, 247, 0.9), inset 0 0 60px rgba(216, 180, 254, 0.8)',
             }}
           />
@@ -77,12 +78,14 @@ export default function WelcomePopup({ phase }: WelcomePopupProps) {
         <div className="fixed inset-0 pointer-events-none z-[35] flex items-center justify-center">
           <motion.div
             key={activeWord}
-            initial={{ opacity: 0, scale: 0.8, y: 15, filter: 'blur(8px)' }}
+            // Replaced filter:blur animation with opacity + y travel only.
+            // blur() on Framer Motion animate forces a GPU raster layer repaint every frame.
+            // The increased y distance (20→0 on enter) preserves the dramatic entrance feel.
+            initial={{ opacity: 0, scale: 0.85, y: 20 }}
             animate={{
               opacity: visible ? 1 : 0,
               scale: visible ? 1 : 1.08,
-              y: visible ? 0 : -15,
-              filter: visible ? 'blur(0px)' : 'blur(10px)',
+              y: visible ? 0 : -18,
             }}
             transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
             className="flex flex-col items-center justify-center px-8 py-6 rounded-2xl relative overflow-hidden"
@@ -96,6 +99,7 @@ export default function WelcomePopup({ phase }: WelcomePopupProps) {
               backdropFilter: 'blur(24px)',
               WebkitBackdropFilter: 'blur(24px)',
               border: '1px solid rgba(168, 85, 247, 0.55)',
+              // boxShadow is static (not animated) — fine here
               boxShadow: '0 0 45px rgba(168, 85, 247, 0.4), inset 0 0 20px rgba(192, 132, 252, 0.15)',
             }}
           >
@@ -105,10 +109,11 @@ export default function WelcomePopup({ phase }: WelcomePopupProps) {
               {activeWord === 'WELCOME' ? '// SYSTEM_INIT' : activeWord === 'TO' ? '// ACCESS_GATEWAY' : '// VIRTUAL REALITY & GAMING CLUB'}
             </span>
 
+            {/* text-shadow replaces drop-shadow filter — no GPU raster invalidation */}
             <h1
               className="font-display-lg font-black text-4xl sm:text-6xl md:text-7xl uppercase tracking-widest text-transparent bg-clip-text bg-gradient-to-r from-[#d8b4fe] via-[#c084fc] to-[#a855f7]"
               style={{
-                filter: 'drop-shadow(0 0 30px rgba(168, 85, 247, 0.85))',
+                textShadow: '0 0 30px rgba(168, 85, 247, 0.85)',
               }}
             >
               {activeWord}

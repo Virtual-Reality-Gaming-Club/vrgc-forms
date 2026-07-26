@@ -91,6 +91,8 @@ export default function ProfileReveal({ member, isVisible, isComplete }: Profile
   const [seqStep, setSeqStep] = useState<number>(0);
   const [scrollProgress, setScrollProgress] = useState<number>(0);
   const touchStartRef = useRef<number | null>(null);
+  // rAF throttle flag: only one scrollProgress update per animation frame
+  const rafPendingRef = useRef(false);
 
   useEffect(() => {
     if (!isVisible) {
@@ -118,7 +120,14 @@ export default function ProfileReveal({ member, isVisible, isComplete }: Profile
     (e: WheelEvent) => {
       if (!isVisible || seqStep < 2) return;
       const delta = e.deltaY * 0.0018;
-      setScrollProgress((prev) => Math.min(1, Math.max(0, prev + delta)));
+      // Throttle to one setState per rAF to avoid flooding the reconciler on fast scroll
+      if (!rafPendingRef.current) {
+        rafPendingRef.current = true;
+        requestAnimationFrame(() => {
+          setScrollProgress((prev) => Math.min(1, Math.max(0, prev + delta)));
+          rafPendingRef.current = false;
+        });
+      }
     },
     [isVisible, seqStep]
   );
@@ -137,8 +146,15 @@ export default function ProfileReveal({ member, isVisible, isComplete }: Profile
       const currentY = e.touches[0].clientY;
       const diffY = touchStartRef.current - currentY;
       const delta = diffY * 0.0035;
-      setScrollProgress((prev) => Math.min(1, Math.max(0, prev + delta)));
       touchStartRef.current = currentY;
+      // Throttle to one setState per rAF
+      if (!rafPendingRef.current) {
+        rafPendingRef.current = true;
+        requestAnimationFrame(() => {
+          setScrollProgress((prev) => Math.min(1, Math.max(0, prev + delta)));
+          rafPendingRef.current = false;
+        });
+      }
     },
     [isVisible, seqStep]
   );
@@ -169,6 +185,9 @@ export default function ProfileReveal({ member, isVisible, isComplete }: Profile
   const titleScale = seqStep === 0 ? 0.75 : 1;
   const titleOpacity = 1;
   const topHeaderY = seqStep === 0 ? 'calc(50vh - 160px)' : 'clamp(68px, 10vh, 100px)';
+
+  // Dossier panel is interactive only when scrolled in
+  const dossierPointerEvents = scrollProgress > 0.3 ? 'auto' : 'none';
 
   return (
     <div className="fixed inset-0 pointer-events-none z-30 flex flex-col items-center justify-between overflow-hidden">
@@ -213,9 +232,13 @@ export default function ProfileReveal({ member, isVisible, isComplete }: Profile
           </span>
         </motion.div>
 
+        {/* text-shadow replaces drop-shadow filter — cheaper on mobile GPU */}
         <h1
-          className="font-display-lg font-black text-2xl sm:text-4xl md:text-5xl uppercase tracking-wider text-transparent bg-clip-text bg-gradient-to-r from-white via-[#e879f9] to-[#c084fc] drop-shadow-[0_0_25px_rgba(168,85,247,0.85)]"
-          style={{ lineHeight: 1.1 }}
+          className="font-display-lg font-black text-2xl sm:text-4xl md:text-5xl uppercase tracking-wider text-transparent bg-clip-text bg-gradient-to-r from-white via-[#e879f9] to-[#c084fc]"
+          style={{
+            lineHeight: 1.1,
+            textShadow: '0 0 25px rgba(168,85,247,0.85)',
+          }}
         >
           {member.name}
         </h1>
@@ -233,7 +256,7 @@ export default function ProfileReveal({ member, isVisible, isComplete }: Profile
 
       {/* FULL DETAILS OVERLAY CANVAS */}
       <motion.div
-        className="absolute left-1/2 -translate-x-1/2 w-[92%] sm:w-[85%] max-w-md p-5 rounded-3xl flex flex-col gap-3.5 z-40 text-center pointer-events-auto"
+        className="absolute left-1/2 -translate-x-1/2 w-[92%] sm:w-[85%] max-w-md p-5 rounded-3xl flex flex-col gap-3.5 z-40 text-center"
         style={{
           bottom: 'clamp(24px, 5vh, 45px)',
           background: 'rgba(8, 3, 20, 0.94)',
@@ -242,13 +265,14 @@ export default function ProfileReveal({ member, isVisible, isComplete }: Profile
           border: '1px solid rgba(168, 85, 247, 0.5)',
           boxShadow:
             '0 0 50px rgba(168, 85, 247, 0.4), inset 0 0 25px rgba(192, 132, 252, 0.15)',
+          // pointerEvents managed via React state (not inside animate to avoid JS-only CSS prop issue)
+          pointerEvents: dossierPointerEvents,
         }}
         initial={{ opacity: 0, y: 120, scale: 0.9 }}
         animate={{
           opacity: seqStep === 2 ? Math.max(0.2, scrollProgress) : 0,
           y: seqStep === 2 ? (1 - scrollProgress) * 120 : 120,
           scale: seqStep === 2 ? 0.9 + scrollProgress * 0.1 : 0.9,
-          pointerEvents: scrollProgress > 0.3 ? 'auto' : 'none',
         }}
         transition={
           prefersReduced
@@ -270,7 +294,7 @@ export default function ProfileReveal({ member, isVisible, isComplete }: Profile
         <div className="grid grid-cols-2 gap-2.5 text-left text-xs">
           <div className="p-2.5 rounded-xl bg-white/[0.03] border border-white/[0.08] hover:border-[#c084fc]/50 transition-colors">
             <span className="font-mono text-[8px] sm:text-[9px] uppercase tracking-wider text-[#c084fc] flex items-center gap-1">
-              <Award size={10} /> SPECIALIZATION
+              <Award size={10} /> ROLE
             </span>
             <p className="font-label-caps font-semibold text-xs sm:text-sm text-white mt-0.5 uppercase">
               {member.specialization}
@@ -279,7 +303,7 @@ export default function ProfileReveal({ member, isVisible, isComplete }: Profile
 
           <div className="p-2.5 rounded-xl bg-white/[0.03] border border-white/[0.08] hover:border-[#c084fc]/50 transition-colors">
             <span className="font-mono text-[8px] sm:text-[9px] uppercase tracking-wider text-[#c084fc] flex items-center gap-1">
-              <Calendar size={10} /> JOINED
+              <Calendar size={10} /> VERIFIED
             </span>
             <p className="font-label-caps font-semibold text-xs sm:text-sm text-white mt-0.5 uppercase">
               {joinFormatted}
@@ -327,7 +351,7 @@ export default function ProfileReveal({ member, isVisible, isComplete }: Profile
 
         <div className="pt-2 border-t border-[#a855f7]/30 flex flex-col gap-1.5 shrink-0">
           <span className="font-mono text-[8px] sm:text-[9px] uppercase tracking-wider text-[#c084fc]/80 text-left">
-            // CONNECT & PORTAL LINKS
+            // CONNECT &amp; PORTAL LINKS
           </span>
           <div className="grid grid-cols-2 gap-1.5">
             {SOCIALS.map((s) => (

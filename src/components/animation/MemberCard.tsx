@@ -1,6 +1,6 @@
 'use client';
 
-import React from 'react';
+import React, { memo, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Member } from './members';
 
@@ -9,7 +9,8 @@ interface MemberCardProps {
   isRevealed: boolean;
 }
 
-export default function MemberCard({ member, isRevealed }: MemberCardProps) {
+// Memoized: prevents re-render on every CardDeck orbital tick (was re-rendering 8 cards × 20 fps)
+const MemberCard = memo(function MemberCard({ member, isRevealed }: MemberCardProps) {
   const isSpecial = (member.assignedTeam || '').toLowerCase() === 'student coordinator' || 
                     (member.assignedTeam || '').toLowerCase().includes('president') || 
                     (member.role || '').toLowerCase() === 'student coordinator' || 
@@ -19,7 +20,18 @@ export default function MemberCard({ member, isRevealed }: MemberCardProps) {
     ? ((member.assignedTeam || '').toLowerCase() === 'student coordinator' ? 'Student Coordinator' : member.role)
     : (member.role || 'CORE MEMBER');
 
-  const qrUrl = member.qrCodeUrl || `https://api.qrserver.com/v1/create-qr-code/?size=140x140&color=0-0-0&bgcolor=ffffff&data=${encodeURIComponent(typeof window !== 'undefined' ? `${window.location.origin}/card/${member.regNo}` : `https://vrgcforms.vercel.app/card/${member.regNo}`)}`;
+  // Memoized to avoid window access + URL encoding on every render
+  const qrUrl = useMemo(
+    () =>
+      member.qrCodeUrl ||
+      `https://api.qrserver.com/v1/create-qr-code/?size=140x140&color=0-0-0&bgcolor=ffffff&data=${encodeURIComponent(
+        typeof window !== 'undefined'
+          ? `${window.location.origin}/card/${member.regNo}`
+          : `https://vrgcforms.vercel.app/card/${member.regNo}`
+      )}`,
+    [member.qrCodeUrl, member.regNo]
+  );
+  // qrUrl is available for future use (QR display), not rendered here — keep for API parity
 
   return (
     <div className="relative w-full h-full rounded-3xl flex items-center justify-center select-none">
@@ -82,7 +94,7 @@ export default function MemberCard({ member, isRevealed }: MemberCardProps) {
             <h4 className="font-display-lg text-xs sm:text-sm text-white font-black tracking-widest leading-none">VRGC</h4>
           </div>
           <span className="text-[#a855f7]/90 text-[5px] font-code-sm tracking-wider uppercase block mt-0.5 font-bold">
-            VIRTUAL REALITY & GAMING CLUB
+            VIRTUAL REALITY &amp; GAMING CLUB
           </span>
         </div>
 
@@ -121,18 +133,34 @@ export default function MemberCard({ member, isRevealed }: MemberCardProps) {
             className="relative flex items-center justify-center rounded-2xl border-2 border-[#a855f7]/40 p-1 bg-black/60 shadow-[0_0_25px_rgba(168,85,247,0.3)] overflow-hidden"
             style={{ width: 'clamp(70px, 28vw, 115px)', height: 'clamp(70px, 28vw, 115px)' }}
           >
-            <motion.img
-              src={member.photoUrl || member.avatarUrl}
-              alt={member.name}
-              className="w-full h-full object-cover rounded-xl"
-              initial={{ scale: 0.6, opacity: 0 }}
-              animate={{
-                scale: isRevealed ? 1 : 0.6,
-                opacity: isRevealed ? 1 : 0,
-              }}
-              transition={{ duration: 0.5, ease: 'easeOut' }}
-              loading="eager"
-            />
+            {/* Photo revealed only after card flip completes — not loaded during shuffle */}
+            <AnimatePresence>
+              {isRevealed ? (
+                <motion.img
+                  key="photo"
+                  src={member.photoUrl || member.avatarUrl}
+                  alt={member.name}
+                  className="w-full h-full object-cover rounded-xl"
+                  initial={{ scale: 0.6, opacity: 0 }}
+                  animate={{ scale: 1, opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.5, ease: 'easeOut' }}
+                  loading="lazy"
+                />
+              ) : (
+                <motion.img
+                  key="avatar"
+                  src={member.avatarUrl || member.photoUrl}
+                  alt="Avatar"
+                  className="w-full h-full object-cover rounded-xl opacity-80 filter contrast-125 grayscale-[30%]"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ scale: 1.2, opacity: 0, filter: 'brightness(2)' }}
+                  transition={{ duration: 0.4 }}
+                  loading="lazy"
+                />
+              )}
+            </AnimatePresence>
             <div className="absolute bottom-1 right-1 bg-gradient-to-r from-[#a855f7] to-[#cf5cff] text-white text-[5px] font-black px-1 py-0.5 rounded tracking-widest uppercase shadow-md pointer-events-none opacity-90">
               VERIFIED
             </div>
@@ -182,4 +210,6 @@ export default function MemberCard({ member, isRevealed }: MemberCardProps) {
       </div>
     </div>
   );
-}
+});
+
+export default MemberCard;

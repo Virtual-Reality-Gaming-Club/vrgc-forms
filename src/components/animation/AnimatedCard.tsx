@@ -1,6 +1,6 @@
 'use client';
 
-import React from 'react';
+import React, { useMemo } from 'react';
 import { motion, useReducedMotion, TargetAndTransition } from 'framer-motion';
 
 export type CardPhase =
@@ -46,19 +46,11 @@ export const AnimatedCard: React.FC<AnimatedCardProps> = ({
   children,
 }) => {
   const prefersReduced = useReducedMotion();
-  const [isDesktop, setIsDesktop] = React.useState(false);
-
-  React.useEffect(() => {
-    const update = () => setIsDesktop(window.innerWidth >= 768);
-    update();
-    window.addEventListener('resize', update);
-    return () => window.removeEventListener('resize', update);
-  }, []);
 
   const revealX = 0;
   const revealY = 40;
 
-  const getState = (): TargetAndTransition => {
+  const animateState = useMemo((): TargetAndTransition => {
     if (prefersReduced) {
       const flipped = ['CARD_FLIP', 'AVATAR_REVEAL', 'PROFILE_EXPAND', 'COMPLETE'].includes(phase);
       if (flipped) {
@@ -79,7 +71,6 @@ export const AnimatedCard: React.FC<AnimatedCardProps> = ({
           rotateY: 0,
           rotateZ: (index - totalCards / 2) * 4,
           rotateX: 0,
-          filter: 'blur(0px)',
           transition: { duration: 0 },
         };
 
@@ -92,7 +83,6 @@ export const AnimatedCard: React.FC<AnimatedCardProps> = ({
           rotateY: 0,
           rotateZ: (index - totalCards / 2) * 0.6,
           rotateX: 0,
-          filter: 'blur(0px)',
           transition: {
             delay: index * 0.055,
             type: 'spring' as const,
@@ -109,9 +99,9 @@ export const AnimatedCard: React.FC<AnimatedCardProps> = ({
           scale: orbitalPosition.scale,
           opacity: orbitalPosition.opacity,
           rotateZ: orbitalPosition.rotateZ,
-          rotateY: orbitalPosition.x * 0.08,
+          // Clamp to ±75° — prevents front face (member photo) from ever showing during shuffle
+          rotateY: Math.max(-75, Math.min(75, orbitalPosition.x * 0.08)),
           rotateX: orbitalPosition.y * 0.12,
-          filter: 'blur(0px)',
           transition: {
             type: 'spring' as const,
             stiffness: 180,
@@ -129,7 +119,6 @@ export const AnimatedCard: React.FC<AnimatedCardProps> = ({
           rotateZ: 0,
           rotateY: 0,
           rotateX: 0,
-          filter: 'blur(0px)',
           transition: {
             type: 'spring' as const,
             stiffness: 300,
@@ -147,7 +136,6 @@ export const AnimatedCard: React.FC<AnimatedCardProps> = ({
               rotateZ: 0,
               rotateY: 0,
               rotateX: -6,
-              filter: 'blur(0px)',
               transition: {
                 type: 'spring' as const,
                 stiffness: 400,
@@ -159,11 +147,11 @@ export const AnimatedCard: React.FC<AnimatedCardProps> = ({
               x: (index - totalCards / 2) * 35,
               y: 20 + index * 8,
               scale: 0.55,
-              opacity: 0.15,
+              // Replaced blur(3px) with lower opacity — avoids full GPU raster invalidation
+              opacity: 0.1,
               rotateZ: 0,
               rotateY: 0,
               rotateX: 15,
-              filter: 'blur(3px)',
               transition: {
                 type: 'spring' as const,
                 stiffness: 200,
@@ -181,7 +169,6 @@ export const AnimatedCard: React.FC<AnimatedCardProps> = ({
               rotateZ: 0,
               rotateY: 180,
               rotateX: 0,
-              filter: 'blur(0px)',
               transition: {
                 type: 'spring' as const,
                 stiffness: 140,
@@ -193,11 +180,10 @@ export const AnimatedCard: React.FC<AnimatedCardProps> = ({
               x: (index - totalCards / 2) * 40,
               y: 30,
               scale: 0.5,
-              opacity: 0.12,
+              opacity: 0.08,
               rotateZ: 0,
               rotateY: 0,
               rotateX: 18,
-              filter: 'blur(3px)',
               transition: { duration: 0.5 },
             };
 
@@ -212,7 +198,6 @@ export const AnimatedCard: React.FC<AnimatedCardProps> = ({
               rotateZ: 0,
               rotateY: 180,
               rotateX: 0,
-              filter: 'blur(0px)',
               transition: {
                 type: 'spring' as const,
                 stiffness: 200,
@@ -223,11 +208,10 @@ export const AnimatedCard: React.FC<AnimatedCardProps> = ({
               x: (index - totalCards / 2) * 45,
               y: 35 + Math.sin(index) * 10,
               scale: 0.45,
-              opacity: 0.1,
+              opacity: 0.07,
               rotateZ: (index - totalCards / 2) * 3,
               rotateY: 0,
               rotateX: 20,
-              filter: 'blur(3px)',
               transition: { duration: 0.3 },
             };
 
@@ -241,7 +225,6 @@ export const AnimatedCard: React.FC<AnimatedCardProps> = ({
               rotateZ: 0,
               rotateY: 180,
               rotateX: 0,
-              filter: 'blur(0px)',
               transition: {
                 type: 'spring' as const,
                 stiffness: 180,
@@ -252,18 +235,18 @@ export const AnimatedCard: React.FC<AnimatedCardProps> = ({
               x: (index - totalCards / 2) * 45,
               y: 35 + Math.sin(index) * 10,
               scale: 0.4,
-              opacity: 0.08,
+              opacity: 0.06,
               rotateZ: (index - totalCards / 2) * 3,
               rotateY: 0,
               rotateX: 20,
-              filter: 'blur(3px)',
               transition: { duration: 0.2 },
             };
 
       default:
-        return { x: 0, y: 0, scale: 1, opacity: 1, rotateY: 0, rotateZ: 0, rotateX: 0, filter: 'blur(0px)' };
+        return { x: 0, y: 0, scale: 1, opacity: 1, rotateY: 0, rotateZ: 0, rotateX: 0 };
     }
-  };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase, isSelected, orbitalPosition.x, orbitalPosition.y, orbitalPosition.scale, orbitalPosition.opacity, orbitalPosition.rotateZ, prefersReduced, index, totalCards]);
 
   const isActive =
     isSelected &&
@@ -287,18 +270,17 @@ export const AnimatedCard: React.FC<AnimatedCardProps> = ({
               rotateY: 0,
               rotateZ: (index - totalCards / 2) * 4,
               rotateX: 0,
-              filter: 'blur(0px)',
             }
       }
-      animate={getState()}
+      animate={animateState}
       style={{
         position: 'absolute',
         width: 'clamp(160px, 52vw, 280px)',
         aspectRatio: '2 / 3',
         transformStyle: 'preserve-3d',
-        willChange: 'transform, opacity, filter',
+        // Only include filter in willChange when it's actually animated (removed — no longer used)
+        willChange: 'transform, opacity',
         zIndex: isActive ? totalCards + 10 : baseZIndex,
-        animation: isIdleFloat ? 'card-idle-float 3s ease-in-out infinite' : 'none',
       }}
     >
       {/* ═══ FRONT FACE ═══ */}
@@ -376,7 +358,7 @@ export const AnimatedCard: React.FC<AnimatedCardProps> = ({
                 width: '30px',
                 height: '30px',
                 background: 'radial-gradient(circle, rgba(168,85,247,0.4) 0%, transparent 70%)',
-                filter: 'blur(4px)',
+                // blur removed — replaced with stronger radial opacity; saves a GPU raster layer per card
                 opacity: 0.6,
                 animation: 'neon-pulse 2s infinite',
               }}
@@ -393,17 +375,8 @@ export const AnimatedCard: React.FC<AnimatedCardProps> = ({
           WebkitBackfaceVisibility: 'hidden',
         }}
       >
-        {isActive && (
-          <div 
-            className="absolute inset-0 rounded-2xl pointer-events-none"
-            style={{
-              filter: 'blur(30px)',
-              transform: 'scale(1.05)',
-              background: 'radial-gradient(circle, rgba(168,85,247,0.5) 0%, rgba(124,58,237,0.4) 100%)',
-              opacity: 0.45,
-            }}
-          />
-        )}
+        {/* Active glow: replaced blur(30px) filter div with box-shadow on the card wrapper.
+            box-shadow is composited by the browser without a raster invalidation. */}
         <div
           className={`absolute inset-0 rounded-2xl flex items-center justify-center overflow-hidden ${isActive ? 'animate-glow-bloom' : ''}`}
           style={{

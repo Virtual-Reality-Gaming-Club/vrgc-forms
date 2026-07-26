@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, memo } from 'react';
 import type { CardPhase } from './AnimatedCard';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -14,9 +14,11 @@ const PHASE_ORDER: CardPhase[] = [
 ];
 
 const HEX_DATA = '0A F3 7B 00 C1 E8 2D 9F 4A B6 1C D7 3E 88 5F 02'.split(' ');
+// Single pass — overflow:hidden clips the rest; duplicate removed (was 640 DOM nodes, now 320)
 const DATA_COLUMN = [...Array(20)].map(() => HEX_DATA).flat();
 
-export default function HudOverlay({ phase }: HudOverlayProps) {
+// Isolated clock so setInterval only re-renders this tiny component
+const ClockDisplay = memo(function ClockDisplay() {
   const [time, setTime] = useState<string>('');
 
   useEffect(() => {
@@ -31,22 +33,33 @@ export default function HudOverlay({ phase }: HudOverlayProps) {
     return () => clearInterval(interval);
   }, []);
 
-  const getStatusText = (p: CardPhase) => {
-    switch (p) {
-      case 'ENTRY': return 'INITIALIZING...';
-      case 'DECK_APPEAR': return 'DECK LOADED';
-      case 'ROTATING_SHUFFLE':
-      case 'SHUFFLE_ACCELERATE': return 'SHUFFLING...';
-      case 'COLLAPSE': return 'SELECTING...';
-      case 'CARD_PICK': return 'CARD SELECTED';
-      case 'CARD_FLIP': return 'REVEALING...';
-      case 'AVATAR_REVEAL':
-      case 'PROFILE_EXPAND': return 'PROFILE LOADED';
-      case 'COMPLETE': return 'SYSTEM READY';
-      default: return 'ACTIVE';
-    }
-  };
+  return (
+    <span
+      className="font-mono"
+      style={{ fontSize: 'clamp(0.4rem, 1.2vw, 0.5rem)', color: 'rgba(168,85,247,0.35)', letterSpacing: '0.12em' }}
+    >
+      {time}
+    </span>
+  );
+});
 
+function getStatusText(p: CardPhase): string {
+  switch (p) {
+    case 'ENTRY': return 'INITIALIZING...';
+    case 'DECK_APPEAR': return 'DECK LOADED';
+    case 'ROTATING_SHUFFLE':
+    case 'SHUFFLE_ACCELERATE': return 'SHUFFLING...';
+    case 'COLLAPSE': return 'SELECTING...';
+    case 'CARD_PICK': return 'CARD SELECTED';
+    case 'CARD_FLIP': return 'REVEALING...';
+    case 'AVATAR_REVEAL':
+    case 'PROFILE_EXPAND': return 'PROFILE LOADED';
+    case 'COMPLETE': return 'SYSTEM READY';
+    default: return 'ACTIVE';
+  }
+}
+
+export default function HudOverlay({ phase }: HudOverlayProps) {
   const phaseIndex = PHASE_ORDER.indexOf(phase);
   const progressPercent = Math.max(0, Math.min(100, (phaseIndex / (PHASE_ORDER.length - 1)) * 100));
   const isComplete = phase === 'COMPLETE';
@@ -65,7 +78,7 @@ export default function HudOverlay({ phase }: HudOverlayProps) {
         }}
       />
 
-      {/* Data stream columns */}
+      {/* Data stream columns — single DATA_COLUMN (no duplicate), overflow:hidden clips remainder */}
       {!isEntry && (
         <>
           <div className="absolute left-[4px] top-1/2 -translate-y-1/2 h-[60vh] w-[14px] overflow-hidden hidden sm:flex justify-center pointer-events-none">
@@ -78,7 +91,7 @@ export default function HudOverlay({ phase }: HudOverlayProps) {
                 animation: 'data-stream 20s linear infinite'
               }}
             >
-              {[...DATA_COLUMN, ...DATA_COLUMN].map((hex, i) => (
+              {DATA_COLUMN.map((hex, i) => (
                 <div key={i}>{hex}</div>
               ))}
             </div>
@@ -93,7 +106,7 @@ export default function HudOverlay({ phase }: HudOverlayProps) {
                 animation: 'data-stream 20s linear infinite'
               }}
             >
-              {[...DATA_COLUMN, ...DATA_COLUMN].map((hex, i) => (
+              {DATA_COLUMN.map((hex, i) => (
                 <div key={i}>{hex}</div>
               ))}
             </div>
@@ -175,7 +188,7 @@ export default function HudOverlay({ phase }: HudOverlayProps) {
         </span>
       </div>
 
-      {/* Timestamp */}
+      {/* Timestamp — isolated to ClockDisplay to prevent full overlay re-render each second */}
       <div
         className="absolute flex flex-col items-end"
         style={{
@@ -189,12 +202,7 @@ export default function HudOverlay({ phase }: HudOverlayProps) {
         >
           VRGC DOSSIER VERIFIED
         </span>
-        <span
-          className="font-mono"
-          style={{ fontSize: 'clamp(0.4rem, 1.2vw, 0.5rem)', color: 'rgba(168,85,247,0.35)', letterSpacing: '0.12em' }}
-        >
-          {time}
-        </span>
+        <ClockDisplay />
       </div>
 
       {/* Progress bar */}
