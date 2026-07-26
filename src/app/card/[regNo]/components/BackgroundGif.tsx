@@ -6,9 +6,10 @@ import { motion } from 'framer-motion';
 interface BackgroundGifProps {
   avatarUrl: string;
   isVisible: boolean;
+  isComplete?: boolean;
 }
 
-export default function BackgroundGif({ avatarUrl, isVisible }: BackgroundGifProps) {
+export default function BackgroundGif({ avatarUrl, isVisible, isComplete = false }: BackgroundGifProps) {
   const [isDesktop, setIsDesktop] = useState<boolean>(false);
 
   useEffect(() => {
@@ -21,6 +22,10 @@ export default function BackgroundGif({ avatarUrl, isVisible }: BackgroundGifPro
   }, []);
 
   if (!avatarUrl) return null;
+
+  // On mobile phones, suppress background GIF completely until animation is complete!
+  const shouldRenderMobile = isDesktop || isComplete;
+  if (!shouldRenderMobile) return null;
 
   return (
     <motion.div

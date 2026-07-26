@@ -241,10 +241,8 @@ export default function ProfileReveal({ member, isVisible, isComplete, onReplay 
       <div
         className="fixed left-1/2 top-[34vh] -translate-x-1/2 -translate-y-1/2 w-[320px] h-[320px] rounded-full pointer-events-none z-10 transition-opacity duration-500"
         style={{
-          opacity: seqStep === 2 ? 0.45 : 0,
-          background: 'radial-gradient(circle, rgba(192, 132, 252, 0.45) 0%, rgba(168, 85, 247, 0.25) 45%, transparent 80%)',
-          filter: isMobile ? 'blur(20px)' : 'blur(40px)',
-          boxShadow: isMobile ? 'none' : '0 0 45px rgba(168, 85, 247, 0.25)',
+          opacity: seqStep === 2 ? 0.35 : 0,
+          background: 'radial-gradient(circle, rgba(192, 132, 252, 0.25) 0%, rgba(168, 85, 247, 0.15) 50%, transparent 80%)',
         }}
       />
 
@@ -260,11 +258,9 @@ export default function ProfileReveal({ member, isVisible, isComplete, onReplay 
         className="fixed left-1/2 flex flex-col items-center text-center w-[92%] max-w-[420px] px-5 py-3.5 rounded-2xl z-30 pointer-events-auto transition-all duration-500 ease-out"
         style={{
           top: topCanvasTop,
-          background: 'linear-gradient(145deg, rgba(4, 1, 12, 0.98) 0%, rgba(8, 14, 30, 0.96) 50%, rgba(16, 4, 32, 0.98) 100%)',
-          backdropFilter: isMobile ? 'none' : 'blur(16px)',
-          WebkitBackdropFilter: isMobile ? 'none' : 'blur(16px)',
-          border: '1px solid rgba(147, 51, 234, 0.6)',
-          boxShadow: isMobile ? '0 8px 25px rgba(0,0,0,0.9)' : '0 12px 35px rgba(0, 0, 0, 0.95), 0 0 30px rgba(124, 58, 237, 0.45)',
+          background: '#070212',
+          border: '1px solid rgba(147, 51, 234, 0.5)',
+          boxShadow: '0 8px 24px rgba(0, 0, 0, 0.9)',
           willChange: 'transform, top',
         }}
       >
@@ -275,8 +271,8 @@ export default function ProfileReveal({ member, isVisible, isComplete, onReplay 
         </span>
 
         <div className="flex items-center gap-2 mb-1 flex-wrap justify-center">
-          <div className="inline-flex items-center gap-1.5 px-3 py-0.5 rounded-full border border-[#c084fc]/70 bg-[#4c1d95]/50 text-[#d8b4fe] shadow-[0_0_15px_rgba(147,51,234,0.5)]">
-            <span className="w-1.5 h-1.5 rounded-full bg-[#c084fc] animate-pulse" />
+          <div className="inline-flex items-center gap-1.5 px-3 py-0.5 rounded-full border border-[#c084fc]/70 bg-[#4c1d95]/50 text-[#d8b4fe]">
+            <span className="w-1.5 h-1.5 rounded-full bg-[#c084fc]" />
             <span className="font-mono text-[10px] sm:text-xs font-bold tracking-wider uppercase">
               {member.role || member.position || 'CORE MEMBER'}
             </span>
@@ -291,10 +287,7 @@ export default function ProfileReveal({ member, isVisible, isComplete, onReplay 
           )}
         </div>
 
-        <h1
-          className="font-orbitron font-extrabold uppercase text-white tracking-wider text-xl sm:text-2xl md:text-3xl leading-tight"
-          style={{ animation: isMobile ? 'none' : 'name-glow 3s ease-in-out infinite' }}
-        >
+        <h1 className="font-orbitron font-extrabold uppercase text-white tracking-wider text-xl sm:text-2xl md:text-3xl leading-tight">
           {member.name}
         </h1>
 
@@ -317,11 +310,9 @@ export default function ProfileReveal({ member, isVisible, isComplete, onReplay 
           top: detailsCanvasTop,
           maxHeight: '52vh',
           overflowY: 'auto',
-          background: 'linear-gradient(145deg, rgba(2, 0, 6, 0.98) 0%, rgba(6, 14, 30, 0.96) 50%, rgba(16, 4, 32, 0.98) 100%)',
-          backdropFilter: isMobile ? 'none' : 'blur(20px)',
-          WebkitBackdropFilter: isMobile ? 'none' : 'blur(20px)',
-          border: '1px solid rgba(147, 51, 234, 0.6)',
-          boxShadow: isMobile ? '0 10px 30px rgba(0,0,0,0.95)' : '0 15px 45px rgba(0, 0, 0, 0.95), 0 0 35px rgba(109, 40, 217, 0.4)',
+          background: '#060212',
+          border: '1px solid rgba(147, 51, 234, 0.5)',
+          boxShadow: '0 8px 24px rgba(0, 0, 0, 0.95)',
           willChange: 'top, opacity',
         }}
       >

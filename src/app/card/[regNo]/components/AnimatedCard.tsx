@@ -38,6 +38,24 @@ interface AnimatedCardProps {
   children?: React.ReactNode;
 }
 
+function getStaticCardPhoto(member?: UnifiedMember, index: number = 0): string {
+  if (!member) {
+    return `https://api.dicebear.com/9.x/pixel-art/svg?seed=member_${index}&backgroundColor=0a0a0f`;
+  }
+
+  const candidates = [member.photoUrl, member.imageUrl];
+  for (const url of candidates) {
+    if (url && typeof url === 'string' && url.trim() !== '') {
+      const lower = url.toLowerCase();
+      if (!lower.endsWith('.gif') && !lower.includes('/avatars/') && !lower.includes('.gif?')) {
+        return url;
+      }
+    }
+  }
+
+  return `https://api.dicebear.com/9.x/pixel-art/svg?seed=${encodeURIComponent(member.name || member.regNo || `member_${index}`)}&backgroundColor=0a0a0f`;
+}
+
 export const AnimatedCard = memo(({
   index,
   totalCards,
@@ -56,6 +74,16 @@ export const AnimatedCard = memo(({
   const isFlipped =
     isSelected &&
     ['CARD_FLIP', 'AVATAR_REVEAL', 'PROFILE_EXPAND', 'COMPLETE'].includes(phase);
+
+  // Reveal target GIF ONLY after animation phase is over (PROFILE_EXPAND or COMPLETE)
+  const isAnimationOver = isSelected && ['PROFILE_EXPAND', 'COMPLETE'].includes(phase);
+
+  const staticPhoto = getStaticCardPhoto(cardMember, index);
+
+  // Strictly static member photo during 3D shuffle. Target GIF is revealed ONLY when animation is over.
+  const cardDisplayImage = isAnimationOver
+    ? (cardMember?.avatarUrl || staticPhoto)
+    : staticPhoto;
 
   const currentAspectRatio = isFlipped ? targetAspectRatio : 2 / 3;
 
@@ -318,11 +346,11 @@ export const AnimatedCard = memo(({
             transform: 'translateZ(0)',
           }}
         >
-          {/* Member Avatar GIF Canvas */}
+          {/* Member Card Photo / GIF Canvas */}
           <div className="relative w-full h-full p-1 flex items-center justify-center overflow-hidden">
             <img
-              src={cardGifUrl}
-              alt="Member Avatar GIF"
+              src={cardDisplayImage}
+              alt={cardMember?.name || 'Member Photo'}
               referrerPolicy="no-referrer"
               className="w-full h-full object-cover rounded-xl shadow-lg border border-purple-500/30 block"
               loading="eager"
