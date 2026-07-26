@@ -303,12 +303,107 @@ export default function CardDeck({
   const isOrbiting = phase === 'ROTATING_SHUFFLE' || phase === 'SHUFFLE_ACCELERATE';
   const isPicking = phase === 'CARD_PICK' || phase === 'CARD_FLIP';
 
-  const isRevealPhase = ['CARD_PICK', 'CARD_FLIP', 'AVATAR_REVEAL', 'PROFILE_EXPAND', 'COMPLETE'].includes(phase);
-
-  // Pool of VRGC club members excluding target member for mystery shuffle
+  // Construct a pool of unique non-target VRGC club members (at least cardCount items)
   const shuffleOthers = React.useMemo(() => {
-    return deckMembers.filter((m) => m.regNo.toLowerCase() !== targetMember.regNo.toLowerCase());
-  }, [deckMembers, targetMember]);
+    const targetRegClean = targetMember.regNo.toLowerCase();
+
+    const dbMap: Record<string, UnifiedMember> = {};
+    if (databaseMembers) {
+      databaseMembers.forEach((m) => {
+        if (m.regNo) dbMap[m.regNo.toLowerCase()] = m;
+        if (m.email) dbMap[m.email.toLowerCase()] = m;
+      });
+    }
+
+    const usedImages = new Set<string>();
+    if (targetMember.photoUrl) usedImages.add(targetMember.photoUrl);
+    if (targetMember.imageUrl) usedImages.add(targetMember.imageUrl);
+
+    const pool: UnifiedMember[] = [];
+
+    (databaseMembers || []).forEach((m, i) => {
+      if (m.regNo.toLowerCase() === targetRegClean) return;
+      const photo = m.photoUrl || m.imageUrl || m.avatarUrl || REAL_CYBERPUNK_GIFS[i % REAL_CYBERPUNK_GIFS.length];
+      if (!usedImages.has(photo)) {
+        pool.push({ ...m, photoUrl: photo, imageUrl: photo });
+        usedImages.add(photo);
+      }
+    });
+
+    csvMembers.forEach((c, i) => {
+      const regClean = c.registrationNumber.trim().toLowerCase();
+      if (regClean === targetRegClean) return;
+      if (pool.some((p) => p.regNo.toLowerCase() === regClean)) return;
+
+      const matchedDb = dbMap[regClean] || dbMap[c.email.trim().toLowerCase()];
+      let photo = matchedDb?.photoUrl || matchedDb?.imageUrl || (c as any).photoUrl;
+      if (!photo || usedImages.has(photo)) {
+        photo = `https://api.dicebear.com/9.x/pixel-art/svg?seed=${encodeURIComponent(c.name || c.registrationNumber)}&backgroundColor=0a0a0f`;
+      }
+      usedImages.add(photo);
+
+      pool.push({
+        id: c.registrationNumber || `csv-${i}`,
+        regNo: c.registrationNumber,
+        name: c.name,
+        phone: c.phone,
+        email: c.email,
+        assignedTeam: c.team,
+        position: c.position,
+        role: c.position || 'CORE MEMBER',
+        photoUrl: photo,
+        imageUrl: photo,
+        avatarUrl: matchedDb?.avatarUrl || photo,
+        joinDate: matchedDb?.joinDate || '2024-08-01',
+        specialization: matchedDb?.specialization || `${c.team} Division`,
+        rating: matchedDb?.rating || (4.5 + (i % 5) * 0.1),
+        fromFirestore: Boolean(matchedDb),
+        fromCsv: true,
+      });
+    });
+
+    // Ensure pool has at least cardCount unique items (zero repeated images)
+    while (pool.length < cardCount) {
+      const idx = pool.length + 1;
+      const photo = `https://api.dicebear.com/9.x/pixel-art/svg?seed=vrgc_unique_shuffle_slot_${idx}&backgroundColor=0a0a0f`;
+      pool.push({
+        id: `shuffle-gen-${idx}`,
+        regNo: `25BCG100${idx}`,
+        name: `VRGC Member ${idx}`,
+        phone: '+91 90000 00000',
+        email: `member${idx}@vrgc.club`,
+        assignedTeam: 'Gaming',
+        position: 'Core Member',
+        role: 'Core Member',
+        photoUrl: photo,
+        imageUrl: photo,
+        avatarUrl: photo,
+        joinDate: '2024-08-01',
+        specialization: 'Game Dev & Esports',
+        rating: 4.8,
+        fromFirestore: true,
+        fromCsv: false,
+      });
+    }
+
+    return pool.slice(0, cardCount);
+  }, [targetMember, csvMembers, databaseMembers, cardCount]);
+
+  const finalTargetMember = React.useMemo(() => {
+    const realTargetAvatar =
+      targetMember.avatarUrl ||
+      targetMember.imageUrl ||
+      targetMember.photoUrl ||
+      REAL_CYBERPUNK_GIFS[0];
+
+    return {
+      ...targetMember,
+      avatarUrl: realTargetAvatar,
+      photoUrl: targetMember.photoUrl || realTargetAvatar,
+    };
+  }, [targetMember]);
+
+  const isRevealPhase = ['CARD_PICK', 'CARD_FLIP', 'AVATAR_REVEAL', 'PROFILE_EXPAND', 'COMPLETE'].includes(phase);
 
   return (
     <div
@@ -320,11 +415,10 @@ export default function CardDeck({
       }}
     >
       {deckMembers.map((member, i) => {
-        // Hide target member identity during entrance & 3D shuffle!
-        // Show random club member cards during shuffle. Target member is ONLY assigned upon card pick/reveal!
+        // Assign strictly unique non-target member cards during shuffle. Target member is ONLY assigned on card pick/reveal!
         const cardMemberData = (isRevealPhase && i === selectedIndex)
-          ? deckMembers[0]
-          : (shuffleOthers[i % shuffleOthers.length] || member);
+          ? finalTargetMember
+          : (shuffleOthers[i] || member);
 
         return (
           <AnimatedCard
