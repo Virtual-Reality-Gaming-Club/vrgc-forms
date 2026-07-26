@@ -57,6 +57,9 @@ export const AnimatedCard = memo(({
     isSelected &&
     ['CARD_FLIP', 'AVATAR_REVEAL', 'PROFILE_EXPAND', 'COMPLETE'].includes(phase);
 
+  const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
+  const isFlippedOrRevealed = ['CARD_FLIP', 'AVATAR_REVEAL', 'PROFILE_EXPAND', 'COMPLETE'].includes(phase);
+
   const currentAspectRatio = isFlipped ? targetAspectRatio : 2 / 3;
 
   const cardGifUrl =
@@ -320,15 +323,27 @@ export const AnimatedCard = memo(({
         >
           {/* Member Avatar GIF Canvas */}
           <div className="relative w-full h-full p-1 flex items-center justify-center overflow-hidden">
-            <img
-              src={cardGifUrl}
-              alt="Member Avatar GIF"
-              referrerPolicy="no-referrer"
-              className="w-full h-full object-cover rounded-xl shadow-lg border border-purple-500/30 block"
-              loading="eager"
-              decoding="async"
-              style={{ willChange: 'transform, opacity' }}
-            />
+            {(!isMobile || isFlippedOrRevealed || isSelected) ? (
+              <img
+                src={cardGifUrl}
+                alt="Member Avatar GIF"
+                referrerPolicy="no-referrer"
+                className="w-full h-full object-cover rounded-xl shadow-lg border border-purple-500/30 block"
+                loading="eager"
+                decoding="async"
+                style={{ willChange: 'transform, opacity' }}
+              />
+            ) : (
+              /* Mobile Lightweight Shuffle Card Face (Zero GPU GIF decoding load) */
+              <div className="w-full h-full rounded-xl bg-gradient-to-br from-[#0c041e] via-[#05020c] to-[#12052b] border border-purple-500/40 flex flex-col items-center justify-center p-2 text-center relative overflow-hidden">
+                <div className="w-7 h-7 rounded-full border border-purple-500/60 bg-purple-950/40 flex items-center justify-center mb-1">
+                  <span className="font-orbitron font-extrabold text-[9px] text-purple-300">VRGC</span>
+                </div>
+                <span className="font-mono text-[8px] tracking-widest text-[#c084fc] uppercase font-semibold">
+                  {cardMember?.regNo || `DOSSIER #${index + 1}`}
+                </span>
+              </div>
+            )}
 
             {/* Holographic Scanline */}
             <div
