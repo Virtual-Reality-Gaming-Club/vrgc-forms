@@ -232,6 +232,7 @@ export default function EntryExperience({ targetMember, csvMembers, databaseMemb
         <BackgroundGif
           avatarUrl={targetMember.avatarUrl}
           isVisible={isProfileVisible}
+          isComplete={phase === 'COMPLETE'}
         />
 
         {/* Camera breathing wrapper */}
