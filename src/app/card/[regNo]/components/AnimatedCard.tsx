@@ -311,7 +311,19 @@ export const AnimatedCard = memo(({
     isSelected &&
     ['CARD_PICK', 'CARD_FLIP', 'AVATAR_REVEAL', 'PROFILE_EXPAND', 'COMPLETE'].includes(phase);
   const isOrbiting = phase === 'ROTATING_SHUFFLE' || phase === 'SHUFFLE_ACCELERATE';
-  const baseZIndex = isOrbiting ? orbitalPosition.zIndex : totalCards - index;
+
+  const getZIndex = (): number => {
+    if (isActive) return 200;
+    if (phase === 'ENTRY' || phase === 'DECK_APPEAR') {
+      // Card 1 is static on top (zIndex 100). Card 0 glides up BENEATH Card 1 (zIndex 50).
+      if (index === 1) return 100;
+      if (index === 0) return 50;
+      return totalCards - index;
+    }
+    if (isOrbiting) return orbitalPosition.zIndex;
+    return totalCards - index;
+  };
+
   const isIdleFloat = isSelected && phase === 'COMPLETE';
 
   return (
@@ -344,7 +356,7 @@ export const AnimatedCard = memo(({
         position: 'absolute',
         width: 'clamp(200px, 58vw, 320px)',
         willChange: 'transform, opacity',
-        zIndex: isActive ? totalCards + 10 : baseZIndex,
+        zIndex: getZIndex(),
         contain: 'layout',
         transform: 'translateZ(0)',
         animation: isIdleFloat ? 'card-idle-float 3s ease-in-out infinite' : 'none',

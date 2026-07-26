@@ -104,68 +104,63 @@ export default function CardDeck({
       });
     }
 
+    const usedImages = new Set<string>();
+    if (targetMember.photoUrl) usedImages.add(targetMember.photoUrl);
+    if (targetMember.imageUrl) usedImages.add(targetMember.imageUrl);
+
     // Filter database members excluding target member
-    const realDbOthers = (databaseMembers || [])
-      .filter((m) => m.regNo.toLowerCase() !== targetRegClean)
-      .map((m, i) => {
-        const realGif =
-          m.avatarUrl ||
-          m.imageUrl ||
-          m.photoUrl ||
-          REAL_CYBERPUNK_GIFS[i % REAL_CYBERPUNK_GIFS.length];
-        return {
-          ...m,
-          avatarUrl: realGif,
-          photoUrl: m.photoUrl || realGif,
-          imageUrl: m.imageUrl || realGif,
-        };
+    const pool: UnifiedMember[] = [];
+    (databaseMembers || []).forEach((m, i) => {
+      if (m.regNo.toLowerCase() === targetRegClean) return;
+      const photo = m.photoUrl || m.imageUrl || m.avatarUrl || REAL_CYBERPUNK_GIFS[i % REAL_CYBERPUNK_GIFS.length];
+      pool.push({
+        ...m,
+        photoUrl: photo,
+        imageUrl: photo,
+        avatarUrl: m.avatarUrl || photo,
       });
+      usedImages.add(photo);
+    });
 
-    const pool: UnifiedMember[] = [...realDbOthers];
-
-    // Enrich CSV members with database GIFs
+    // Enrich CSV members with unique photo assignments
     csvMembers.forEach((c, i) => {
       const regClean = c.registrationNumber.trim().toLowerCase();
-      const emailClean = c.email.trim().toLowerCase();
       if (regClean === targetRegClean) return;
+      if (pool.some((p) => p.regNo.toLowerCase() === regClean)) return;
 
-      const matchedDb = dbMap[regClean] || dbMap[emailClean];
-      const realGif =
-        matchedDb?.avatarUrl ||
-        matchedDb?.imageUrl ||
-        matchedDb?.photoUrl ||
-        (c as any).avatarUrl ||
-        (c as any).gifUrl ||
-        REAL_CYBERPUNK_GIFS[i % REAL_CYBERPUNK_GIFS.length];
-
-      if (!pool.some((p) => p.regNo.toLowerCase() === regClean)) {
-        pool.push({
-          id: c.registrationNumber || `csv-${i}`,
-          regNo: c.registrationNumber,
-          name: c.name,
-          phone: c.phone,
-          email: c.email,
-          assignedTeam: c.team,
-          position: c.position,
-          role: c.position || 'CORE MEMBER',
-          photoUrl: matchedDb?.photoUrl || realGif,
-          imageUrl: matchedDb?.imageUrl || realGif,
-          avatarUrl: realGif,
-          joinDate: matchedDb?.joinDate || '2024-08-01',
-          specialization: matchedDb?.specialization || `${c.team} Division`,
-          rating: matchedDb?.rating || (4.5 + (i % 5) * 0.1),
-          fromFirestore: Boolean(matchedDb),
-          fromCsv: true,
-        });
+      const matchedDb = dbMap[regClean] || dbMap[c.email.trim().toLowerCase()];
+      let photo = matchedDb?.photoUrl || matchedDb?.imageUrl || (c as any).photoUrl;
+      if (!photo || usedImages.has(photo)) {
+        photo = `https://api.dicebear.com/9.x/pixel-art/svg?seed=${encodeURIComponent(c.name || c.registrationNumber)}&backgroundColor=0a0a0f`;
       }
+      usedImages.add(photo);
+
+      pool.push({
+        id: c.registrationNumber || `csv-${i}`,
+        regNo: c.registrationNumber,
+        name: c.name,
+        phone: c.phone,
+        email: c.email,
+        assignedTeam: c.team,
+        position: c.position,
+        role: c.position || 'CORE MEMBER',
+        photoUrl: photo,
+        imageUrl: photo,
+        avatarUrl: matchedDb?.avatarUrl || photo,
+        joinDate: matchedDb?.joinDate || '2024-08-01',
+        specialization: matchedDb?.specialization || `${c.team} Division`,
+        rating: matchedDb?.rating || (4.5 + (i % 5) * 0.1),
+        fromFirestore: Boolean(matchedDb),
+        fromCsv: true,
+      });
     });
 
     const selectedOthers = pool.slice(0, cardCount - 1);
 
-    // Pad with real fallback GIF avatars if needed
+    // Pad with strictly unique fallback SVG avatars if deck needs more members
     while (selectedOthers.length < cardCount - 1) {
       const idx = selectedOthers.length + 1;
-      const realGif = REAL_CYBERPUNK_GIFS[idx % REAL_CYBERPUNK_GIFS.length];
+      const photo = `https://api.dicebear.com/9.x/pixel-art/svg?seed=vrgc_unique_member_${idx}&backgroundColor=0a0a0f`;
       selectedOthers.push({
         id: `db-gen-${idx}`,
         regNo: `25BCG100${idx}`,
@@ -175,9 +170,9 @@ export default function CardDeck({
         assignedTeam: 'Gaming',
         position: 'Core Member',
         role: 'Core Member',
-        photoUrl: realGif,
-        imageUrl: realGif,
-        avatarUrl: realGif,
+        photoUrl: photo,
+        imageUrl: photo,
+        avatarUrl: photo,
         joinDate: '2024-08-01',
         specialization: 'Game Dev & Esports',
         rating: 4.8,
@@ -308,6 +303,138 @@ export default function CardDeck({
   const isOrbiting = phase === 'ROTATING_SHUFFLE' || phase === 'SHUFFLE_ACCELERATE';
   const isPicking = phase === 'CARD_PICK' || phase === 'CARD_FLIP';
 
+  // Construct a pool of unique non-target VRGC club members (at least cardCount items)
+  const shuffleOthers = React.useMemo(() => {
+    const targetRegClean = targetMember.regNo.toLowerCase();
+
+    const dbMap: Record<string, UnifiedMember> = {};
+    if (databaseMembers) {
+      databaseMembers.forEach((m) => {
+        if (m.regNo) dbMap[m.regNo.toLowerCase()] = m;
+        if (m.email) dbMap[m.email.toLowerCase()] = m;
+      });
+    }
+
+    const usedImages = new Set<string>();
+    if (targetMember.photoUrl) usedImages.add(targetMember.photoUrl);
+    if (targetMember.imageUrl) usedImages.add(targetMember.imageUrl);
+
+    const pool: UnifiedMember[] = [];
+
+    // Collect all real registered members from database and CSV
+    (databaseMembers || []).forEach((m, i) => {
+      if (m.regNo.toLowerCase() === targetRegClean) return;
+      const photo = m.photoUrl || m.imageUrl || m.avatarUrl;
+      if (photo && typeof photo === 'string' && photo.trim() !== '' && !usedImages.has(photo)) {
+        pool.push({
+          ...m,
+          photoUrl: photo,
+          imageUrl: photo,
+          avatarUrl: m.avatarUrl || photo,
+        });
+        usedImages.add(photo);
+      }
+    });
+
+    csvMembers.forEach((c, i) => {
+      const regClean = c.registrationNumber.trim().toLowerCase();
+      if (regClean === targetRegClean) return;
+      if (pool.some((p) => p.regNo.toLowerCase() === regClean)) return;
+
+      const matchedDb = dbMap[regClean] || dbMap[c.email.trim().toLowerCase()];
+      const photo = matchedDb?.photoUrl || matchedDb?.imageUrl || matchedDb?.avatarUrl || (c as any).photoUrl || (c as any).imageUrl;
+
+      if (photo && typeof photo === 'string' && photo.trim() !== '' && !usedImages.has(photo)) {
+        usedImages.add(photo);
+        pool.push({
+          id: c.registrationNumber || `csv-${i}`,
+          regNo: c.registrationNumber,
+          name: c.name,
+          phone: c.phone,
+          email: c.email,
+          assignedTeam: c.team,
+          position: c.position,
+          role: c.position || 'CORE MEMBER',
+          photoUrl: photo,
+          imageUrl: photo,
+          avatarUrl: matchedDb?.avatarUrl || photo,
+          joinDate: matchedDb?.joinDate || '2024-08-01',
+          specialization: matchedDb?.specialization || `${c.team} Division`,
+          rating: matchedDb?.rating || (4.5 + (i % 5) * 0.1),
+          fromFirestore: Boolean(matchedDb),
+          fromCsv: true,
+        });
+      }
+    });
+
+    // PRNG helper seeded by regNo for 100% deterministic SSR and client hydration matching
+    const prng = (() => {
+      let hash = 0;
+      const str = targetMember.regNo || 'vrgc';
+      for (let i = 0; i < str.length; i++) {
+        hash = (hash << 5) - hash + str.charCodeAt(i);
+        hash |= 0;
+      }
+      return () => {
+        hash = (hash + 0x6d2b79f5) | 0;
+        let t = Math.imul(hash ^ (hash >>> 15), 1 | hash);
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+    })();
+
+    // Ensure pool has at least cardCount unique items (zero repeated images)
+    while (pool.length < cardCount + 2) {
+      const idx = pool.length + 1;
+      const seedHex = Math.floor(prng() * 1000000).toString(16);
+      const photo = `https://api.dicebear.com/9.x/pixel-art/svg?seed=vrgc_slot_${idx}_${seedHex}&backgroundColor=0a0a0f`;
+      pool.push({
+        id: `shuffle-gen-${idx}`,
+        regNo: `25BCG100${idx}`,
+        name: `VRGC Member ${idx}`,
+        phone: '+91 90000 00000',
+        email: `member${idx}@vrgc.club`,
+        assignedTeam: 'Gaming',
+        position: 'Core Member',
+        role: 'Core Member',
+        photoUrl: photo,
+        imageUrl: photo,
+        avatarUrl: photo,
+        joinDate: '2024-08-01',
+        specialization: 'Game Dev & Esports',
+        rating: 4.8,
+        fromFirestore: true,
+        fromCsv: false,
+      });
+    }
+
+    // Deterministically shuffle member pool (100% identical SSR & Client hydration)
+    const randomizedPool = [...pool];
+    for (let i = randomizedPool.length - 1; i > 0; i--) {
+      const j = Math.floor(prng() * (i + 1));
+      [randomizedPool[i], randomizedPool[j]] = [randomizedPool[j], randomizedPool[i]];
+    }
+
+    return randomizedPool.slice(0, cardCount + 2);
+  }, [targetMember, csvMembers, databaseMembers, cardCount]);
+
+  const finalTargetMember = React.useMemo(() => {
+    const realTargetAvatar =
+      targetMember.avatarUrl ||
+      targetMember.imageUrl ||
+      targetMember.photoUrl ||
+      REAL_CYBERPUNK_GIFS[0];
+
+    return {
+      ...targetMember,
+      avatarUrl: realTargetAvatar,
+      photoUrl: targetMember.photoUrl || realTargetAvatar,
+    };
+  }, [targetMember]);
+
+  // Target member is excluded from initial ENTRY & DECK_APPEAR animation, but included in 3D shuffle and lands at centre screen!
+  const isShuffleOrRevealPhase = ['ROTATING_SHUFFLE', 'SHUFFLE_ACCELERATE', 'COLLAPSE', 'CARD_PICK', 'CARD_FLIP', 'AVATAR_REVEAL', 'PROFILE_EXPAND', 'COMPLETE'].includes(phase);
+
   return (
     <div
       className="relative w-full h-full flex items-center justify-center pointer-events-none"
@@ -317,31 +444,39 @@ export default function CardDeck({
         transition: 'perspective 1.2s ease-in-out, perspective-origin 1.2s ease-in-out',
       }}
     >
-      {deckMembers.map((member, i) => (
-        <AnimatedCard
-          key={member.id}
-          index={i}
-          totalCards={cardCount}
-          isSelected={i === selectedIndex}
-          phase={phase}
-          orbitalPosition={orbitalPositions[i] || NEUTRAL}
-          targetAspectRatio={i === selectedIndex ? targetAspectRatio : 2 / 3}
-          cardMember={member}
-        >
-          <MemberCard
-            member={member}
-            isRevealed={
-              i === selectedIndex &&
-              ['CARD_FLIP', 'AVATAR_REVEAL', 'PROFILE_EXPAND', 'COMPLETE'].includes(phase)
-            }
-            onAspectRatioChange={(ratio) => {
-              if (i === selectedIndex) {
-                setTargetAspectRatio(ratio);
+      {deckMembers.map((member, i) => {
+        // Exclude target member from initial decking animation (ENTRY & DECK_APPEAR).
+        // Target member joins during 3D shuffle and lands at centre screen upon pick & reveal!
+        const cardMemberData = (isShuffleOrRevealPhase && i === selectedIndex)
+          ? finalTargetMember
+          : (shuffleOthers[i] || member);
+
+        return (
+          <AnimatedCard
+            key={member.id}
+            index={i}
+            totalCards={cardCount}
+            isSelected={i === selectedIndex}
+            phase={phase}
+            orbitalPosition={orbitalPositions[i] || NEUTRAL}
+            targetAspectRatio={i === selectedIndex ? targetAspectRatio : 2 / 3}
+            cardMember={cardMemberData}
+          >
+            <MemberCard
+              member={cardMemberData}
+              isRevealed={
+                i === selectedIndex &&
+                ['CARD_FLIP', 'AVATAR_REVEAL', 'PROFILE_EXPAND', 'COMPLETE'].includes(phase)
               }
-            }}
-          />
-        </AnimatedCard>
-      ))}
+              onAspectRatioChange={(ratio) => {
+                if (i === selectedIndex) {
+                  setTargetAspectRatio(ratio);
+                }
+              }}
+            />
+          </AnimatedCard>
+        );
+      })}
     </div>
   );
 }
