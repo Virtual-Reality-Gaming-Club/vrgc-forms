@@ -277,6 +277,7 @@ export default function EntryExperience({ targetMember, csvMembers, databaseMemb
               databaseMembers={databaseMembers}
               onPhaseComplete={handlePhaseComplete}
               onMemberSelected={handleMemberSelected}
+              isPreloading={isPreloading}
             />
           </div>
 

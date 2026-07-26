@@ -56,9 +56,18 @@ interface CardDeckProps {
   databaseMembers?: UnifiedMember[];
   onPhaseComplete: (phase: CardPhase) => void;
   onMemberSelected?: (member: UnifiedMember) => void;
+  isPreloading?: boolean;
 }
 
-export default function CardDeck({ phase, targetMember, csvMembers, databaseMembers, onPhaseComplete, onMemberSelected }: CardDeckProps) {
+export default function CardDeck({
+  phase,
+  targetMember,
+  csvMembers,
+  databaseMembers,
+  onPhaseComplete,
+  onMemberSelected,
+  isPreloading = false,
+}: CardDeckProps) {
   const [isMobile, setIsMobile] = useState<boolean>(false);
   const cardCount = isMobile ? 5 : 6;
 
@@ -217,6 +226,8 @@ export default function CardDeck({ phase, targetMember, csvMembers, databaseMemb
       rafRef.current = null;
     }
 
+    if (isPreloading) return;
+
     const isOrbiting = phase === 'ROTATING_SHUFFLE' || phase === 'SHUFFLE_ACCELERATE';
     if (!isOrbiting) return;
 
@@ -250,11 +261,13 @@ export default function CardDeck({ phase, targetMember, csvMembers, databaseMemb
     return () => {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
     };
-  }, [phase, dims, cardCount]);
+  }, [phase, dims, cardCount, isPreloading]);
 
   const handlePhaseComplete = useCallback(onPhaseComplete, [onPhaseComplete]);
 
   useEffect(() => {
+    if (isPreloading) return;
+
     let timer: ReturnType<typeof setTimeout> | undefined;
     switch (phase) {
       case 'ENTRY':
@@ -290,7 +303,7 @@ export default function CardDeck({ phase, targetMember, csvMembers, databaseMemb
         break;
     }
     return () => { if (timer) clearTimeout(timer); };
-  }, [phase, handlePhaseComplete, targetMember, cardCount]);
+  }, [phase, handlePhaseComplete, targetMember, cardCount, isPreloading]);
 
   const isOrbiting = phase === 'ROTATING_SHUFFLE' || phase === 'SHUFFLE_ACCELERATE';
   const isPicking = phase === 'CARD_PICK' || phase === 'CARD_FLIP';
