@@ -321,11 +321,17 @@ export default function CardDeck({
 
     const pool: UnifiedMember[] = [];
 
+    // Collect all real registered members from database and CSV
     (databaseMembers || []).forEach((m, i) => {
       if (m.regNo.toLowerCase() === targetRegClean) return;
-      const photo = m.photoUrl || m.imageUrl || m.avatarUrl || REAL_CYBERPUNK_GIFS[i % REAL_CYBERPUNK_GIFS.length];
-      if (!usedImages.has(photo)) {
-        pool.push({ ...m, photoUrl: photo, imageUrl: photo });
+      const photo = m.photoUrl || m.imageUrl || m.avatarUrl;
+      if (photo && typeof photo === 'string' && photo.trim() !== '' && !usedImages.has(photo)) {
+        pool.push({
+          ...m,
+          photoUrl: photo,
+          imageUrl: photo,
+          avatarUrl: m.avatarUrl || photo,
+        });
         usedImages.add(photo);
       }
     });
@@ -336,30 +342,29 @@ export default function CardDeck({
       if (pool.some((p) => p.regNo.toLowerCase() === regClean)) return;
 
       const matchedDb = dbMap[regClean] || dbMap[c.email.trim().toLowerCase()];
-      let photo = matchedDb?.photoUrl || matchedDb?.imageUrl || (c as any).photoUrl;
-      if (!photo || usedImages.has(photo)) {
-        photo = `https://api.dicebear.com/9.x/pixel-art/svg?seed=${encodeURIComponent(c.name || c.registrationNumber)}&backgroundColor=0a0a0f`;
-      }
-      usedImages.add(photo);
+      const photo = matchedDb?.photoUrl || matchedDb?.imageUrl || matchedDb?.avatarUrl || (c as any).photoUrl || (c as any).imageUrl;
 
-      pool.push({
-        id: c.registrationNumber || `csv-${i}`,
-        regNo: c.registrationNumber,
-        name: c.name,
-        phone: c.phone,
-        email: c.email,
-        assignedTeam: c.team,
-        position: c.position,
-        role: c.position || 'CORE MEMBER',
-        photoUrl: photo,
-        imageUrl: photo,
-        avatarUrl: matchedDb?.avatarUrl || photo,
-        joinDate: matchedDb?.joinDate || '2024-08-01',
-        specialization: matchedDb?.specialization || `${c.team} Division`,
-        rating: matchedDb?.rating || (4.5 + (i % 5) * 0.1),
-        fromFirestore: Boolean(matchedDb),
-        fromCsv: true,
-      });
+      if (photo && typeof photo === 'string' && photo.trim() !== '' && !usedImages.has(photo)) {
+        usedImages.add(photo);
+        pool.push({
+          id: c.registrationNumber || `csv-${i}`,
+          regNo: c.registrationNumber,
+          name: c.name,
+          phone: c.phone,
+          email: c.email,
+          assignedTeam: c.team,
+          position: c.position,
+          role: c.position || 'CORE MEMBER',
+          photoUrl: photo,
+          imageUrl: photo,
+          avatarUrl: matchedDb?.avatarUrl || photo,
+          joinDate: matchedDb?.joinDate || '2024-08-01',
+          specialization: matchedDb?.specialization || `${c.team} Division`,
+          rating: matchedDb?.rating || (4.5 + (i % 5) * 0.1),
+          fromFirestore: Boolean(matchedDb),
+          fromCsv: true,
+        });
+      }
     });
 
     // PRNG helper seeded by regNo for 100% deterministic SSR and client hydration matching
