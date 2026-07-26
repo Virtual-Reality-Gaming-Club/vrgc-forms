@@ -1,8 +1,7 @@
 'use client';
 
-import React, { useMemo } from 'react';
+import React, { useMemo, useEffect } from 'react';
 import { motion, useReducedMotion, TargetAndTransition } from 'framer-motion';
-import { cyberAudio } from '../../utils/cyberAudio';
 
 export type CardPhase =
   | 'ENTRY'
@@ -50,6 +49,17 @@ export const AnimatedCard: React.FC<AnimatedCardProps> = ({
 }) => {
   const prefersReduced = useReducedMotion();
   const [isFlipped, setIsFlipped] = React.useState(false);
+
+  // Auto-flip when the animation reaches CARD_FLIP phase for the selected card.
+  // This drives the rotateY in AVATAR_REVEAL/PROFILE_EXPAND/COMPLETE below.
+  useEffect(() => {
+    if (isSelected && ['CARD_FLIP', 'AVATAR_REVEAL', 'PROFILE_EXPAND', 'COMPLETE'].includes(phase)) {
+      setIsFlipped(true);
+    }
+    if (!isSelected || ['ENTRY', 'DECK_APPEAR', 'ROTATING_SHUFFLE', 'SHUFFLE_ACCELERATE', 'COLLAPSE', 'CARD_PICK'].includes(phase)) {
+      setIsFlipped(false);
+    }
+  }, [phase, isSelected]);
 
   const revealX = 0;
   const revealY = 40;
@@ -271,7 +281,9 @@ export const AnimatedCard: React.FC<AnimatedCardProps> = ({
           backgroundColor: '#06010d',
           backfaceVisibility: 'hidden',
           WebkitBackfaceVisibility: 'hidden',
-          transform: 'rotateY(0deg) translateZ(0)',
+          // Must be rotateY(180deg) so it faces away from camera when card is at rotateY:0
+          // and faces the camera once the card flips to rotateY:180
+          transform: 'rotateY(180deg) translateZ(0)',
           isolation: 'isolate',
           contain: 'strict',
         }}

@@ -33,9 +33,9 @@ function Particles({ intensity }: { intensity: number }) {
   // Particle arrays are deterministic (no Math.random) so server/client HTML matches.
   // After hydration, isTouch updates via useEffect and React re-renders harmlessly on client.
   const particles = useMemo(() => {
-    // Mobile: 16 particles; desktop: 44 particles
-    const stdCount = isTouch ? 12 : 32;
-    const microCount = isTouch ? 4 : 12;
+    // Mobile: 8 std + 0 micro; desktop: 32 std + 12 micro
+    const stdCount = isTouch ? 8 : 32;
+    const microCount = isTouch ? 0 : 12;
     const std = Array.from({ length: stdCount }, (_, i) => ({
       id: i,
       left: `${(i * 11 + 7) % 100}%`,
@@ -84,19 +84,21 @@ function Particles({ intensity }: { intensity: number }) {
 }
 
 function EnergyOrbs({ phase }: { phase: CardPhase }) {
+  const isTouch = useIsTouchDevice();
   const isActive = !['ENTRY','COMPLETE'].includes(phase);
-  // Mobile CSS class suppresses orbs 3+4 via .energy-orb:nth-child(n+3) in globals.css
+  // On touch devices only render the first 2 orbs (fewer filter:blur layers = less GPU pressure)
+  const orbDefs = [
+    { color: 'rgba(124,58,237,0.18)', size: '42vmax', x: '20%', y: '25%', anim: 'orb-drift-1', dur: '18s' },
+    { color: 'rgba(109,40,217,0.15)', size: '38vmax', x: '75%', y: '60%', anim: 'orb-drift-2', dur: '22s' },
+    { color: 'rgba(147,51,234,0.14)', size: '32vmax', x: '50%', y: '80%', anim: 'orb-drift-1', dur: '25s' },
+    { color: 'rgba(91,33,182,0.16)', size: '28vmax', x: '30%', y: '70%', anim: 'orb-drift-2', dur: '20s' },
+  ];
+  const orbs = isTouch ? orbDefs.slice(0, 2) : orbDefs;
   return (
     <div className="absolute inset-0 pointer-events-none overflow-hidden z-[1]">
-      {[
-        { color: 'rgba(124,58,237,0.18)', size: '42vmax', x: '20%', y: '25%', anim: 'orb-drift-1', dur: '18s' },
-        { color: 'rgba(109,40,217,0.15)', size: '38vmax', x: '75%', y: '60%', anim: 'orb-drift-2', dur: '22s' },
-        { color: 'rgba(147,51,234,0.14)', size: '32vmax', x: '50%', y: '80%', anim: 'orb-drift-1', dur: '25s' },
-        { color: 'rgba(91,33,182,0.16)', size: '28vmax', x: '30%', y: '70%', anim: 'orb-drift-2', dur: '20s' },
-      ].map((orb, i) => (
+      {orbs.map((orb, i) => (
         <div
           key={i}
-          // energy-orb class used by mobile CSS to hide orbs 3 & 4
           className="absolute rounded-full energy-orb"
           style={{
             left: orb.x, top: orb.y,
@@ -107,6 +109,7 @@ function EnergyOrbs({ phase }: { phase: CardPhase }) {
             transform: 'translate(-50%,-50%)',
             opacity: isActive ? 1 : 0,
             transition: 'opacity 1s',
+            contain: 'strict',
           }}
         />
       ))}
@@ -291,8 +294,6 @@ export default function EntryExperience({
   const [phase, setPhase] = useState<CardPhase>('ENTRY');
   const [selectedMember, setSelectedMember] = useState<Member | null>(targetMember || null);
   const prefersReduced = useReducedMotion();
-  // Track GIF load to fade in smoothly (avoids FOUC)
-  const [gifLoaded, setGifLoaded] = useState(false);
 
   const handlePhaseComplete = useCallback((completedPhase: CardPhase) => {
     const idx = PHASE_ORDER.indexOf(completedPhase);
@@ -378,19 +379,23 @@ export default function EntryExperience({
           alt="Avatar GIF Fullscreen Background"
           aria-hidden="true"
           referrerPolicy="no-referrer"
-          onLoad={() => setGifLoaded(true)}
+          onLoad={() => {/* GIF loaded — opacity is now controlled by isRevealPhase only */}}
           style={{
             position: 'fixed',
             inset: 0,
             width: '100%',
             height: '100%',
             objectFit: 'cover',
-            objectPosition: 'center',
+            objectPosition: 'center top',
             zIndex: -1,
-            opacity: isRevealPhase ? 0.52 : 0.32,
-            filter: 'blur(16px) brightness(1.05) contrast(1.1)',
-            transform: 'scale(1.08)',
-            transition: 'opacity 1.2s ease-in-out, filter 1.2s ease-in-out',
+            // Post-reveal: high opacity + near-zero blur → member photo is clearly recognizable
+            // Pre-reveal: low opacity + heavy blur → ambient glow only, not distracting during shuffle
+            opacity: isRevealPhase ? 0.82 : 0.18,
+            filter: isRevealPhase
+              ? 'blur(0px) brightness(1.12) contrast(1.08) saturate(1.15)'
+              : 'blur(10px) brightness(0.85)',
+            transform: 'scale(1.03)',
+            transition: 'opacity 1.0s ease-in-out, filter 1.0s ease-in-out',
             pointerEvents: 'none',
             willChange: 'opacity, filter',
           }}

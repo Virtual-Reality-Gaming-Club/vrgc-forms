@@ -1,6 +1,6 @@
 'use client';
 
-import React, { memo, useMemo } from 'react';
+import React, { memo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Member } from './members';
 
@@ -31,18 +31,6 @@ const MemberCard = memo(function MemberCard({ member, isRevealed }: MemberCardPr
     ? ((member.assignedTeam || '').toLowerCase() === 'student coordinator' ? 'Student Coordinator' : member.role)
     : (member.role || 'CORE MEMBER');
 
-  // Memoized to avoid window access + URL encoding on every render
-  const qrUrl = useMemo(
-    () =>
-      member.qrCodeUrl ||
-      `https://api.qrserver.com/v1/create-qr-code/?size=140x140&color=0-0-0&bgcolor=ffffff&data=${encodeURIComponent(
-        typeof window !== 'undefined'
-          ? `${window.location.origin}/card/${member.regNo}`
-          : `https://vrgcforms.vercel.app/card/${member.regNo}`
-      )}`,
-    [member.qrCodeUrl, member.regNo]
-  );
-  // qrUrl is available for future use (QR display), not rendered here — keep for API parity
 
   return (
     <div className="relative w-full h-full rounded-3xl flex items-center justify-center select-none">
@@ -133,16 +121,21 @@ const MemberCard = memo(function MemberCard({ member, isRevealed }: MemberCardPr
             className="relative flex items-center justify-center rounded-2xl border-2 border-[#a855f7]/40 p-1 bg-black/60 shadow-[0_0_25px_rgba(168,85,247,0.3)] overflow-hidden"
             style={{ width: 'clamp(70px, 28vw, 115px)', height: 'clamp(70px, 28vw, 115px)' }}
           >
-            <motion.img
+            {/* key forces React to remount img on src change → CSS opacity transition crossfades avatar→photo */}
+            <img
+              key={imgSrc}
               src={imgSrc}
               alt={member.name}
-              className="w-full h-full object-cover rounded-xl brightness-105 contrast-105 shadow-inner"
-              initial={{ scale: 1, opacity: 1 }}
-              animate={{ scale: 1, opacity: 1 }}
-              transition={{ duration: 0.3, ease: 'easeOut' }}
+              className="w-full h-full object-cover rounded-xl brightness-105 contrast-105"
+              style={{ animation: 'img-fade-in 0.4s ease-out' }}
               loading="eager"
               // @ts-ignore
               fetchPriority="high"
+              onError={(e) => {
+                const t = e.target as HTMLImageElement;
+                t.onerror = null; // prevent infinite loop
+                t.src = `https://api.dicebear.com/9.x/shapes/svg?seed=${encodeURIComponent(member.name)}`;
+              }}
             />
             <div className="absolute bottom-1 right-1 bg-gradient-to-r from-[#a855f7] to-[#cf5cff] text-white text-[5px] font-black px-1 py-0.5 rounded tracking-widest uppercase shadow-md pointer-events-none opacity-90">
               VERIFIED

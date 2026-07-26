@@ -365,3 +365,8 @@
 .no-scrollbar::-webkit-scrollbar { display: none; }
 .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
 
+/* Avatar → Photo crossfade on MemberCard img (keyed remount approach) */
+@keyframes img-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
