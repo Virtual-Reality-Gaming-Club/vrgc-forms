@@ -22,24 +22,21 @@ export default function WelcomePopup({ phase, isPreloading = false }: WelcomePop
     const timers: ReturnType<typeof setTimeout>[] = [];
 
     // 1. WELCOME
-    timers.push(setTimeout(() => { setActiveWord('WELCOME'); setVisible(true); }, 300));
-    timers.push(setTimeout(() => { setVisible(false); }, 1300));
+    timers.push(setTimeout(() => { setActiveWord('WELCOME'); setVisible(true); }, 200));
+    timers.push(setTimeout(() => { setVisible(false); }, 1100));
 
     // 2. TO
-    timers.push(setTimeout(() => { setActiveWord('TO'); setVisible(true); }, 1800));
-    timers.push(setTimeout(() => { setVisible(false); }, 2800));
+    timers.push(setTimeout(() => { setActiveWord('TO'); setVisible(true); }, 1400));
+    timers.push(setTimeout(() => { setVisible(false); }, 2100));
 
-    // 3. VRGC
-    timers.push(setTimeout(() => { setActiveWord('VRGC'); setVisible(true); }, 3300));
-    
-    // Sudden Radial Energy Blast
-    timers.push(setTimeout(() => { setShowBlast(true); }, 3900));
-    
-    timers.push(setTimeout(() => { setVisible(false); }, 4300));
-    timers.push(setTimeout(() => { setShowBlast(false); }, 4650));
+    // 3. VRGC (Extended prominent display duration)
+    timers.push(setTimeout(() => { setActiveWord('VRGC'); setVisible(true); }, 2400));
+    timers.push(setTimeout(() => { setShowBlast(true); }, 3800));
+    timers.push(setTimeout(() => { setVisible(false); }, 4400));
+    timers.push(setTimeout(() => { setShowBlast(false); }, 4750));
 
     // Complete
-    timers.push(setTimeout(() => { setActiveWord(null); }, 4800));
+    timers.push(setTimeout(() => { setActiveWord(null); }, 4900));
 
     return () => timers.forEach(clearTimeout);
   }, [isPreloading]);

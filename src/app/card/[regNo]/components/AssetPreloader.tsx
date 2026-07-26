@@ -43,9 +43,9 @@ export default function AssetPreloader({
       }
     });
 
-    // High-performance 0.6 second progress animation (600ms total: 0.5s - 0.7s target range)
+    // High-performance 0.4 second progress animation (400ms total fast preloader burst)
     const startTime = performance.now();
-    const duration = 600;
+    const duration = 400;
 
     let animationFrameId: number;
 
@@ -59,7 +59,7 @@ export default function AssetPreloader({
       } else {
         setTimeout(() => {
           onComplete();
-        }, 50);
+        }, 30);
       }
     };
 
