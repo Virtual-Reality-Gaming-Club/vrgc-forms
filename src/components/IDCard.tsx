@@ -214,6 +214,20 @@ const IDCard: React.FC<IDCardProps> = ({ onRedirect }) => {
     return () => clearInterval(timer);
   }, [sheetsCooldown]);
 
+  const checkExistingSubmission = async (email: string) => {
+    try {
+      const docRef = doc(db, 'id_cards', email.toLowerCase());
+      const docSnap = await getDoc(docRef);
+      if (docSnap.exists()) {
+        setExistingSubmission(docSnap.data() as CandidateSubmission);
+      } else {
+        setExistingSubmission(null);
+      }
+    } catch (err) {
+      console.error('Error checking existing submission:', err);
+    }
+  };
+
   const [loadedMembersList, setLoadedMembersList] = useState<MemberData[]>([]);
 
   // Fetch whitelist admin emails and member roster from CSVs
@@ -324,7 +338,6 @@ const IDCard: React.FC<IDCardProps> = ({ onRedirect }) => {
   useEffect(() => {
     if (!currentUser || !isAdmin) return;
 
-    setLoadingData(true);
     const unsub = onSnapshot(collection(db, 'id_cards'), (snapshot) => {
       const candidatesData: CandidateSubmission[] = [];
       snapshot.forEach((doc) => {
@@ -340,20 +353,6 @@ const IDCard: React.FC<IDCardProps> = ({ onRedirect }) => {
 
     return () => unsub();
   }, [currentUser, isAdmin]);
-
-  const checkExistingSubmission = async (email: string) => {
-    try {
-      const docRef = doc(db, 'id_cards', email.toLowerCase());
-      const docSnap = await getDoc(docRef);
-      if (docSnap.exists()) {
-        setExistingSubmission(docSnap.data() as CandidateSubmission);
-      } else {
-        setExistingSubmission(null);
-      }
-    } catch (err) {
-      console.error('Error checking existing submission:', err);
-    }
-  };
 
   const handleLogin = async () => {
     setAuthError('');
@@ -442,7 +441,7 @@ const IDCard: React.FC<IDCardProps> = ({ onRedirect }) => {
       const userRegNo = memberData.registrationNumber || 'NO_REG';
       const userNameStr = sanitize(memberData.name || 'user');
       const userEmailStr = sanitize(currentUser.email || 'email');
-      const timestamp = Date.now();
+      const timestamp = new Date().getTime();
 
       // 1. Upload Identification Photo to 'id-cards' Bucket
       const photoExt = photoFile.name.split('.').pop();
@@ -467,7 +466,7 @@ const IDCard: React.FC<IDCardProps> = ({ onRedirect }) => {
       // 2. Upload Gaming Avatar strictly to 'avatar' Bucket (from file OR fetched from pasted GIF link)
       let avatarPublicUrl = avatarUrlInput.trim();
       if (avatarFile || avatarUrlInput.trim()) {
-        const timestamp = Date.now();
+        const timestamp = new Date().getTime();
         let uploadBlob: Blob | File | null = avatarFile;
         let avatarExt = 'gif';
 

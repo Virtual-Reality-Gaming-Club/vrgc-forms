@@ -49,24 +49,6 @@ export default function VerifyCardClient({
         backgroundGifUrl={scannedMember.avatarUrl || undefined}
       />
 
-      {/* Floating Action Controls */}
-      <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 bg-[#0a0214]/80 backdrop-blur-md px-4 py-2 rounded-full border border-purple-500/30 shadow-[0_0_20px_rgba(168,85,247,0.3)]">
-        <button
-          onClick={() => setReplayKey((k) => k + 1)}
-          className="flex items-center gap-1.5 text-[11px] font-code-sm text-purple-200 hover:text-white uppercase tracking-wider transition-colors"
-        >
-          <span className="material-symbols-outlined text-sm">replay</span>
-          Replay Reveal
-        </button>
-        <div className="w-px h-3 bg-purple-500/30" />
-        <Link
-          href="/"
-          className="flex items-center gap-1.5 text-[11px] font-code-sm text-purple-300 hover:text-white uppercase tracking-wider transition-colors"
-        >
-          <span className="material-symbols-outlined text-sm">home</span>
-          Portal
-        </Link>
-      </div>
     </main>
   );
 }

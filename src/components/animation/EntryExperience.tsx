@@ -18,7 +18,11 @@ const PHASE_ORDER: CardPhase[] = [
 function useIsTouchDevice(): boolean {
   const [isTouch, setIsTouch] = useState(false);
   useEffect(() => {
-    setIsTouch(window.matchMedia('(hover: none)').matches);
+    const isTouchDetected = window.matchMedia('(hover: none)').matches;
+    if (isTouchDetected) {
+      const timer = setTimeout(() => setIsTouch(true), 0);
+      return () => clearTimeout(timer);
+    }
   }, []);
   return isTouch;
 }
@@ -273,9 +277,17 @@ interface EntryExperienceProps {
   onSkip?: () => void;
   /** URL of the member's GIF/avatar image — used as full-screen cover background */
   backgroundGifUrl?: string;
+  /** Optional MP4/WebM video URL of pre-rendered card animation loop for hardware video acceleration */
+  videoBackgroundUrl?: string;
 }
 
-export default function EntryExperience({ targetMember, otherMembers, onSkip, backgroundGifUrl }: EntryExperienceProps) {
+export default function EntryExperience({
+  targetMember,
+  otherMembers,
+  onSkip,
+  backgroundGifUrl,
+  videoBackgroundUrl,
+}: EntryExperienceProps) {
   const [phase, setPhase] = useState<CardPhase>('ENTRY');
   const [selectedMember, setSelectedMember] = useState<Member | null>(targetMember || null);
   const prefersReduced = useReducedMotion();
@@ -288,12 +300,26 @@ export default function EntryExperience({ targetMember, otherMembers, onSkip, ba
     if (next) setPhase(next);
   }, []);
 
+  useEffect(() => {
+    const handleReplay = () => {
+      setPhase('ENTRY');
+    };
+    if (typeof window !== 'undefined') {
+      window.addEventListener('replay-animation', handleReplay);
+    }
+    return () => {
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('replay-animation', handleReplay);
+      }
+    };
+  }, []);
+
   const handleMemberSelected = useCallback((member: Member) => {
     setSelectedMember(member);
   }, []);
 
   const isRevealPhase = ['AVATAR_REVEAL','PROFILE_EXPAND','COMPLETE'].includes(phase);
-  const isProfileVisible = ['PROFILE_EXPAND','COMPLETE'].includes(phase);
+  const isProfileVisible = ['CARD_FLIP','AVATAR_REVEAL','PROFILE_EXPAND','COMPLETE'].includes(phase);
   const isShuffling = ['ROTATING_SHUFFLE','SHUFFLE_ACCELERATE'].includes(phase);
   const showBurst = phase === 'CARD_PICK';
   const showRing = ['CARD_PICK','CARD_FLIP'].includes(phase);
@@ -321,13 +347,35 @@ export default function EntryExperience({ targetMember, otherMembers, onSkip, ba
         touchAction: 'pan-y',
       }}
     >
-      {/* ── GIF FULL-SCREEN COVER BACKGROUND ── */}
-      {/* Pre-loaded immediately so it's ready when reveal starts, but opacity stays 0 until reveal */}
-      {backgroundGifUrl && (
-        /* GIF layer — fixed, object-fit:cover, covers full viewport on all screen sizes */
+      {/* ── PRE-RENDERED MP4/WEBM VIDEO BACKGROUND (IF PROVIDED) ── */}
+      {videoBackgroundUrl && (
+        <video
+          src={videoBackgroundUrl}
+          autoPlay
+          loop
+          muted
+          playsInline
+          aria-hidden="true"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            width: '100%',
+            height: '100%',
+            objectFit: 'cover',
+            objectPosition: 'center',
+            zIndex: -1,
+            opacity: 0.5,
+            filter: 'blur(12px)',
+            pointerEvents: 'none',
+          }}
+        />
+      )}
+
+      {/* ── FULL-SCREEN AVATAR GIF COVER BACKGROUND ── */}
+      {!videoBackgroundUrl && (backgroundGifUrl || selectedMember?.avatarUrl || targetMember?.avatarUrl) && (
         <img
-          src={backgroundGifUrl}
-          alt=""
+          src={backgroundGifUrl || selectedMember?.avatarUrl || targetMember?.avatarUrl || ''}
+          alt="Avatar GIF Fullscreen Background"
           aria-hidden="true"
           referrerPolicy="no-referrer"
           onLoad={() => setGifLoaded(true)}
@@ -337,14 +385,14 @@ export default function EntryExperience({ targetMember, otherMembers, onSkip, ba
             width: '100%',
             height: '100%',
             objectFit: 'cover',
-            objectPosition: 'center top',
+            objectPosition: 'center',
             zIndex: -1,
-            // Only reveal after AVATAR_REVEAL phase — stays invisible during entire shuffle
-            opacity: (gifLoaded && isRevealPhase) ? 0.42 : 0,
-            transition: 'opacity 1.4s ease-in-out',
+            opacity: isRevealPhase ? 0.52 : 0.32,
+            filter: 'blur(16px) brightness(1.05) contrast(1.1)',
+            transform: 'scale(1.08)',
+            transition: 'opacity 1.2s ease-in-out, filter 1.2s ease-in-out',
             pointerEvents: 'none',
-            transform: 'scale(1.02)',
-            willChange: 'opacity',
+            willChange: 'opacity, filter',
           }}
         />
       )}

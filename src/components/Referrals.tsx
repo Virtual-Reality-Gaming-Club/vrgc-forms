@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { CONFIG } from '../lib/config';
 import { auth, googleProvider, db } from '../lib/firebase';
 import { signInWithPopup, signOut, onAuthStateChanged, User } from 'firebase/auth';
@@ -50,7 +50,6 @@ const Referrals: React.FC<ReferralsProps> = ({ onRedirect }) => {
   const [registrationNumber, setRegistrationNumber] = useState<string>('');
   const [email, setEmail] = useState<string>('');
   const [phone, setPhone] = useState<string>('');
-  const [referrerInfo, setReferrerInfo] = useState<MemberData | null>(null);
   const [adminEmails, setAdminEmails] = useState<string[]>([]);
 
   // Referral DB & Loading states
@@ -157,14 +156,22 @@ const Referrals: React.FC<ReferralsProps> = ({ onRedirect }) => {
     loadCSVData();
   }, []);
 
+  const loadLocalStorageReferrals = () => {
+    if (typeof window === 'undefined') return;
+    const local = localStorage.getItem(LOCAL_DB_KEY);
+    if (local) {
+      setReferrals(JSON.parse(local));
+    }
+  };
+
   useEffect(() => {
-    let unsubscribe = () => {};
+    let unsubscribe: () => void = () => {};
     try {
       const q = query(collection(db, 'referrals'), orderBy('timestamp', 'desc'));
       unsubscribe = onSnapshot(q, (snapshot) => {
         const docs: ReferralRecord[] = [];
-        snapshot.forEach((doc) => {
-          docs.push({ id: doc.id, ...doc.data() });
+        snapshot.forEach((d) => {
+          docs.push({ id: d.id, ...d.data() } as ReferralRecord);
         });
         setReferrals(docs);
         if (typeof window !== 'undefined') {
@@ -178,25 +185,18 @@ const Referrals: React.FC<ReferralsProps> = ({ onRedirect }) => {
       });
     } catch (err) {
       console.error("Failed to initialize Firestore listener:", err);
-      loadLocalStorageReferrals();
-      setIsConnectionOffline(true);
+      setTimeout(() => {
+        loadLocalStorageReferrals();
+        setIsConnectionOffline(true);
+      }, 0);
     }
 
     return () => unsubscribe();
   }, []);
 
-  const loadLocalStorageReferrals = () => {
-    if (typeof window === 'undefined') return;
-    const local = localStorage.getItem(LOCAL_DB_KEY);
-    if (local) {
-      setReferrals(JSON.parse(local));
-    }
-  };
-
   useEffect(() => {
     if (members.length === 0 && adminEmails.length === 0) return;
 
-    setAuthLoading(true);
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (user) {
         const lowerEmail = (user.email || '').toLowerCase();
@@ -219,23 +219,19 @@ const Referrals: React.FC<ReferralsProps> = ({ onRedirect }) => {
     return () => unsubscribe();
   }, [members, adminEmails]);
 
-  useEffect(() => {
+  const referrerInfo = useMemo(() => {
     if (currentUser && isAuthorized && members.length > 0) {
       const matched = members.find(
         m => m.Email && m.Email.toLowerCase() === (currentUser.email || '').toLowerCase()
       );
-      if (matched) {
-        setReferrerInfo(matched);
-      } else {
-        setReferrerInfo({
-          Name: currentUser.displayName || 'VRGC Member',
-          'Registration Number': extractRegNo(currentUser.email),
-          Email: currentUser.email || '',
-        });
-      }
-    } else {
-      setReferrerInfo(null);
+      if (matched) return matched;
+      return {
+        Name: currentUser.displayName || 'VRGC Member',
+        'Registration Number': extractRegNo(currentUser.email),
+        Email: currentUser.email || '',
+      };
     }
+    return null;
   }, [currentUser, isAuthorized, members]);
 
   const handleGoogleSignIn = async () => {
@@ -842,7 +838,7 @@ const Referrals: React.FC<ReferralsProps> = ({ onRedirect }) => {
                       CRITICAL WARNING & DISCIPLINARY POLICY
                     </h4>
                     <p className="font-body-sm text-xs text-slate-300 leading-relaxed">
-                      Submitting false, random, or "for fun" entries is strictly prohibited. If a candidate is found to be imperfect or unsuitable for club operations due to a spam/false referral, <strong className="text-red-400">strict disciplinary actions will be taken against both the applicant and the referring member</strong>.
+                      Submitting false, random, or &quot;for fun&quot; entries is strictly prohibited. If a candidate is found to be imperfect or unsuitable for club operations due to a spam/false referral, <strong className="text-red-400">strict disciplinary actions will be taken against both the applicant and the referring member</strong>.
                     </p>
                   </div>
                 </div>
@@ -1013,7 +1009,7 @@ const Referrals: React.FC<ReferralsProps> = ({ onRedirect }) => {
 
             <div className="space-y-3">
               {getMyReferrals().length === 0 ? (
-                <p className="text-slate-500 text-center py-8">You haven't submitted any candidate referrals yet.</p>
+                <p className="text-slate-500 text-center py-8">You haven&apos;t submitted any candidate referrals yet.</p>
               ) : (
                 getMyReferrals().map((ref, idx) => (
                   <div key={idx} className="p-4 bg-black/50 border border-white/5 rounded-2xl flex items-center justify-between gap-4">
@@ -1215,7 +1211,7 @@ const Referrals: React.FC<ReferralsProps> = ({ onRedirect }) => {
                   Confirm Candidate Action
                 </h3>
                 <p className="text-xs text-slate-300 leading-relaxed">
-                  Are you sure you want to change the status of candidate <strong className="text-white">"{pendingStatusChange.candidateName}"</strong> to <strong className={pendingStatusChange.newStatus.toLowerCase() === 'rejected' ? 'text-red-400' : 'text-green-400'}>{pendingStatusChange.newStatus.toUpperCase()}</strong>?
+                  Are you sure you want to change the status of candidate <strong className="text-white">&quot;{pendingStatusChange.candidateName}&quot;</strong> to <strong className={pendingStatusChange.newStatus.toLowerCase() === 'rejected' ? 'text-red-400' : 'text-green-400'}>{pendingStatusChange.newStatus.toUpperCase()}</strong>?
                 </p>
               </div>
               <div className="flex gap-4 pt-2">

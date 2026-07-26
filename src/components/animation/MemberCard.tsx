@@ -11,6 +11,17 @@ interface MemberCardProps {
 
 // Memoized: prevents re-render on every CardDeck orbital tick (was re-rendering 8 cards × 20 fps)
 const MemberCard = memo(function MemberCard({ member, isRevealed }: MemberCardProps) {
+  // During shuffle: display avatar GIF. After reveal: transition to candidate profile photo.
+  const displayImage = isRevealed
+    ? (member.photoUrl || member.avatarUrl || `https://api.dicebear.com/9.x/shapes/svg?seed=${encodeURIComponent(member.name)}`)
+    : (member.avatarUrl || member.photoUrl || `https://api.dicebear.com/9.x/shapes/svg?seed=${encodeURIComponent(member.name)}`);
+
+  const [imgSrc, setImgSrc] = React.useState<string>(displayImage);
+
+  React.useEffect(() => {
+    setImgSrc(displayImage);
+  }, [displayImage]);
+
   const isSpecial = (member.assignedTeam || '').toLowerCase() === 'student coordinator' || 
                     (member.assignedTeam || '').toLowerCase().includes('president') || 
                     (member.role || '').toLowerCase() === 'student coordinator' || 
@@ -46,27 +57,16 @@ const MemberCard = memo(function MemberCard({ member, isRevealed }: MemberCardPr
         />
       )}
 
-      {/* Card Body */}
+      {/* Card Body — 100% Solid non-transparent background so full-screen background GIF never bleeds through */}
       <div
-        className="relative w-full h-full overflow-hidden rounded-3xl z-10 flex flex-col justify-between p-4 sm:p-5"
+        className="relative w-full h-full overflow-hidden rounded-3xl z-10 flex flex-col justify-between p-4 sm:p-5 bg-[#06010d] opacity-100"
         style={{
-          background: 'linear-gradient(135deg, rgba(18,5,30,0.96), rgba(5,1,10,0.98), rgba(12,4,22,0.96))',
+          backgroundColor: '#06010d',
           border: '1px solid rgba(168,85,247,0.4)',
-          boxShadow: '0 0 50px rgba(168,85,247,0.3), inset 0 1px 0 rgba(192,132,252,0.2)',
+          boxShadow: '0 0 40px rgba(168,85,247,0.35), inset 0 1px 0 rgba(192,132,252,0.2)',
+          isolation: 'isolate',
         }}
       >
-        {/* Uploaded Avatar background watermark */}
-        {member.avatarUrl && (
-          <div className="absolute inset-0 z-0 overflow-hidden pointer-events-none rounded-3xl opacity-20 mix-blend-screen">
-            <img 
-              src={member.avatarUrl} 
-              alt="Uploaded Avatar Watermark" 
-              className="w-full h-full object-cover brightness-120 contrast-110"
-              referrerPolicy="no-referrer"
-            />
-            <div className="absolute inset-0 bg-gradient-to-b from-[#05010a]/50 via-transparent to-[#05010a]/80" />
-          </div>
-        )}
 
         {/* Grid pattern background overlay */}
         <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.008)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.008)_1px,transparent_1px)] bg-[size:10px_10px] pointer-events-none opacity-40" />
@@ -133,34 +133,17 @@ const MemberCard = memo(function MemberCard({ member, isRevealed }: MemberCardPr
             className="relative flex items-center justify-center rounded-2xl border-2 border-[#a855f7]/40 p-1 bg-black/60 shadow-[0_0_25px_rgba(168,85,247,0.3)] overflow-hidden"
             style={{ width: 'clamp(70px, 28vw, 115px)', height: 'clamp(70px, 28vw, 115px)' }}
           >
-            {/* Photo revealed only after card flip completes — not loaded during shuffle */}
-            <AnimatePresence>
-              {isRevealed ? (
-                <motion.img
-                  key="photo"
-                  src={member.photoUrl || member.avatarUrl}
-                  alt={member.name}
-                  className="w-full h-full object-cover rounded-xl"
-                  initial={{ scale: 0.6, opacity: 0 }}
-                  animate={{ scale: 1, opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  transition={{ duration: 0.5, ease: 'easeOut' }}
-                  loading="lazy"
-                />
-              ) : (
-                <motion.img
-                  key="avatar"
-                  src={member.avatarUrl || member.photoUrl}
-                  alt="Avatar"
-                  className="w-full h-full object-cover rounded-xl opacity-80 filter contrast-125 grayscale-[30%]"
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ scale: 1.2, opacity: 0, filter: 'brightness(2)' }}
-                  transition={{ duration: 0.4 }}
-                  loading="lazy"
-                />
-              )}
-            </AnimatePresence>
+            <motion.img
+              src={imgSrc}
+              alt={member.name}
+              className="w-full h-full object-cover rounded-xl brightness-105 contrast-105 shadow-inner"
+              initial={{ scale: 1, opacity: 1 }}
+              animate={{ scale: 1, opacity: 1 }}
+              transition={{ duration: 0.3, ease: 'easeOut' }}
+              loading="eager"
+              // @ts-ignore
+              fetchPriority="high"
+            />
             <div className="absolute bottom-1 right-1 bg-gradient-to-r from-[#a855f7] to-[#cf5cff] text-white text-[5px] font-black px-1 py-0.5 rounded tracking-widest uppercase shadow-md pointer-events-none opacity-90">
               VERIFIED
             </div>

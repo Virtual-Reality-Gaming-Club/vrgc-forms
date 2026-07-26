@@ -2,6 +2,7 @@
 
 import React, { useMemo } from 'react';
 import { motion, useReducedMotion, TargetAndTransition } from 'framer-motion';
+import { cyberAudio } from '../../utils/cyberAudio';
 
 export type CardPhase =
   | 'ENTRY'
@@ -33,6 +34,7 @@ interface AnimatedCardProps {
   phase: CardPhase;
   orbitalPosition: OrbitalPosition;
   avatarUrl?: string;
+  photoUrl?: string;
   children?: React.ReactNode;
 }
 
@@ -43,9 +45,11 @@ export const AnimatedCard: React.FC<AnimatedCardProps> = ({
   phase,
   orbitalPosition,
   avatarUrl,
+  photoUrl,
   children,
 }) => {
   const prefersReduced = useReducedMotion();
+  const [isFlipped, setIsFlipped] = React.useState(false);
 
   const revealX = 0;
   const revealY = 40;
@@ -179,42 +183,16 @@ export const AnimatedCard: React.FC<AnimatedCardProps> = ({
           : {
               x: (index - totalCards / 2) * 40,
               y: 30,
-              scale: 0.5,
-              opacity: 0.08,
+              scale: 0,
+              opacity: 0,
               rotateZ: 0,
               rotateY: 0,
               rotateX: 18,
-              transition: { duration: 0.5 },
+              transition: { duration: 0.3 },
             };
 
       case 'AVATAR_REVEAL':
       case 'PROFILE_EXPAND':
-        return isSelected
-          ? {
-              x: revealX,
-              y: revealY,
-              scale: 1.08,
-              opacity: 1,
-              rotateZ: 0,
-              rotateY: 180,
-              rotateX: 0,
-              transition: {
-                type: 'spring' as const,
-                stiffness: 200,
-                damping: 25,
-              },
-            }
-          : {
-              x: (index - totalCards / 2) * 45,
-              y: 35 + Math.sin(index) * 10,
-              scale: 0.45,
-              opacity: 0.07,
-              rotateZ: (index - totalCards / 2) * 3,
-              rotateY: 0,
-              rotateX: 20,
-              transition: { duration: 0.3 },
-            };
-
       case 'COMPLETE':
         return isSelected
           ? {
@@ -223,30 +201,30 @@ export const AnimatedCard: React.FC<AnimatedCardProps> = ({
               scale: 1.08,
               opacity: 1,
               rotateZ: 0,
-              rotateY: 180,
+              rotateY: isFlipped ? 180 : 0,
               rotateX: 0,
               transition: {
                 type: 'spring' as const,
                 stiffness: 180,
-                damping: 25,
+                damping: 20,
               },
             }
           : {
-              x: (index - totalCards / 2) * 45,
-              y: 35 + Math.sin(index) * 10,
-              scale: 0.4,
-              opacity: 0.06,
-              rotateZ: (index - totalCards / 2) * 3,
+              x: 0,
+              y: 0,
+              scale: 0,
+              opacity: 0,
+              rotateZ: 0,
               rotateY: 0,
-              rotateX: 20,
-              transition: { duration: 0.2 },
+              rotateX: 0,
+              transition: { duration: 0.3 },
             };
 
       default:
         return { x: 0, y: 0, scale: 1, opacity: 1, rotateY: 0, rotateZ: 0, rotateX: 0 };
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phase, isSelected, orbitalPosition.x, orbitalPosition.y, orbitalPosition.scale, orbitalPosition.opacity, orbitalPosition.rotateZ, prefersReduced, index, totalCards]);
+  }, [phase, isSelected, orbitalPosition.x, orbitalPosition.y, orbitalPosition.scale, orbitalPosition.opacity, orbitalPosition.rotateZ, prefersReduced, index, totalCards, isFlipped]);
 
   const isActive =
     isSelected &&
@@ -275,21 +253,27 @@ export const AnimatedCard: React.FC<AnimatedCardProps> = ({
       animate={animateState}
       style={{
         position: 'absolute',
-        width: 'clamp(160px, 52vw, 280px)',
+        width: 'clamp(180px, 58vw, 290px)',
         aspectRatio: '2 / 3',
         transformStyle: 'preserve-3d',
-        // Only include filter in willChange when it's actually animated (removed — no longer used)
+        WebkitTransformStyle: 'preserve-3d',
         willChange: 'transform, opacity',
         zIndex: isActive ? totalCards + 10 : baseZIndex,
+        borderRadius: '1rem',
+        contain: 'layout paint style',
+        transform: 'translateZ(0)',
       }}
     >
-      {/* ═══ FRONT FACE ═══ */}
+      {/* ═══ FRONT FACE (100% Solid Non-Transparent Background) ═══ */}
       <div
-        className="absolute inset-0 rounded-2xl overflow-hidden"
+        className="absolute inset-0 rounded-2xl overflow-hidden bg-[#06010d] opacity-100"
         style={{
+          backgroundColor: '#06010d',
           backfaceVisibility: 'hidden',
           WebkitBackfaceVisibility: 'hidden',
-          transform: 'rotateY(180deg)',
+          transform: 'rotateY(0deg) translateZ(0)',
+          isolation: 'isolate',
+          contain: 'strict',
         }}
       >
         {isRevealed && (
@@ -302,52 +286,17 @@ export const AnimatedCard: React.FC<AnimatedCardProps> = ({
           />
         )}
         
-        <div className="absolute inset-0 z-10 rounded-2xl overflow-hidden">
+        <div 
+          className="absolute inset-0 z-10 rounded-2xl overflow-hidden cursor-pointer"
+          onClick={(e) => {
+            e.stopPropagation();
+            setIsFlipped((prev) => !prev);
+            if (typeof window !== 'undefined') {
+              window.dispatchEvent(new CustomEvent('toggle-dossier'));
+            }
+          }}
+        >
           {children}
-
-          {/* Holographic overlay (only when revealed) */}
-          {isRevealed && (
-            <>
-              <div
-                className="absolute inset-0 pointer-events-none rounded-2xl"
-                style={{
-                  background: `linear-gradient(
-                    125deg,
-                    transparent 0%, transparent 22%,
-                    rgba(216,180,254,0.12) 25%,
-                    rgba(192,132,252,0.12) 28%,
-                    transparent 32%, transparent 68%,
-                    rgba(168,85,247,0.12) 72%,
-                    rgba(216,180,254,0.12) 75%,
-                    transparent 78%, transparent 100%
-                  )`,
-                  backgroundSize: '250% 250%',
-                  animation: 'holographic-shift 4s ease-in-out infinite',
-                  mixBlendMode: 'screen',
-                  zIndex: 30,
-                }}
-              />
-              <div
-                className="absolute inset-0 pointer-events-none rounded-2xl"
-                style={{
-                  background: `linear-gradient(
-                    45deg,
-                    transparent 0%, transparent 20%,
-                    rgba(168,85,247,0.1) 23%,
-                    rgba(124,58,237,0.1) 26%,
-                    transparent 30%, transparent 70%,
-                    rgba(168,85,247,0.1) 73%,
-                    rgba(124,58,237,0.1) 76%,
-                    transparent 80%, transparent 100%
-                  )`,
-                  backgroundSize: '300% 300%',
-                  animation: 'holographic-shift 6s ease-in-out infinite reverse',
-                  mixBlendMode: 'screen',
-                  zIndex: 31,
-                }}
-              />
-            </>
-          )}
 
           {isActive && (
             <div
@@ -375,29 +324,37 @@ export const AnimatedCard: React.FC<AnimatedCardProps> = ({
           WebkitBackfaceVisibility: 'hidden',
         }}
       >
-        {/* Active glow: replaced blur(30px) filter div with box-shadow on the card wrapper.
-            box-shadow is composited by the browser without a raster invalidation. */}
+        {/* Card Back Body — 100% Solid non-transparent background */}
         <div
-          className={`absolute inset-0 rounded-2xl flex items-center justify-center overflow-hidden ${isActive ? 'animate-glow-bloom' : ''}`}
+          className={`absolute inset-0 rounded-2xl flex items-center justify-center overflow-hidden bg-[#06010d] opacity-100 cursor-pointer ${isActive ? 'animate-glow-bloom' : ''}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            setIsFlipped((prev) => !prev);
+            if (typeof window !== 'undefined') {
+              window.dispatchEvent(new CustomEvent('toggle-dossier'));
+            }
+          }}
           style={{
-            backgroundColor: '#05020c',
+            backgroundColor: '#06010d',
             border: isActive ? '1.5px solid #c084fc' : '1.5px solid rgba(168, 85, 247, 0.35)',
             boxShadow: isActive
-              ? '0 0 25px rgba(168,85,247,0.5), 0 8px 32px rgba(0,0,0,0.85)'
-              : '0 4px 20px rgba(0,0,0,0.6), inset 0 1px 0 rgba(192,132,252,0.1)',
-            transition: 'border-color 0.5s ease-in-out',
+              ? '0 0 20px rgba(168,85,247,0.4), 0 6px 24px rgba(0,0,0,0.8)'
+              : '0 4px 16px rgba(0,0,0,0.5)',
+            transition: 'border-color 0.3s ease-in-out',
+            isolation: 'isolate',
+            contain: 'strict',
+            transform: 'translateZ(0)',
           }}
         >
-          {/* Uploaded Avatar image/GIF back background */}
-          {avatarUrl ? (
+          {/* Uploaded Avatar GIF during shuffle, candidate photo after reveal */}
+          {(avatarUrl || photoUrl) ? (
             <div className="absolute inset-0 z-0 overflow-hidden pointer-events-none rounded-2xl">
               <img 
-                src={avatarUrl} 
-                alt="Card Back Avatar" 
-                className="w-full h-full object-cover opacity-90 brightness-110 contrast-105"
+                src={isRevealed ? (photoUrl || avatarUrl) : (avatarUrl || photoUrl)} 
+                alt="Card Back Stream" 
+                className="w-full h-full object-cover"
                 referrerPolicy="no-referrer"
               />
-              <div className="absolute inset-0 bg-[#05010a]/30 bg-gradient-to-b from-transparent via-[#05010a]/40 to-[#05010a]/80" />
             </div>
           ) : (
             <div
@@ -411,28 +368,6 @@ export const AnimatedCard: React.FC<AnimatedCardProps> = ({
               }}
             />
           )}
-
-          {/* Radial depth glow behind card */}
-          <div
-            className="absolute inset-0 pointer-events-none"
-            style={{
-              background:
-                'radial-gradient(circle at 50% 35%, rgba(168,85,247,0.18) 0%, transparent 60%)',
-            }}
-          />
-
-          {/* Center emblem */}
-          <svg
-            className="w-14 h-14 text-purple-400 opacity-25 pointer-events-none"
-            viewBox="0 0 100 100"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.5"
-          >
-            <polygon points="50,5 89,27 89,73 50,95 11,73 11,27" />
-            <polygon points="50,20 72,35 72,65 50,80 28,65 28,35" />
-            <circle cx="50" cy="50" r="7" fill="currentColor" opacity="0.4" />
-          </svg>
 
           {/* Inner frame */}
           <div className="absolute inset-3 rounded-xl border border-purple-500/[0.15] pointer-events-none" />

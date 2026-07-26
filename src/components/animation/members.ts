@@ -11,6 +11,7 @@ export interface Member {
   qrCodeUrl?: string;
   joinDate: string;
   specialization: string;
+  email?: string;
 }
 
 export const MEMBERS: Member[] = [

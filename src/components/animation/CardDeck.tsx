@@ -64,28 +64,23 @@ export default function CardDeck({ phase, onPhaseComplete, onMemberSelected, tar
     return (otherMembers && otherMembers.length > 0) ? otherMembers : MEMBERS;
   }, [otherMembers]);
 
-  const [cardMembers, setCardMembers] = useState<Member[]>(() => {
+  const cardMembers = useMemo<Member[]>(() => {
     if (targetMember) {
       const others = pool.filter(m => m.id !== targetMember.id).slice(0, CARD_COUNT - 1);
       return [targetMember, ...others];
     }
     return pool.slice(0, CARD_COUNT);
-  });
-
-  useEffect(() => {
-    if (targetMember) {
-      const others = pool.filter(m => m.id !== targetMember.id).slice(0, CARD_COUNT - 1);
-      setCardMembers([targetMember, ...others]);
-    } else {
-      setCardMembers(pool.slice(0, CARD_COUNT));
-    }
   }, [targetMember, pool]);
 
   const cardMembersRef = useRef(cardMembers);
-  cardMembersRef.current = cardMembers;
+  useEffect(() => {
+    cardMembersRef.current = cardMembers;
+  }, [cardMembers]);
 
   const onMemberSelectedRef = useRef(onMemberSelected);
-  onMemberSelectedRef.current = onMemberSelected;
+  useEffect(() => {
+    onMemberSelectedRef.current = onMemberSelected;
+  }, [onMemberSelected]);
 
   const [dims, setDims] = useState({ rx: 120, ry: 60 });
   useEffect(() => {
@@ -147,7 +142,7 @@ export default function CardDeck({ phase, onPhaseComplete, onMemberSelected, tar
     };
   }, [phase, dims]);
 
-  const handlePhaseComplete = useCallback(onPhaseComplete, [onPhaseComplete]);
+  const handlePhaseComplete = useCallback((p: CardPhase) => onPhaseComplete(p), [onPhaseComplete]);
 
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -165,8 +160,10 @@ export default function CardDeck({ phase, onPhaseComplete, onMemberSelected, tar
         timer = setTimeout(() => handlePhaseComplete('SHUFFLE_ACCELERATE'), 1800);
         break;
       case 'COLLAPSE':
-        setOrbitalPositions(Array.from({ length: CARD_COUNT }, () => ({ ...NEUTRAL })));
-        timer = setTimeout(() => handlePhaseComplete('COLLAPSE'), 600);
+        timer = setTimeout(() => {
+          setOrbitalPositions(Array.from({ length: CARD_COUNT }, () => ({ ...NEUTRAL })));
+          handlePhaseComplete('COLLAPSE');
+        }, 600);
         break;
       case 'CARD_PICK':
         if (selectedIndexRef.current === -1) {
@@ -211,6 +208,7 @@ export default function CardDeck({ phase, onPhaseComplete, onMemberSelected, tar
           phase={phase}
           orbitalPosition={orbitalPositions[i]}
           avatarUrl={member.avatarUrl}
+          photoUrl={member.photoUrl}
         >
           <MemberCard member={member} isRevealed={i === selectedIndex && ['AVATAR_REVEAL', 'PROFILE_EXPAND', 'COMPLETE'].includes(phase)} />
         </AnimatedCard>

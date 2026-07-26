@@ -13,6 +13,7 @@ import {
   Star,
   ChevronDown,
   ChevronUp,
+  RotateCcw,
 } from 'lucide-react';
 
 const GlobeIcon = ({ size, style }: { size: number; style?: React.CSSProperties }) => (
@@ -90,26 +91,36 @@ export default function ProfileReveal({ member, isVisible, isComplete }: Profile
   const prefersReduced = useReducedMotion();
   const [seqStep, setSeqStep] = useState<number>(0);
   const [scrollProgress, setScrollProgress] = useState<number>(0);
+  const [isDossierOpen, setIsDossierOpen] = useState<boolean>(false);
   const touchStartRef = useRef<number | null>(null);
   // rAF throttle flag: only one scrollProgress update per animation frame
   const rafPendingRef = useRef(false);
 
   useEffect(() => {
-    if (!isVisible) {
-      setSeqStep(0);
-      return;
+    const handleToggleDossier = () => {
+      setIsDossierOpen((prev) => !prev);
+    };
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener('toggle-dossier', handleToggleDossier);
     }
+    return () => {
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('toggle-dossier', handleToggleDossier);
+      }
+    };
+  }, []);
 
-    setSeqStep(0);
-
-    const t1 = setTimeout(() => {
-      setSeqStep(1);
-    }, 550);
-
-    const t2 = setTimeout(() => {
-      setSeqStep(2);
-    }, 1100);
-
+  useEffect(() => {
+    if (!isVisible) {
+      const resetTimer = setTimeout(() => {
+        setSeqStep(0);
+        setIsDossierOpen(false);
+      }, 0);
+      return () => clearTimeout(resetTimer);
+    }
+    const t1 = setTimeout(() => setSeqStep(1), 100);
+    const t2 = setTimeout(() => setSeqStep(2), 900);
     return () => {
       clearTimeout(t1);
       clearTimeout(t2);
@@ -118,9 +129,8 @@ export default function ProfileReveal({ member, isVisible, isComplete }: Profile
 
   const handleWheel = useCallback(
     (e: WheelEvent) => {
-      if (!isVisible || seqStep < 2) return;
+      if (!isVisible) return;
       const delta = e.deltaY * 0.0018;
-      // Throttle to one setState per rAF to avoid flooding the reconciler on fast scroll
       if (!rafPendingRef.current) {
         rafPendingRef.current = true;
         requestAnimationFrame(() => {
@@ -129,25 +139,24 @@ export default function ProfileReveal({ member, isVisible, isComplete }: Profile
         });
       }
     },
-    [isVisible, seqStep]
+    [isVisible]
   );
 
   const handleTouchStart = useCallback(
     (e: TouchEvent) => {
-      if (!isVisible || seqStep < 2) return;
+      if (!isVisible) return;
       touchStartRef.current = e.touches[0].clientY;
     },
-    [isVisible, seqStep]
+    [isVisible]
   );
 
   const handleTouchMove = useCallback(
     (e: TouchEvent) => {
-      if (!isVisible || seqStep < 2 || touchStartRef.current === null) return;
+      if (!isVisible || touchStartRef.current === null) return;
       const currentY = e.touches[0].clientY;
       const diffY = touchStartRef.current - currentY;
       const delta = diffY * 0.0035;
       touchStartRef.current = currentY;
-      // Throttle to one setState per rAF
       if (!rafPendingRef.current) {
         rafPendingRef.current = true;
         requestAnimationFrame(() => {
@@ -156,7 +165,7 @@ export default function ProfileReveal({ member, isVisible, isComplete }: Profile
         });
       }
     },
-    [isVisible, seqStep]
+    [isVisible]
   );
 
   const handleTouchEnd = useCallback(() => {
@@ -164,30 +173,42 @@ export default function ProfileReveal({ member, isVisible, isComplete }: Profile
   }, []);
 
   useEffect(() => {
-    if (!isVisible || seqStep < 2) return;
+    if (!isVisible) return;
+
     window.addEventListener('wheel', handleWheel, { passive: true });
     window.addEventListener('touchstart', handleTouchStart, { passive: true });
     window.addEventListener('touchmove', handleTouchMove, { passive: true });
     window.addEventListener('touchend', handleTouchEnd, { passive: true });
+
     return () => {
       window.removeEventListener('wheel', handleWheel);
       window.removeEventListener('touchstart', handleTouchStart);
       window.removeEventListener('touchmove', handleTouchMove);
       window.removeEventListener('touchend', handleTouchEnd);
     };
-  }, [isVisible, seqStep, handleWheel, handleTouchStart, handleTouchMove, handleTouchEnd]);
+  }, [isVisible, handleWheel, handleTouchStart, handleTouchMove, handleTouchEnd]);
 
   if (!isVisible || !member) return null;
 
   const joinFormatted = member.joinDate ? member.joinDate : '2025';
-  const email = `${member.name.toLowerCase().replace(/\s+/g, '.')}.${member.regNo.toLowerCase()}@vitbhopal.ac.in`;
+  const emailAddress = member.email || `${member.name.toLowerCase().replace(/\s+/g, '.')}.${member.regNo.toLowerCase()}@vitbhopal.ac.in`;
+
+  const showDossier = isDossierOpen || scrollProgress > 0.05;
+  const effectiveProgress = isDossierOpen ? 1 : scrollProgress;
+
+  // Dynamic cyan-blue theme when dossier is open or scrolled
+  const isBlueTheme = showDossier || scrollProgress > 0.1;
+  const accentColor = isBlueTheme ? '#38bdf8' : '#c084fc';
+  const cardBg = isBlueTheme ? 'rgba(4, 16, 38, 0.96)' : 'rgba(8, 3, 20, 0.94)';
+  const cardBorder = isBlueTheme ? '1px solid rgba(56, 189, 248, 0.65)' : '1px solid rgba(168, 85, 247, 0.5)';
+  const cardShadow = isBlueTheme
+    ? '0 0 60px rgba(56, 189, 248, 0.5), inset 0 0 30px rgba(56, 189, 248, 0.2)'
+    : '0 0 50px rgba(168, 85, 247, 0.4), inset 0 0 25px rgba(192, 132, 252, 0.15)';
 
   const titleScale = seqStep === 0 ? 0.75 : 1;
   const titleOpacity = 1;
-  const topHeaderY = seqStep === 0 ? 'calc(50vh - 160px)' : 'clamp(68px, 10vh, 100px)';
-
-  // Dossier panel is interactive only when scrolled in
-  const dossierPointerEvents = scrollProgress > 0.3 ? 'auto' : 'none';
+  const topHeaderY = seqStep === 0 ? 'calc(50vh - 160px)' : 'clamp(24px, 4vh, 45px)';
+  const dossierPointerEvents = showDossier ? 'auto' : 'none';
 
   return (
     <div className="fixed inset-0 pointer-events-none z-30 flex flex-col items-center justify-between overflow-hidden">
@@ -195,8 +216,10 @@ export default function ProfileReveal({ member, isVisible, isComplete }: Profile
       <motion.div
         className="absolute inset-0 pointer-events-none"
         style={{
-          background:
-            'radial-gradient(circle at 50% 50%, rgba(168, 85, 247, 0.25) 0%, rgba(124, 58, 237, 0.15) 45%, rgba(6, 2, 16, 0.95) 85%)',
+          background: isBlueTheme
+            ? 'radial-gradient(circle at 50% 50%, rgba(56, 189, 248, 0.25) 0%, rgba(14, 165, 233, 0.15) 45%, rgba(2, 6, 23, 0.95) 85%)'
+            : 'radial-gradient(circle at 50% 50%, rgba(168, 85, 247, 0.25) 0%, rgba(124, 58, 237, 0.15) 45%, rgba(6, 2, 16, 0.95) 85%)',
+          transition: 'background 0.5s ease-in-out',
         }}
         initial={{ opacity: 0 }}
         animate={{ opacity: scrollProgress > 0.1 ? 0.95 : 0.6 }}
@@ -218,33 +241,35 @@ export default function ProfileReveal({ member, isVisible, isComplete }: Profile
         <motion.div
           className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full mb-2"
           style={{
-            background: 'rgba(147, 51, 234, 0.2)',
-            border: '1px solid rgba(192, 132, 252, 0.45)',
-            boxShadow: '0 0 15px rgba(168, 85, 247, 0.3)',
+            background: isBlueTheme ? 'rgba(56, 189, 248, 0.2)' : 'rgba(147, 51, 234, 0.2)',
+            border: isBlueTheme ? '1px solid rgba(56, 189, 248, 0.5)' : '1px solid rgba(192, 132, 252, 0.45)',
+            boxShadow: isBlueTheme ? '0 0 15px rgba(56, 189, 248, 0.4)' : '0 0 15px rgba(168, 85, 247, 0.3)',
+            transition: 'all 0.5s ease-in-out',
           }}
           initial={{ opacity: 0, y: -10 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.1, duration: 0.3 }}
         >
-          <ShieldCheck size={12} className="text-[#c084fc] animate-pulse" />
-          <span className="font-mono text-[9px] sm:text-[10px] uppercase tracking-widest text-[#d8b4fe] font-semibold">
+          <ShieldCheck size={12} style={{ color: accentColor }} className="animate-pulse" />
+          <span className="font-mono text-[9px] sm:text-[10px] uppercase tracking-widest text-white font-semibold">
             {member.role}
           </span>
         </motion.div>
 
         {/* text-shadow replaces drop-shadow filter — cheaper on mobile GPU */}
         <h1
-          className="font-display-lg font-black text-2xl sm:text-4xl md:text-5xl uppercase tracking-wider text-transparent bg-clip-text bg-gradient-to-r from-white via-[#e879f9] to-[#c084fc]"
+          className="font-display-lg font-black text-2xl sm:text-4xl md:text-5xl uppercase tracking-wider text-transparent bg-clip-text bg-gradient-to-r from-white via-[#7dd3fc] to-[#38bdf8]"
           style={{
             lineHeight: 1.1,
-            textShadow: '0 0 25px rgba(168,85,247,0.85)',
+            textShadow: isBlueTheme ? '0 0 25px rgba(56,189,248,0.85)' : '0 0 25px rgba(168,85,247,0.85)',
+            transition: 'text-shadow 0.5s ease-in-out',
           }}
         >
           {member.name}
         </h1>
 
         <div className="flex items-center gap-2 mt-1.5">
-          <span className="font-mono text-[10px] sm:text-xs text-[#c084fc] uppercase tracking-widest font-semibold">
+          <span className="font-mono text-[10px] sm:text-xs uppercase tracking-widest font-semibold" style={{ color: accentColor }}>
             {member.assignedTeam}
           </span>
           <span className="text-white/30">•</span>
@@ -254,25 +279,24 @@ export default function ProfileReveal({ member, isVisible, isComplete }: Profile
         </div>
       </motion.div>
 
-      {/* FULL DETAILS OVERLAY CANVAS */}
+      {/* FULL DETAILS OVERLAY CANVAS (Dossier specifications card turns blue on scroll) */}
       <motion.div
         className="absolute left-1/2 -translate-x-1/2 w-[92%] sm:w-[85%] max-w-md p-5 rounded-3xl flex flex-col gap-3.5 z-40 text-center"
         style={{
-          bottom: 'clamp(24px, 5vh, 45px)',
-          background: 'rgba(8, 3, 20, 0.94)',
+          bottom: showDossier ? 'clamp(64px, 10vh, 85px)' : 'clamp(24px, 5vh, 45px)',
+          background: cardBg,
           backdropFilter: 'blur(28px)',
           WebkitBackdropFilter: 'blur(28px)',
-          border: '1px solid rgba(168, 85, 247, 0.5)',
-          boxShadow:
-            '0 0 50px rgba(168, 85, 247, 0.4), inset 0 0 25px rgba(192, 132, 252, 0.15)',
-          // pointerEvents managed via React state (not inside animate to avoid JS-only CSS prop issue)
+          border: cardBorder,
+          boxShadow: cardShadow,
           pointerEvents: dossierPointerEvents,
+          transition: 'bottom 0.4s ease-out, background 0.5s ease-in-out, border 0.5s ease-in-out, box-shadow 0.5s ease-in-out',
         }}
-        initial={{ opacity: 0, y: 120, scale: 0.9 }}
+        initial={{ opacity: 0, y: 140, scale: 0.85 }}
         animate={{
-          opacity: seqStep === 2 ? Math.max(0.2, scrollProgress) : 0,
-          y: seqStep === 2 ? (1 - scrollProgress) * 120 : 120,
-          scale: seqStep === 2 ? 0.9 + scrollProgress * 0.1 : 0.9,
+          opacity: showDossier ? Math.max(0.9, effectiveProgress) : 0,
+          y: showDossier ? (1 - effectiveProgress) * 140 : 140,
+          scale: showDossier ? 0.85 + effectiveProgress * 0.15 : 0.85,
         }}
         transition={
           prefersReduced
@@ -280,11 +304,11 @@ export default function ProfileReveal({ member, isVisible, isComplete }: Profile
             : { type: 'spring', stiffness: 200, damping: 25 }
         }
       >
-        <div className="absolute top-0 left-1/4 right-1/4 h-[2px] bg-gradient-to-r from-transparent via-[#c084fc] to-transparent" />
+        <div className="absolute top-0 left-1/4 right-1/4 h-[2px]" style={{ background: `linear-gradient(to right, transparent, ${accentColor}, transparent)` }} />
 
-        <div className="flex items-center justify-between border-b border-[#a855f7]/30 pb-2.5 text-left shrink-0">
-          <span className="font-mono text-[9px] sm:text-[10px] uppercase tracking-widest text-[#c084fc] font-bold">
-            // OFFICIAL DOSSIER SPECIFICATIONS
+        <div className="flex items-center justify-between border-b pb-2.5 text-left shrink-0" style={{ borderColor: isBlueTheme ? 'rgba(56, 189, 248, 0.3)' : 'rgba(168, 85, 247, 0.3)' }}>
+          <span className="font-mono text-[9px] sm:text-[10px] uppercase tracking-widest font-bold" style={{ color: accentColor }}>
+            {'// OFFICIAL DOSSIER SPECIFICATIONS'}
           </span>
           <span className="font-mono text-[9px] text-emerald-400 flex items-center gap-1 font-semibold">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" /> VERIFIED
@@ -292,8 +316,8 @@ export default function ProfileReveal({ member, isVisible, isComplete }: Profile
         </div>
 
         <div className="grid grid-cols-2 gap-2.5 text-left text-xs">
-          <div className="p-2.5 rounded-xl bg-white/[0.03] border border-white/[0.08] hover:border-[#c084fc]/50 transition-colors">
-            <span className="font-mono text-[8px] sm:text-[9px] uppercase tracking-wider text-[#c084fc] flex items-center gap-1">
+          <div className="p-2.5 rounded-xl bg-white/[0.03] border border-white/[0.08] transition-colors">
+            <span className="font-mono text-[8px] sm:text-[9px] uppercase tracking-wider flex items-center gap-1" style={{ color: accentColor }}>
               <Award size={10} /> ROLE
             </span>
             <p className="font-label-caps font-semibold text-xs sm:text-sm text-white mt-0.5 uppercase">
@@ -301,8 +325,8 @@ export default function ProfileReveal({ member, isVisible, isComplete }: Profile
             </p>
           </div>
 
-          <div className="p-2.5 rounded-xl bg-white/[0.03] border border-white/[0.08] hover:border-[#c084fc]/50 transition-colors">
-            <span className="font-mono text-[8px] sm:text-[9px] uppercase tracking-wider text-[#c084fc] flex items-center gap-1">
+          <div className="p-2.5 rounded-xl bg-white/[0.03] border border-white/[0.08] transition-colors">
+            <span className="font-mono text-[8px] sm:text-[9px] uppercase tracking-wider flex items-center gap-1" style={{ color: accentColor }}>
               <Calendar size={10} /> VERIFIED
             </span>
             <p className="font-label-caps font-semibold text-xs sm:text-sm text-white mt-0.5 uppercase">
@@ -311,27 +335,27 @@ export default function ProfileReveal({ member, isVisible, isComplete }: Profile
           </div>
 
           {member.rating !== undefined && (
-            <div className="p-2.5 rounded-xl bg-white/[0.03] border border-white/[0.08] hover:border-[#c084fc]/50 transition-colors">
-              <span className="font-mono text-[8px] sm:text-[9px] uppercase tracking-wider text-[#c084fc] flex items-center gap-1">
+            <div className="p-2.5 rounded-xl bg-white/[0.03] border border-white/[0.08] transition-colors">
+              <span className="font-mono text-[8px] sm:text-[9px] uppercase tracking-wider flex items-center gap-1" style={{ color: accentColor }}>
                 <Star size={10} /> RATING
               </span>
               <div className="flex items-center gap-1.5 mt-0.5">
-                <div className="flex text-[#c084fc] text-xs">
+                <div className="flex text-amber-400 text-xs">
                   {[1, 2, 3, 4, 5].map((s) => (
                     <span key={s} style={{ opacity: s <= Math.round(member.rating!) ? 1 : 0.2 }}>
                       ★
                     </span>
                   ))}
                 </div>
-                <span className="font-code-sm font-bold text-xs text-[#c084fc]">
+                <span className="font-code-sm font-bold text-xs" style={{ color: accentColor }}>
                   {member.rating.toFixed(1)}
                 </span>
               </div>
             </div>
           )}
 
-          <div className="p-2.5 rounded-xl bg-white/[0.03] border border-white/[0.08] hover:border-[#c084fc]/50 transition-colors">
-            <span className="font-mono text-[8px] sm:text-[9px] uppercase tracking-wider text-[#c084fc] flex items-center gap-1">
+          <div className="p-2.5 rounded-xl bg-white/[0.03] border border-white/[0.08] transition-colors">
+            <span className="font-mono text-[8px] sm:text-[9px] uppercase tracking-wider flex items-center gap-1" style={{ color: accentColor }}>
               <Phone size={10} /> CONTACT
             </span>
             <p className="font-label-caps font-semibold text-xs text-white mt-0.5">
@@ -341,51 +365,67 @@ export default function ProfileReveal({ member, isVisible, isComplete }: Profile
         </div>
 
         <div className="p-2.5 rounded-xl bg-white/[0.03] border border-white/[0.08] text-left shrink-0">
-          <span className="font-mono text-[8px] sm:text-[9px] uppercase tracking-wider text-[#c084fc] flex items-center gap-1">
+          <span className="font-mono text-[8px] sm:text-[9px] uppercase tracking-wider flex items-center gap-1" style={{ color: accentColor }}>
             <Mail size={10} /> EMAIL ADDRESS
           </span>
-          <p className="font-label-caps font-semibold text-xs sm:text-sm text-white mt-0.5">
-            {email}
+          <p className="font-label-caps font-semibold text-xs sm:text-sm text-white mt-0.5 break-all">
+            {emailAddress}
           </p>
         </div>
 
-        <div className="pt-2 border-t border-[#a855f7]/30 flex flex-col gap-1.5 shrink-0">
-          <span className="font-mono text-[8px] sm:text-[9px] uppercase tracking-wider text-[#c084fc]/80 text-left">
-            // CONNECT &amp; PORTAL LINKS
+        <div className="pt-2 border-t flex flex-col gap-1.5 shrink-0" style={{ borderColor: isBlueTheme ? 'rgba(56, 189, 248, 0.3)' : 'rgba(168, 85, 247, 0.3)' }}>
+          <span className="font-mono text-[8px] sm:text-[9px] uppercase tracking-wider text-left opacity-80" style={{ color: accentColor }}>
+            {'// CONNECT & PORTAL LINKS'}
           </span>
           <div className="grid grid-cols-2 gap-1.5">
             {SOCIALS.map((s) => (
-              <SocialButton key={s.label} {...s} />
+              <SocialButton key={s.label} {...s} accent={accentColor} />
             ))}
           </div>
         </div>
 
-        <div className="absolute top-2 left-2 w-3 h-3 border-t-2 border-l-2 border-[#c084fc]/70 pointer-events-none" />
-        <div className="absolute top-2 right-2 w-3 h-3 border-t-2 border-r-2 border-[#c084fc]/70 pointer-events-none" />
-        <div className="absolute bottom-2 left-2 w-3 h-3 border-b-2 border-l-2 border-[#c084fc]/70 pointer-events-none" />
-        <div className="absolute bottom-2 right-2 w-3 h-3 border-b-2 border-r-2 border-[#c084fc]/70 pointer-events-none" />
+        <div className="absolute top-2 left-2 w-3 h-3 border-t-2 border-l-2 pointer-events-none" style={{ borderColor: accentColor }} />
+        <div className="absolute top-2 right-2 w-3 h-3 border-t-2 border-r-2 pointer-events-none" style={{ borderColor: accentColor }} />
+        <div className="absolute bottom-2 left-2 w-3 h-3 border-b-2 border-l-2 pointer-events-none" style={{ borderColor: accentColor }} />
+        <div className="absolute bottom-2 right-2 w-3 h-3 border-b-2 border-r-2 pointer-events-none" style={{ borderColor: accentColor }} />
       </motion.div>
 
-      {seqStep === 2 && (
+      {/* BOTTOM ACTION BAR: REPLAY ANIMATION & VRGC PORTAL */}
+      <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 pointer-events-auto flex items-center gap-2.5 px-3 py-1.5 rounded-full border bg-[#04010a]/95 backdrop-blur-md text-white shadow-xl">
+        <button
+          type="button"
+          onClick={() => {
+            if (typeof window !== 'undefined') {
+              window.dispatchEvent(new CustomEvent('replay-animation'));
+            }
+          }}
+          className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/[0.08] hover:bg-white/[0.16] text-[10px] font-mono uppercase tracking-wider font-semibold transition-all active:scale-95 cursor-pointer border border-white/20"
+          style={{ borderColor: accentColor }}
+        >
+          <RotateCcw size={11} style={{ color: accentColor }} />
+          <span>REPLAY</span>
+        </button>
+
         <button
           type="button"
           onClick={() => setScrollProgress((prev) => (prev > 0.5 ? 0 : 1))}
-          className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 pointer-events-auto flex items-center gap-1.5 px-3.5 py-1.5 rounded-full border border-[#a855f7]/60 bg-[#04010a]/95 backdrop-blur-md text-[#d8b4fe] shadow-[0_0_20px_rgba(147,51,234,0.5)] transition-transform active:scale-95 cursor-pointer"
+          className="flex items-center gap-1 px-2.5 py-1 text-[10px] font-mono uppercase tracking-widest font-semibold transition-transform active:scale-95 cursor-pointer"
+          style={{ color: accentColor }}
         >
-          <span className="font-mono text-[9px] sm:text-[10px] uppercase tracking-widest font-semibold">
-            {scrollProgress < 0.1
-              ? 'SWIPE / SCROLL DOWN FOR DOSSIER'
-              : scrollProgress < 0.9
-              ? 'SCROLLING DOSSIER...'
-              : 'SCROLL UP TO CLOSE'}
-          </span>
-          {scrollProgress < 0.9 ? (
-            <ChevronDown size={13} className="animate-bounce text-[#c084fc]" />
-          ) : (
-            <ChevronUp size={13} className="animate-bounce text-[#c084fc]" />
-          )}
+          <span>{showDossier ? 'CLOSE DOSSIER' : 'DOSSIER INFO'}</span>
+          {showDossier ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
         </button>
-      )}
+
+        <a
+          href="https://vrgc.vercel.app/"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#38bdf8]/20 hover:bg-[#38bdf8]/30 text-[10px] font-mono uppercase tracking-wider font-semibold transition-all active:scale-95 cursor-pointer border border-[#38bdf8]/50 text-white text-decoration-none"
+        >
+          <span>VRGC PORTAL</span>
+          <ExternalLink size={10} className="text-[#38bdf8]" />
+        </a>
+      </div>
     </div>
   );
 }

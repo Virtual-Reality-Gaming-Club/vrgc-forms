@@ -36,9 +36,12 @@ export default function WelcomePopup({ phase }: WelcomePopupProps) {
   useEffect(() => {
     const isIntro = ['ENTRY', 'DECK_APPEAR', 'ROTATING_SHUFFLE', 'SHUFFLE_ACCELERATE'].includes(phase);
     if (!isIntro) {
-      setActiveWord(null);
-      setVisible(false);
-      setShowBlast(false);
+      const resetTimer = setTimeout(() => {
+        setActiveWord(null);
+        setVisible(false);
+        setShowBlast(false);
+      }, 0);
+      return () => clearTimeout(resetTimer);
     }
   }, [phase]);
 
