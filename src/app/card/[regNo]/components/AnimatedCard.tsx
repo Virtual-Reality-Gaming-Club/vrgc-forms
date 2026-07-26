@@ -201,17 +201,17 @@ export const AnimatedCard = memo(({
 
       case 'COLLAPSE':
         return {
-          x: (index - totalCards / 2) * 1,
-          y: index * -1.8,
-          scale: 1 - index * 0.01,
+          x: 0,
+          y: 0,
+          scale: 1,
           opacity: 1,
           rotateZ: 0,
           rotateY: 0,
           rotateX: 0,
           transition: {
             type: 'spring' as const,
-            stiffness: 180,
-            damping: 28,
+            stiffness: 220,
+            damping: 26,
           },
         };
 
@@ -219,17 +219,16 @@ export const AnimatedCard = memo(({
         return isSelected
           ? {
               x: 0,
-              y: -80,
-              scale: 1.18,
+              y: 0,
+              scale: 1.08,
               opacity: 1,
               rotateZ: 0,
               rotateY: 0,
-              rotateX: -6,
+              rotateX: 0,
               transition: {
                 type: 'spring' as const,
                 stiffness: 220,
                 damping: 24,
-                delay: 0.15,
               },
             }
           : {
@@ -250,15 +249,15 @@ export const AnimatedCard = memo(({
       case 'CARD_FLIP':
         return isSelected
           ? {
-              x: revealX,
-              y: revealY,
-              scale: 1.18,
+              x: 0,
+              y: 0,
+              scale: 1.08,
               opacity: 1,
               rotateZ: 0,
               rotateY: 0,
               rotateX: 0,
               transition: {
-                duration: 0.65,
+                duration: 0.55,
                 ease: 'easeInOut',
               },
             }
