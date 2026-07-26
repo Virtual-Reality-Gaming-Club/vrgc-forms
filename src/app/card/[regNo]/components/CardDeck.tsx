@@ -232,8 +232,8 @@ export default function CardDeck({
     if (!isOrbiting) return;
 
     const config = phase === 'SHUFFLE_ACCELERATE'
-      ? { speed: 0.064, spread: 1.5, chaos: 0.35 }
-      : { speed: 0.032, spread: 1.0, chaos: 0.1 };
+      ? { speed: 0.045, spread: 1.4, chaos: 0.28 }
+      : { speed: 0.022, spread: 1.0, chaos: 0.08 };
 
     let lastTime = performance.now();
 
@@ -271,35 +271,35 @@ export default function CardDeck({
     let timer: ReturnType<typeof setTimeout> | undefined;
     switch (phase) {
       case 'ENTRY':
-        timer = setTimeout(() => handlePhaseComplete('ENTRY'), 300);
+        timer = setTimeout(() => handlePhaseComplete('ENTRY'), 400);
         break;
       case 'DECK_APPEAR':
-        timer = setTimeout(() => handlePhaseComplete('DECK_APPEAR'), 480);
+        timer = setTimeout(() => handlePhaseComplete('DECK_APPEAR'), 600);
         break;
       case 'ROTATING_SHUFFLE':
-        timer = setTimeout(() => handlePhaseComplete('ROTATING_SHUFFLE'), 1920);
+        timer = setTimeout(() => handlePhaseComplete('ROTATING_SHUFFLE'), 2500);
         break;
       case 'SHUFFLE_ACCELERATE':
-        timer = setTimeout(() => handlePhaseComplete('SHUFFLE_ACCELERATE'), 1080);
+        timer = setTimeout(() => handlePhaseComplete('SHUFFLE_ACCELERATE'), 1400);
         break;
       case 'COLLAPSE':
         setOrbitalPositions(Array.from({ length: cardCount }, () => ({ ...NEUTRAL })));
-        timer = setTimeout(() => handlePhaseComplete('COLLAPSE'), 420);
+        timer = setTimeout(() => handlePhaseComplete('COLLAPSE'), 500);
         break;
       case 'CARD_PICK':
         selectedIndexRef.current = 0;
         setSelectedIndex(0);
         onMemberSelectedRef.current?.(targetMember);
-        timer = setTimeout(() => handlePhaseComplete('CARD_PICK'), 780);
+        timer = setTimeout(() => handlePhaseComplete('CARD_PICK'), 950);
         break;
       case 'CARD_FLIP':
-        timer = setTimeout(() => handlePhaseComplete('CARD_FLIP'), 720);
+        timer = setTimeout(() => handlePhaseComplete('CARD_FLIP'), 900);
         break;
       case 'AVATAR_REVEAL':
-        timer = setTimeout(() => handlePhaseComplete('AVATAR_REVEAL'), 420);
+        timer = setTimeout(() => handlePhaseComplete('AVATAR_REVEAL'), 500);
         break;
       case 'PROFILE_EXPAND':
-        timer = setTimeout(() => handlePhaseComplete('PROFILE_EXPAND'), 600);
+        timer = setTimeout(() => handlePhaseComplete('PROFILE_EXPAND'), 750);
         break;
     }
     return () => { if (timer) clearTimeout(timer); };

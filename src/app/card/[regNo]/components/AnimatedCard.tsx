@@ -96,10 +96,10 @@ export const AnimatedCard = memo(({
           rotateZ: (index - totalCards / 2) * 0.6,
           rotateX: 0,
           transition: {
-            delay: index * 0.055,
+            delay: index * 0.065,
             type: 'spring' as const,
-            stiffness: 300,
-            damping: 22,
+            stiffness: 180,
+            damping: 26,
           },
         };
 
@@ -115,9 +115,9 @@ export const AnimatedCard = memo(({
           rotateX: orbitalPosition.y * 0.12,
           transition: {
             type: 'spring' as const,
-            stiffness: 180,
-            damping: 16,
-            mass: 0.6,
+            stiffness: 120,
+            damping: 22,
+            mass: 0.8,
           },
         };
 
@@ -132,8 +132,8 @@ export const AnimatedCard = memo(({
           rotateX: 0,
           transition: {
             type: 'spring' as const,
-            stiffness: 300,
-            damping: 26,
+            stiffness: 180,
+            damping: 28,
           },
         };
 
@@ -149,9 +149,9 @@ export const AnimatedCard = memo(({
               rotateX: -6,
               transition: {
                 type: 'spring' as const,
-                stiffness: 400,
-                damping: 18,
-                delay: 0.12,
+                stiffness: 220,
+                damping: 24,
+                delay: 0.15,
               },
             }
           : {
@@ -164,7 +164,7 @@ export const AnimatedCard = memo(({
               rotateX: 15,
               transition: {
                 type: 'spring' as const,
-                stiffness: 200,
+                stiffness: 150,
                 damping: 28,
               },
             };
@@ -180,7 +180,7 @@ export const AnimatedCard = memo(({
               rotateY: 0,
               rotateX: 0,
               transition: {
-                duration: 0.45,
+                duration: 0.65,
                 ease: 'easeInOut',
               },
             }
@@ -192,7 +192,7 @@ export const AnimatedCard = memo(({
               rotateZ: 0,
               rotateY: 0,
               rotateX: 18,
-              transition: { duration: 0.5 },
+              transition: { duration: 0.65 },
             };
 
       case 'AVATAR_REVEAL':
@@ -209,8 +209,8 @@ export const AnimatedCard = memo(({
               rotateX: 0,
               transition: {
                 type: 'spring' as const,
-                stiffness: 180,
-                damping: 25,
+                stiffness: 120,
+                damping: 28,
               },
             }
           : {
