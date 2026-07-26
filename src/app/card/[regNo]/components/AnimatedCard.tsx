@@ -87,11 +87,7 @@ export const AnimatedCard = memo(({
 
   const currentAspectRatio = isFlipped ? targetAspectRatio : 2 / 3;
 
-  const cardGifUrl =
-    cardMember?.avatarUrl ||
-    cardMember?.photoUrl ||
-    cardMember?.imageUrl ||
-    `https://api.dicebear.com/9.x/pixel-art/svg?seed=member_${index}&backgroundColor=0a0a0f`;
+  const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
 
   const getState = (): TargetAndTransition => {
     if (prefersReduced) {
@@ -105,16 +101,31 @@ export const AnimatedCard = memo(({
       case 'ENTRY':
         return {
           x: 0,
-          y: 500 + index * 25,
+          y: isMobile ? (index === 0 ? 350 : 0) : (500 + index * 25),
           scale: 0.6,
-          opacity: 0,
+          opacity: isMobile ? (index === 0 ? 0 : 0) : 0,
           rotateY: 0,
-          rotateZ: (index - totalCards / 2) * 4,
+          rotateZ: isMobile ? 0 : (index - totalCards / 2) * 4,
           rotateX: 0,
           transition: { duration: 0 },
         };
 
       case 'DECK_APPEAR':
+        if (isMobile) {
+          // Mobile Optimization: Single top card glides into place while non-top cards stay static behind it
+          return {
+            x: 0,
+            y: index * -1.8,
+            scale: 1 - index * 0.01,
+            opacity: 1,
+            rotateY: 0,
+            rotateZ: 0,
+            rotateX: 0,
+            transition: index === 0
+              ? { type: 'spring' as const, stiffness: 200, damping: 24 }
+              : { duration: 0.1 },
+          };
+        }
         return {
           x: (index - totalCards / 2) * 1.8,
           y: index * -2.5,
