@@ -298,22 +298,20 @@ export default function ProfileReveal({ member, isVisible, isComplete, onReplay 
       </motion.div>
 
       {/* ═══ BOTTOM DETAILS DOSSIER CANVAS ═══ */}
-      <motion.div
+      <div
         ref={dossierRef}
-        animate={{
-          x: '-50%',
-          opacity: seqStep === 2 ? detailsCanvasOpacity : 0,
-        }}
-        transition={{ duration: 0.3 }}
-        className="fixed left-1/2 w-[92%] max-w-[420px] p-4 sm:p-5 rounded-2xl flex flex-col gap-3 overflow-hidden z-40 no-scrollbar pointer-events-auto transition-all duration-300 ease-out"
+        className="fixed left-1/2 w-[92%] max-w-[420px] p-4 sm:p-5 rounded-2xl flex flex-col gap-3 overflow-hidden z-40 no-scrollbar pointer-events-auto"
         style={{
-          top: detailsCanvasTop,
-          maxHeight: '52vh',
+          top: '48vh',
+          maxHeight: '50vh',
           overflowY: 'auto',
           background: '#060212',
           border: '1px solid rgba(147, 51, 234, 0.5)',
           boxShadow: '0 8px 24px rgba(0, 0, 0, 0.95)',
-          willChange: 'top, opacity',
+          transform: showDossier && seqStep === 2 ? 'translate(-50%, 0)' : 'translate(-50%, 120%)',
+          opacity: showDossier && seqStep === 2 ? 1 : 0,
+          transition: 'transform 0.25s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.2s linear',
+          willChange: 'transform, opacity',
         }}
       >
         {/* Header Bar */}
@@ -438,7 +436,7 @@ export default function ProfileReveal({ member, isVisible, isComplete, onReplay 
         <div className="absolute top-2 right-2 w-3 h-3 border-t-2 border-r-2 border-[#c084fc]/70 pointer-events-none" />
         <div className="absolute bottom-2 left-2 w-3 h-3 border-b-2 border-l-2 border-[#c084fc]/70 pointer-events-none" />
         <div className="absolute bottom-2 right-2 w-3 h-3 border-b-2 border-r-2 border-[#c084fc]/70 pointer-events-none" />
-      </motion.div>
+      </div>
 
       {/* ═══ BOTTOM ACTION CONTROLS ═══ */}
       {seqStep === 2 && (

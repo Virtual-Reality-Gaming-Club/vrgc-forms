@@ -87,11 +87,7 @@ export const AnimatedCard = memo(({
 
   const currentAspectRatio = isFlipped ? targetAspectRatio : 2 / 3;
 
-  const cardGifUrl =
-    cardMember?.avatarUrl ||
-    cardMember?.photoUrl ||
-    cardMember?.imageUrl ||
-    `https://api.dicebear.com/9.x/pixel-art/svg?seed=member_${index}&backgroundColor=0a0a0f`;
+  const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
 
   const getState = (): TargetAndTransition => {
     if (prefersReduced) {
@@ -103,6 +99,21 @@ export const AnimatedCard = memo(({
 
     switch (phase) {
       case 'ENTRY':
+        if (isMobile) {
+          // Mobile Entry: Card 1 (non-selected member) is ALREADY static at center (x:0, y:0, opacity:1).
+          // Card 0 (selected target member) starts below screen (y:350, opacity:0).
+          // All other cards (2+) are hidden (opacity:0).
+          return {
+            x: 0,
+            y: index === 0 ? 350 : 0,
+            scale: index === 1 ? 1 : 0.7,
+            opacity: index === 1 ? 1 : 0,
+            rotateY: 0,
+            rotateZ: 0,
+            rotateX: 0,
+            transition: { duration: 0 },
+          };
+        }
         return {
           x: 0,
           y: 500 + index * 25,
@@ -115,6 +126,45 @@ export const AnimatedCard = memo(({
         };
 
       case 'DECK_APPEAR':
+        if (isMobile) {
+          // Card 1: Stays static at center
+          if (index === 1) {
+            return {
+              x: 0,
+              y: 0,
+              scale: 1,
+              opacity: 1,
+              rotateY: 0,
+              rotateZ: 0,
+              rotateX: 0,
+              transition: { duration: 0 },
+            };
+          }
+          // Card 0 (Selected member): Animates up to center, overlapping Card 1
+          if (index === 0) {
+            return {
+              x: 0,
+              y: 0,
+              scale: 1,
+              opacity: 1,
+              rotateY: 0,
+              rotateZ: 0,
+              rotateX: 0,
+              transition: { type: 'spring' as const, stiffness: 180, damping: 22 },
+            };
+          }
+          // Cards 2+: Remain hidden behind until 3D shuffle starts
+          return {
+            x: 0,
+            y: index * -1.5,
+            scale: 1 - index * 0.01,
+            opacity: 0,
+            rotateY: 0,
+            rotateZ: 0,
+            rotateX: 0,
+            transition: { duration: 0 },
+          };
+        }
         return {
           x: (index - totalCards / 2) * 1.8,
           y: index * -2.5,
