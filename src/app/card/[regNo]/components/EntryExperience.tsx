@@ -291,7 +291,7 @@ export default function EntryExperience({ targetMember, csvMembers, databaseMemb
             />
           </div>
           
-          <WelcomePopup phase={phase} />
+          <WelcomePopup phase={phase} isPreloading={isPreloading} />
           <HudOverlay phase={phase} />
         </div>
 

@@ -6,16 +6,19 @@ import type { CardPhase } from './AnimatedCard';
 
 interface WelcomePopupProps {
   phase: CardPhase;
+  isPreloading?: boolean;
 }
 
 type TextStep = 'WELCOME' | 'TO' | 'VRGC' | null;
 
-export default function WelcomePopup({ phase }: WelcomePopupProps) {
+export default function WelcomePopup({ phase, isPreloading = false }: WelcomePopupProps) {
   const [activeWord, setActiveWord] = useState<TextStep>(null);
   const [visible, setVisible] = useState(false);
   const [showBlast, setShowBlast] = useState(false);
 
   useEffect(() => {
+    if (isPreloading) return;
+
     const timers: ReturnType<typeof setTimeout>[] = [];
 
     // 1. WELCOME
@@ -39,7 +42,7 @@ export default function WelcomePopup({ phase }: WelcomePopupProps) {
     timers.push(setTimeout(() => { setActiveWord(null); }, 4800));
 
     return () => timers.forEach(clearTimeout);
-  }, []);
+  }, [isPreloading]);
 
   useEffect(() => {
     const isIntro = ['ENTRY', 'DECK_APPEAR', 'ROTATING_SHUFFLE', 'SHUFFLE_ACCELERATE'].includes(phase);
