@@ -8,6 +8,10 @@ import { collection, addDoc, updateDoc, doc, onSnapshot, query, orderBy } from '
 
 interface ReferralsProps {
   onRedirect: () => void;
+  externalUser?: User | null;
+  externalMemberData?: any;
+  externalIsAdmin?: boolean;
+  externalIsAuthorized?: boolean;
 }
 
 interface MemberData {
@@ -37,7 +41,13 @@ interface ReferralRecord {
 
 const LOCAL_DB_KEY = 'vrgc_referrals_db_v3';
 
-const Referrals: React.FC<ReferralsProps> = ({ onRedirect }) => {
+const Referrals: React.FC<ReferralsProps> = ({
+  onRedirect,
+  externalUser,
+  externalMemberData,
+  externalIsAdmin,
+  externalIsAuthorized,
+}) => {
   // Navigation & Authentication
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [isAuthorized, setIsAuthorized] = useState<boolean>(false);
@@ -71,6 +81,15 @@ const Referrals: React.FC<ReferralsProps> = ({ onRedirect }) => {
   const [adminStatusFilter, setAdminStatusFilter] = useState<string>('All');
   const [showAdminFilters, setShowAdminFilters] = useState<boolean>(true);
   const [syncToastMessage, setSyncToastMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (externalUser !== undefined) {
+      setCurrentUser(externalUser);
+    }
+    if (externalIsAuthorized !== undefined) {
+      setIsAuthorized(externalIsAuthorized);
+    }
+  }, [externalUser, externalIsAuthorized]);
 
   const extractRegNo = (emailAddress?: string | null) => {
     if (!emailAddress) return 'UNKNOWN';
