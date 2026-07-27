@@ -213,12 +213,17 @@ const Referrals: React.FC<ReferralsProps> = ({ onRedirect }) => {
       if (user) {
         const lowerEmail = (user.email || '').toLowerCase();
         const matchedMember = members.some(m => m.Email && m.Email.toLowerCase() === lowerEmail);
-        const matchedAdmin = adminEmails.includes(lowerEmail);
-
-        if (matchedMember || matchedAdmin || true) {
+        // Admins are not allowed to access referral page; only members
+        if (matchedMember) {
           setCurrentUser(user);
           setIsAuthorized(true);
           setAuthError('');
+        } else {
+          // Not a member, sign out and deny access
+          await signOut(auth);
+          setCurrentUser(null);
+          setIsAuthorized(false);
+          setAuthError('Access Denied: Only registered members can access the referral page.');
         }
       } else {
         setCurrentUser(null);

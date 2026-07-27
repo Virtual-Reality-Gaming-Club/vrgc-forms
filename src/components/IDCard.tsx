@@ -8,6 +8,19 @@ import { CONFIG } from '../lib/config';
 
 interface IDCardProps {
   onRedirect: () => void;
+  // External auth from global AuthContext
+  externalUser?: User | null;
+  externalMemberData?: {
+    name: string;
+    registrationNumber: string;
+    phone: string;
+    email: string;
+    team: string;
+    position: string;
+  } | null;
+  externalIsAdmin?: boolean;
+  externalIsAuthorized?: boolean;
+  onLogout?: () => void;
 }
 
 interface MemberData {
@@ -45,7 +58,14 @@ interface AdminActivityLog {
   timestamp: string;
 }
 
-const IDCard: React.FC<IDCardProps> = ({ onRedirect }) => {
+const IDCard: React.FC<IDCardProps> = ({
+  onRedirect,
+  externalUser,
+  externalMemberData,
+  externalIsAdmin = false,
+  externalIsAuthorized = false,
+  onLogout,
+}) => {
   const getAdminDisplayRoleOrTeam = (team?: string, position?: string) => {
     const t = (team || '').toLowerCase();
     const p = (position || '').toLowerCase();
@@ -66,22 +86,26 @@ const IDCard: React.FC<IDCardProps> = ({ onRedirect }) => {
 
   const getQrCodeImageUrl = (regNo?: string, savedQrUrl?: string) => {
     if (savedQrUrl && savedQrUrl.trim()) return savedQrUrl;
-    const origin = typeof window !== 'undefined' ? window.location.origin : (process.env.NEXT_PUBLIC_APP_URL || 'https://vrgcformsbackup.vercel.app');
+    const origin = typeof window !== 'undefined' ? window.location.origin : (process.env.NEXT_PUBLIC_APP_URL || 'https://vrgcforms.vercel.app');
     return `https://api.qrserver.com/v1/create-qr-code/?size=140x140&color=0-0-0&bgcolor=ffffff&data=${encodeURIComponent(`${origin}/card/${regNo || ''}`)}`;
   };
 
   // Authentication & Member Data States
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [isAuthorized, setIsAuthorized] = useState<boolean>(false);
-  const [authLoading, setAuthLoading] = useState<boolean>(true);
+  // When external auth is provided (from the global AuthContext), use it directly.
+  const [currentUser, setCurrentUser] = useState<User | null>(externalUser ?? null);
+  const [isAuthorized, setIsAuthorized] = useState<boolean>(externalIsAuthorized);
+  const [authLoading, setAuthLoading] = useState<boolean>(!externalUser); // skip loading if already authed
   const [authError, setAuthError] = useState<string>('');
-  const [isAdmin, setIsAdmin] = useState<boolean>(false);
+  const [isAdmin, setIsAdmin] = useState<boolean>(externalIsAdmin);
 
   // Tab selections
   const [activeSubTab, setActiveSubTab] = useState<'portal' | 'admin'>('portal');
 
   // Member Fields
-  const [memberData, setMemberData] = useState<MemberData | null>(null);
+  const [memberData, setMemberData] = useState<MemberData | null>(
+    externalMemberData as MemberData | null ?? null
+  );
+
 
   // Form Submission States
   const [photoFile, setPhotoFile] = useState<File | null>(null);
@@ -160,8 +184,7 @@ if (error) {
 
   const handleDeleteLog = async (logId?: string) => {
     if (!logId) return;
-    const userEmail = (currentUser?.email || '').toLowerCase();
-    if (userEmail !== 'abhinav.25bcy10254@vitbhopal.ac.in') {
+    if (!isAdmin) {
       return;
     }
     try {
@@ -224,10 +247,20 @@ if (error) throw error;
   const [loadedMembersList, setLoadedMembersList] = useState<MemberData[]>([]);
 
   // Fetch whitelist admin emails and member roster from CSVs
+  // Skip this entire flow when external auth is provided (handled by AuthContext globally)
   useEffect(() => {
+    if (externalUser) {
+      setCurrentUser(externalUser);
+      setIsAdmin(externalIsAdmin);
+      setIsAuthorized(externalIsAuthorized);
+      setAuthLoading(false);
+      return;
+    }
+
     const fetchCSVData = async () => {
       setAuthLoading(true);
       try {
+
         const adminRes = await fetch('/admins.csv');
         let adminEmailsList: string[] = [];
         if (adminRes.ok) {
@@ -383,13 +416,18 @@ if (error) throw error;
 
   const handleLogout = async () => {
     try {
-      await signOut(auth);
-      setCurrentUser(null);
-      setIsAuthorized(false);
-      setMemberData(null);
-      setExistingSubmission(null);
-      setIsAdmin(false);
-      setActiveSubTab('portal');
+      if (onLogout) {
+        // Use global logout from AuthContext
+        await onLogout();
+      } else {
+        await signOut(auth);
+        setCurrentUser(null);
+        setIsAuthorized(false);
+        setMemberData(null);
+        setExistingSubmission(null);
+        setIsAdmin(false);
+        setActiveSubTab('portal');
+      }
     } catch (err) {
       console.error('Signout error:', err);
     }
@@ -542,7 +580,7 @@ if (error) throw error;
       
       let qrCodePublicUrl = '';
       try {
-        const qrOrigin = typeof window !== 'undefined' ? window.location.origin : (process.env.NEXT_PUBLIC_APP_URL || 'https://vrgcformsbackup.vercel.app');
+        const qrOrigin = typeof window !== 'undefined' ? window.location.origin : (process.env.NEXT_PUBLIC_APP_URL || 'https://vrgcforms.vercel.app');
         const qrContent = `${qrOrigin}/card/${encodeURIComponent(memberData.registrationNumber)}`;
         const qrApiUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&color=0-0-0&bgcolor=ffffff&data=${encodeURIComponent(qrContent)}`;
 

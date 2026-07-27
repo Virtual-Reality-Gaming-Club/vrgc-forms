@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import { AuthProvider } from "@/lib/auth-context";
 
 export const metadata: Metadata = {
   title: "VRGC | Forms Portal",
@@ -17,7 +18,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className="dark">
+    <html lang="en" className="dark" suppressHydrationWarning>
       <head>
         <link rel="icon" type="image/svg+xml" href="/icon.svg" />
         <link
@@ -30,7 +31,9 @@ export default function RootLayout({
         />
       </head>
       <body className="bg-[#05010a] text-[#e2e8f0] antialiased min-h-screen selection:bg-purple-500 selection:text-white">
-        {children}
+        <AuthProvider>
+          {children}
+        </AuthProvider>
       </body>
     </html>
   );
