@@ -722,13 +722,11 @@ const IDCard: React.FC<IDCardProps> = ({
 
     try {
       // Fetch latest active records from Firestore to ensure clean list (excluding deleted entries)
-      const { data, error } = await supabase
-  .from("id_cards")
-  .select("*");
-
-if (error) throw error;
-
-const activeCandidates: CandidateSubmission[] = data || [];
+      const querySnapshot = await getDocs(collection(db, "id_cards"));
+      const activeCandidates: CandidateSubmission[] = querySnapshot.docs.map((d) => ({
+        id: d.id,
+        ...d.data(),
+      })) as CandidateSubmission[];
 
       // Update local state list
       const sortedCandidates = activeCandidates.sort((a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime());
@@ -1797,7 +1795,7 @@ const activeCandidates: CandidateSubmission[] = data || [];
                   <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
                   <span className="text-white/80 font-bold">TOTAL REGISTERED:</span>
                   <span className="text-primary font-black text-sm">{candidates.length}</span>
-                  <span className="text-white/40 font-bold">/ {loadedMembersList.length - 3|| 48}</span>
+                  <span className="text-white/40 font-bold">/ {loadedMembersList.length > 4 ? loadedMembersList.length - 4 : 50}</span>
                 </div>
                 {filteredCandidates.length !== candidates.length && (
                   <div className="text-purple-300/90 text-[11px] font-medium bg-purple-500/10 border border-purple-500/20 px-2.5 py-0.5 rounded-full">
