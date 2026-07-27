@@ -4,9 +4,13 @@ import React from 'react';
 
 interface NavbarProps {
   pageTitle?: string;
+  userEmail?: string | null;
+  isAdmin?: boolean;
+  onLogout?: () => Promise<void>;
+  onLogin?: () => Promise<void>;
 }
 
-const Navbar: React.FC<NavbarProps> = ({ pageTitle = 'Dashboard' }) => {
+const Navbar: React.FC<NavbarProps> = ({ pageTitle = 'Dashboard', userEmail, isAdmin, onLogout, onLogin }) => {
   return (
     <header className="bg-black/85 backdrop-blur-2xl flex justify-between items-center w-full px-3.5 sm:px-6 md:px-12 py-3 sm:py-5 sticky top-0 z-50 border-b border-[#a855f7]/20 shadow-[0_5px_30px_rgba(168,85,247,0.05)] select-none">
       {/* Background cyber grid effect in nav */}
