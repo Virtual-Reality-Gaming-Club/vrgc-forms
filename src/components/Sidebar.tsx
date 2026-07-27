@@ -13,6 +13,7 @@ const Sidebar: React.FC<SidebarProps> = ({ activePage, onPageChange }) => {
     { id: 'dashboard', label: 'Dashboard', icon: 'dashboard' },
     { id: 'referrals', label: 'Referrals', icon: 'share' },
     { id: 'idcard', label: 'ID Card Form', icon: 'badge' },
+    { id: 'payments', label: 'Payments & Dues', icon: 'payments' },
     { id: 'tickets', label: 'Tickets', icon: 'confirmation_number' },
   ];
 

@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Orbitron, Outfit, JetBrains_Mono, Rajdhani } from 'next/font/google';
 import "./globals.css";
+import { AuthProvider } from "@/lib/auth-context";
 
 const orbitron = Orbitron({
   subsets: ['latin'],
@@ -46,7 +47,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className={`dark ${orbitron.variable} ${outfit.variable} ${jetbrainsMono.variable} ${rajdhani.variable}`}>
+    <html lang="en" className={`dark ${orbitron.variable} ${outfit.variable} ${jetbrainsMono.variable} ${rajdhani.variable}`} suppressHydrationWarning>
       <head>
         <link rel="icon" type="image/svg+xml" href="/icon.svg" />
         <link rel="preconnect" href="https://fopyejijjeoumimsdgiz.supabase.co" crossOrigin="anonymous" />
@@ -57,7 +58,9 @@ export default function RootLayout({
         />
       </head>
       <body className="bg-[#05010a] text-[#e2e8f0] antialiased min-h-screen selection:bg-purple-500 selection:text-white">
-        {children}
+        <AuthProvider>
+          {children}
+        </AuthProvider>
       </body>
     </html>
   );
