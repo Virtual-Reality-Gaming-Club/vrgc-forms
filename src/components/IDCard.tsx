@@ -9,6 +9,11 @@ import { CONFIG } from '../lib/config';
 
 interface IDCardProps {
   onRedirect: () => void;
+  externalUser?: User | null;
+  externalMemberData?: any;
+  externalIsAdmin?: boolean;
+  externalIsAuthorized?: boolean;
+  onLogout?: () => Promise<void>;
 }
 
 interface MemberData {
@@ -34,7 +39,14 @@ interface CandidateSubmission {
   status: string;
 }
 
-const IDCard: React.FC<IDCardProps> = ({ onRedirect }) => {
+const IDCard: React.FC<IDCardProps> = ({ 
+  onRedirect,
+  externalUser,
+  externalMemberData,
+  externalIsAdmin,
+  externalIsAuthorized,
+  onLogout
+}) => {
   const getAdminDisplayRoleOrTeam = (team?: string, position?: string) => {
     const t = (team || '').toLowerCase();
     const p = (position || '').toLowerCase();
@@ -216,6 +228,18 @@ const IDCard: React.FC<IDCardProps> = ({ onRedirect }) => {
 
     fetchCSVData();
   }, []);
+
+  useEffect(() => {
+    if (externalUser !== undefined) {
+      setCurrentUser(externalUser);
+    }
+    if (externalIsAuthorized !== undefined) {
+      setIsAuthorized(externalIsAuthorized);
+    }
+    if (externalIsAdmin !== undefined) {
+      setIsAdmin(externalIsAdmin);
+    }
+  }, [externalUser, externalIsAuthorized, externalIsAdmin]);
 
   // Subscribe to real-time updates from 'id_cards' Firestore collection (Admins only)
   useEffect(() => {
