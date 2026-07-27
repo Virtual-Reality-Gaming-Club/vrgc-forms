@@ -220,6 +220,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setAuthError('Unauthorized domain. Add this domain to Firebase Console → Authentication → Authorized Domains.');
       } else if (err?.code === 'auth/popup-closed-by-user') {
         setAuthError('Sign-in popup was closed. Please try again.');
+      } else if (err?.code === 'auth/cancelled-popup-request') {
+        // Ignore or show a subtle message - this happens if user clicks login multiple times quickly
+        setAuthError('Login request already pending or cancelled. Please try again.');
       } else {
         setAuthError(err?.message || 'Failed to sign in.');
       }

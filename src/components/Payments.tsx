@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { PaymentItem, PaymentStatus } from '@/types/payment';
 import {
   fetchPaymentsFromFirestore,
@@ -14,7 +15,7 @@ import {
   PAYMENTS_COLLECTION,
   INVOICES_COLLECTION,
 } from '@/lib/payments';
-import { db } from '@/lib/firebase';
+import { authDb as db } from '@/lib/firebase';
 import { collection, query, where, onSnapshot } from 'firebase/firestore';
 import { User } from 'firebase/auth';
 import {
@@ -271,11 +272,11 @@ const Payments: React.FC<PaymentsProps> = ({
 
     loadTransactionLogs();
 
-    const colRef = collection(db, INVOICES_COLLECTION);
+    const colRef = collection(db, PAYMENTS_COLLECTION);
     const unsubscribe = onSnapshot(colRef, () => {
       loadTransactionLogs();
     }, (err) => {
-      console.warn('Firestore invoices subscription warning:', err);
+      console.warn('Firestore payments subscription warning:', err);
     });
 
     return () => unsubscribe();
@@ -1152,85 +1153,111 @@ const Payments: React.FC<PaymentsProps> = ({
               </span>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
               {campaignGroups.map((group) => (
-                <div
+                <motion.div
                   key={group.key}
-                  className="rounded-xl bg-[#0b0415] border border-purple-500/20 hover:border-purple-500/40 transition-all p-4 flex flex-col gap-4 shadow-lg"
+                  initial={{ opacity: 0, y: 12 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  whileHover={{ y: -2 }}
+                  transition={{ duration: 0.2 }}
+                  className="relative rounded-2xl overflow-hidden group cursor-default"
                 >
-                  {/* Minimal Campaign Card Header */}
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="space-y-0.5 min-w-0">
-                      <span className="text-[9px] font-mono text-purple-400 uppercase tracking-wider">{group.category}</span>
-                      <h3 className="text-sm font-bold text-white truncate">{group.title}</h3>
-                    </div>
-                    <div className="flex items-center gap-2 flex-shrink-0">
-                      <span className="text-base font-black text-white">₹{group.amount.toLocaleString('en-IN')}</span>
-                      {/* Delete entire campaign */}
-                      <button
-                        onClick={() => {
-                          if (confirm(`Delete ALL ${group.totalAssigned} invoice records for "${group.title}"? This cannot be undone.`)) {
-                            group.items.forEach((item) => handleDeletePayment(item.id));
-                          }
-                        }}
-                        title="Delete campaign"
-                        className="p-1.5 text-slate-600 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition-all"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  </div>
+                  {/* Glow border effect */}
+                  <div className={`absolute inset-0 rounded-2xl bg-gradient-to-br opacity-0 group-hover:opacity-100 transition-opacity duration-300 ${
+                    group.percentage >= 80 ? 'from-emerald-500/20 to-teal-500/10'
+                    : group.percentage >= 40 ? 'from-purple-500/20 to-fuchsia-500/10'
+                    : 'from-amber-500/20 to-orange-500/10'
+                  }`} />
+                  <div className="relative bg-[#0a0318] border border-white/[0.07] rounded-2xl p-5 flex flex-col gap-4 shadow-xl">
 
-                  {/* Progress bar */}
-                  <div className="space-y-1">
-                    <div className="flex justify-between text-[11px] font-semibold">
-                      <span className="text-slate-400">₹{group.totalCollected.toLocaleString('en-IN')} collected</span>
-                      <span className="text-purple-300">{group.percentage}% of ₹{group.totalTarget.toLocaleString('en-IN')}</span>
+                    {/* Card Header */}
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex-1 min-w-0">
+                        <span className="text-[9px] font-bold tracking-widest text-purple-400/80 uppercase">{group.category}</span>
+                        <h3 className="text-sm font-extrabold text-white mt-0.5 truncate leading-tight">{group.title}</h3>
+                        {group.due_date && (
+                          <p className="text-[10px] text-slate-500 mt-1 flex items-center gap-1">
+                            <Clock className="w-2.5 h-2.5" />
+                            Due {new Date(group.due_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
+                          </p>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1.5 flex-shrink-0">
+                        <span className="text-xl font-black text-white">₹{group.amount.toLocaleString('en-IN')}</span>
+                        <button
+                          onClick={() => {
+                            if (confirm(`Delete ALL ${group.totalAssigned} invoice records for "${group.title}"? This cannot be undone.`)) {
+                              group.items.forEach((item) => handleDeletePayment(item.id));
+                            }
+                          }}
+                          title="Delete campaign"
+                          className="p-1.5 text-slate-700 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition-all"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     </div>
-                    <div className="w-full h-2 rounded-full bg-white/10 overflow-hidden">
-                      <div
-                        className="h-full rounded-full bg-gradient-to-r from-purple-500 to-emerald-400 transition-all duration-500"
-                        style={{ width: `${Math.min(group.percentage, 100)}%` }}
-                      />
-                    </div>
-                  </div>
 
-                  {/* Counts row */}
-                  <div className="flex items-center gap-2 text-[11px] font-semibold flex-wrap">
-                    <span className="text-slate-400 flex items-center gap-1">
-                      <Users className="w-3 h-3 text-purple-400" />{group.totalAssigned}
-                    </span>
-                    <span className="text-emerald-400 flex items-center gap-1">
-                      <CheckCircle2 className="w-3 h-3" />{group.paidCount} paid
-                    </span>
-                    <span className="text-amber-400 flex items-center gap-1">
-                      <Clock className="w-3 h-3" />{group.pendingCount} pending
-                    </span>
-                    {group.failedCount > 0 && (
-                      <span className="text-rose-400 flex items-center gap-1">
-                        <AlertCircle className="w-3 h-3" />{group.failedCount} failed
+                    {/* Progress */}
+                    <div className="space-y-2">
+                      <div className="flex justify-between items-center">
+                        <span className="text-[11px] font-semibold text-slate-400">₹{group.totalCollected.toLocaleString('en-IN')} / ₹{group.totalTarget.toLocaleString('en-IN')}</span>
+                        <span className={`text-[11px] font-extrabold tabular-nums ${
+                          group.percentage >= 80 ? 'text-emerald-400' : group.percentage >= 40 ? 'text-purple-300' : 'text-amber-400'
+                        }`}>{group.percentage}%</span>
+                      </div>
+                      <div className="w-full h-1.5 rounded-full bg-white/5 overflow-hidden">
+                        <div
+                          className={`h-full rounded-full transition-all duration-700 ${
+                            group.percentage >= 80 ? 'bg-gradient-to-r from-emerald-400 to-teal-400'
+                            : group.percentage >= 40 ? 'bg-gradient-to-r from-purple-500 to-fuchsia-400'
+                            : 'bg-gradient-to-r from-amber-400 to-orange-400'
+                          }`}
+                          style={{ width: `${Math.min(group.percentage, 100)}%` }}
+                        />
+                      </div>
+                    </div>
+
+                    {/* Stats row */}
+                    <div className="flex items-center gap-3 text-[10px] font-bold">
+                      <span className="flex items-center gap-1 text-slate-400">
+                        <Users className="w-3 h-3" />{group.totalAssigned} total
                       </span>
-                    )}
-                  </div>
+                      <span className="flex items-center gap-1 text-emerald-400">
+                        <CheckCircle2 className="w-3 h-3" />{group.paidCount} paid
+                      </span>
+                      <span className="flex items-center gap-1 text-amber-400">
+                        <Clock className="w-3 h-3" />{group.pendingCount} pending
+                      </span>
+                      {group.failedCount > 0 && (
+                        <span className="flex items-center gap-1 text-rose-400">
+                          <AlertCircle className="w-3 h-3" />{group.failedCount} failed
+                        </span>
+                      )}
+                    </div>
 
-                  {/* Action footer */}
-                  <div className="pt-2 border-t border-white/5 flex items-center justify-between gap-2">
-                    <button
-                      onClick={() => handleExportCSV(group.title, true)}
-                      className="px-3 py-1.5 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 border border-emerald-500/20 text-[11px] font-bold transition-all flex items-center gap-1.5"
-                    >
-                      <FileSpreadsheet className="w-3.5 h-3.5" />
-                      Paid CSV
-                    </button>
-                    <button
-                      onClick={() => setActiveRosterCampaign(group)}
-                      className="px-3 py-1.5 rounded-lg bg-purple-600/80 hover:bg-purple-500 text-white text-[11px] font-bold transition-all flex items-center gap-1.5"
-                    >
-                      <Eye className="w-3.5 h-3.5" />
-                      Inspect Roster
-                    </button>
+                    {/* Action footer */}
+                    <div className="pt-3 border-t border-white/[0.06] flex items-center justify-between gap-2">
+                      <motion.button
+                        whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }}
+                        onClick={() => handleExportCSV(group.title, true)}
+                        className="px-3 py-1.5 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/20 text-[11px] font-bold transition-colors flex items-center gap-1.5"
+                      >
+                        <FileSpreadsheet className="w-3.5 h-3.5" />
+                        Paid CSV
+                      </motion.button>
+                      <motion.button
+                        whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }}
+                        onClick={() => setActiveRosterCampaign(group)}
+                        className="px-4 py-1.5 rounded-lg bg-gradient-to-r from-purple-600 to-fuchsia-600 hover:from-purple-500 hover:to-fuchsia-500 text-white text-[11px] font-bold transition-all flex items-center gap-1.5 shadow-[0_0_15px_rgba(168,85,247,0.3)]"
+                      >
+                        <Eye className="w-3.5 h-3.5" />
+                        Inspect Roster
+                      </motion.button>
+                    </div>
                   </div>
-                </div>
+                </motion.div>
               ))}
             </div>
           </div>
@@ -1248,114 +1275,133 @@ const Payments: React.FC<PaymentsProps> = ({
             </p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
             {payments.map((payment) => {
               const isProcessing = processingId === payment.id || payment.status === 'Processing';
               const isPaid = payment.status === 'Paid';
+              const isFailed = payment.status === 'Failed';
 
               return (
-                <div
+                <motion.div
                   key={payment.id}
-                  className={`group relative rounded-2xl bg-[#0e0518]/90 border transition-all duration-300 p-6 flex flex-col justify-between backdrop-blur-md hover:shadow-[0_0_30px_rgba(168,85,247,0.2)] ${
-                    isPaid
-                      ? 'border-emerald-500/30 hover:border-emerald-500/50'
-                      : isProcessing
-                      ? 'border-blue-500/40 hover:border-blue-500/60'
-                      : 'border-purple-500/20 hover:border-purple-500/40'
-                  }`}
+                  initial={{ opacity: 0, y: 16 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  whileHover={{ y: -3 }}
+                  transition={{ duration: 0.2 }}
+                  className="relative rounded-2xl overflow-hidden"
                 >
-                  <div className="space-y-3">
-                    <div className="flex items-start justify-between gap-4">
-                      <div className="space-y-1">
-                        <span className="text-[10px] font-mono text-purple-400 tracking-wider uppercase bg-purple-500/10 px-2 py-0.5 rounded border border-purple-500/20">
-                          {payment.category}
-                        </span>
-                        <h3 className="text-lg font-bold text-white group-hover:text-purple-300 transition-colors">
-                          {payment.title}
-                        </h3>
+                  {/* Ambient glow under the card */}
+                  <div className={`absolute -inset-px rounded-2xl opacity-0 hover:opacity-100 transition-opacity duration-500 ${
+                    isPaid ? 'bg-gradient-to-br from-emerald-500/30 to-teal-500/0'
+                    : isProcessing ? 'bg-gradient-to-br from-blue-500/30 to-cyan-500/0'
+                    : isFailed ? 'bg-gradient-to-br from-rose-500/30 to-rose-500/0'
+                    : 'bg-gradient-to-br from-purple-500/30 to-fuchsia-500/0'
+                  }`} />
+
+                  <div className={`relative h-full bg-gradient-to-b from-[#0f0520] to-[#080211] border rounded-2xl flex flex-col overflow-hidden shadow-2xl ${
+                    isPaid ? 'border-emerald-500/25'
+                    : isProcessing ? 'border-blue-500/30'
+                    : isFailed ? 'border-rose-500/25'
+                    : 'border-purple-500/15 hover:border-purple-500/35'
+                  } transition-colors duration-300`}>
+
+                    {/* Card top accent bar */}
+                    <div className={`h-0.5 w-full ${
+                      isPaid ? 'bg-gradient-to-r from-emerald-500 via-teal-400 to-transparent'
+                      : isProcessing ? 'bg-gradient-to-r from-blue-500 via-cyan-400 to-transparent'
+                      : isFailed ? 'bg-gradient-to-r from-rose-500 via-rose-400 to-transparent'
+                      : 'bg-gradient-to-r from-purple-600 via-fuchsia-500 to-transparent'
+                    }`} />
+
+                    <div className="p-5 flex flex-col gap-4 flex-1">
+
+                      {/* Header */}
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex-1 min-w-0">
+                          <span className={`inline-block text-[9px] font-extrabold tracking-widest uppercase px-2 py-0.5 rounded mb-2 ${
+                            isPaid ? 'text-emerald-400 bg-emerald-500/10 border border-emerald-500/20'
+                            : isProcessing ? 'text-blue-400 bg-blue-500/10 border border-blue-500/20'
+                            : 'text-purple-400 bg-purple-500/10 border border-purple-500/20'
+                          }`}>
+                            {payment.category}
+                          </span>
+                          <h3 className="text-base font-extrabold text-white leading-tight">{payment.title}</h3>
+                          {payment.description && (
+                            <p className="text-[11px] text-slate-500 mt-1.5 line-clamp-2 leading-relaxed">{payment.description}</p>
+                          )}
+                        </div>
+                        {renderStatusBadge(payment.status)}
                       </div>
-                      {renderStatusBadge(payment.status)}
-                    </div>
 
-                    {payment.description && (
-                      <p className="text-xs text-slate-400 line-clamp-2 leading-relaxed">
-                        {payment.description}
-                      </p>
-                    )}
-                  </div>
+                      {/* Amount & Date block */}
+                      <div className="flex items-end justify-between gap-3 bg-black/30 border border-white/[0.05] rounded-xl px-4 py-3">
+                        <div>
+                          <p className="text-[9px] font-bold tracking-widest text-slate-500 uppercase mb-0.5">{isPaid ? 'Amount Paid' : 'Amount Due'}</p>
+                          <p className={`text-2xl font-black tracking-tight ${
+                            isPaid ? 'text-emerald-400' : 'text-white'
+                          }`}>
+                            ₹{Number(payment.amount).toLocaleString('en-IN')}
+                            <span className="text-xs font-normal text-slate-500 ml-1">INR</span>
+                          </p>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-[9px] font-bold tracking-widest text-slate-500 uppercase mb-0.5">{isPaid ? 'Paid On' : 'Due By'}</p>
+                          <p className="text-xs font-semibold text-slate-300 font-mono">
+                            {isPaid && payment.paid_at
+                              ? new Date(payment.paid_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
+                              : payment.due_date
+                              ? new Date(payment.due_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
+                              : 'No Due Date'}
+                          </p>
+                        </div>
+                      </div>
 
-                  <div className="my-5 p-4 rounded-xl bg-surface-container-lowest/60 border border-white/5 flex items-center justify-between">
-                    <div>
-                      <span className="text-[10px] text-slate-400 block font-semibold">AMOUNT DUE</span>
-                      <span className="text-2xl font-black text-white tracking-tight">
-                        ₹{Number(payment.amount).toLocaleString('en-IN')}
-                        <span className="text-xs font-normal text-slate-400 ml-1">INR</span>
-                      </span>
-                    </div>
+                      {/* Action footer */}
+                      <div className="flex items-center justify-between gap-3 pt-1">
+                        <span className="text-[10px] font-mono text-slate-600 truncate">#{payment.id.slice(0, 10)}</span>
 
-                    <div className="text-right">
-                      <span className="text-[10px] text-slate-400 block font-semibold">
-                        {isPaid ? 'PAID ON' : 'DUE DATE'}
-                      </span>
-                      <span className="text-xs font-mono font-medium text-slate-300">
-                        {isPaid && payment.paid_at
-                          ? new Date(payment.paid_at).toLocaleDateString('en-IN', {
-                              day: 'numeric',
-                              month: 'short',
-                              year: 'numeric',
-                            })
-                          : payment.due_date
-                          ? new Date(payment.due_date).toLocaleDateString('en-IN', {
-                              day: 'numeric',
-                              month: 'short',
-                              year: 'numeric',
-                            })
-                          : 'No Due Date'}
-                      </span>
-                    </div>
-                  </div>
-
-                  <div className="pt-2 border-t border-white/5 flex items-center justify-between gap-3">
-                    <div className="text-[11px] font-mono text-slate-500 truncate max-w-[140px]">
-                      ID: {payment.id.slice(0, 12)}...
-                    </div>
-
-                    {isPaid ? (
-                      <button
-                        onClick={() => setReceiptModalPayment(payment)}
-                        className="px-4 py-2 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-xs font-bold transition-all flex items-center gap-1.5"
-                      >
-                        <Receipt className="w-3.5 h-3.5" />
-                        <span>View Receipt</span>
-                      </button>
-                    ) : (
-                      <button
-                        disabled={isProcessing}
-                        onClick={() => handlePayNow(payment)}
-                        className={`px-5 py-2.5 rounded-xl font-bold text-xs shadow-lg transition-all flex items-center gap-2 ${
-                          isProcessing
-                            ? 'bg-blue-600/50 text-white cursor-wait opacity-80'
-                            : 'bg-gradient-to-r from-purple-600 to-fuchsia-600 hover:from-purple-500 hover:to-fuchsia-500 text-white shadow-[0_0_20px_rgba(168,85,247,0.4)] hover:scale-102 active:scale-98'
-                        }`}
-                      >
-                        {isProcessing ? (
-                          <>
-                            <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                            <span>Processing...</span>
-                          </>
+                        {isPaid ? (
+                          <motion.button
+                            whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }}
+                            onClick={() => setReceiptModalPayment(payment)}
+                            className="px-4 py-2 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-xs font-bold transition-all flex items-center gap-1.5"
+                          >
+                            <Receipt className="w-3.5 h-3.5" />
+                            View Receipt
+                          </motion.button>
                         ) : (
-                          <>
-                            <CreditCard className="w-4 h-4" />
-                            <span>Pay Now (₹{payment.amount})</span>
-                          </>
+                          <motion.button
+                            whileHover={!isProcessing ? { scale: 1.03 } : {}}
+                            whileTap={!isProcessing ? { scale: 0.97 } : {}}
+                            disabled={isProcessing}
+                            onClick={() => handlePayNow(payment)}
+                            className={`px-5 py-2.5 rounded-xl font-bold text-sm flex items-center gap-2 transition-all ${
+                              isProcessing
+                                ? 'bg-blue-600/40 text-blue-200 cursor-wait border border-blue-500/20'
+                                : 'bg-gradient-to-r from-purple-600 to-fuchsia-600 hover:from-purple-500 hover:to-fuchsia-500 text-white shadow-[0_0_25px_rgba(168,85,247,0.35)]'
+                            }`}
+                          >
+                            {isProcessing ? (
+                              <>
+                                <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                                <span>Processing...</span>
+                              </>
+                            ) : (
+                              <>
+                                <CreditCard className="w-4 h-4" />
+                                <span>Pay ₹{Number(payment.amount).toLocaleString('en-IN')}</span>
+                              </>
+                            )}
+                          </motion.button>
                         )}
-                      </button>
-                    )}
+                      </div>
+                    </div>
                   </div>
-                </div>
+                </motion.div>
               );
             })}
           </div>
+
         )
       )}
 
@@ -1507,80 +1553,138 @@ const Payments: React.FC<PaymentsProps> = ({
       )}
 
       {/* Helper type function */}
-      {/* Receipt Modal */}
-      {receiptModalPayment && (
-        <div className="fixed inset-0 z-[120] bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200">
-          <div className="bg-[#0e0518] border border-emerald-500/40 rounded-3xl max-w-lg w-full p-6 md:p-8 space-y-6 shadow-[0_0_50px_rgba(16,185,129,0.2)] relative">
-            <button
-              onClick={() => setReceiptModalPayment(null)}
-              className="absolute top-4 right-4 p-2 text-slate-400 hover:text-white rounded-full bg-white/5 hover:bg-white/10 transition-all"
+      {/* Premium Digital Receipt Modal */}
+      <AnimatePresence>
+        {receiptModalPayment && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[120] bg-black/80 backdrop-blur-md flex items-center justify-center p-4"
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0, y: 20 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.9, opacity: 0, y: 20 }}
+              transition={{ type: "spring", damping: 25, stiffness: 300 }}
+              className="bg-gradient-to-b from-[#1a0f2e] to-[#0e0518] border border-purple-500/30 rounded-[2rem] max-w-md w-full p-1 relative shadow-[0_0_80px_rgba(168,85,247,0.15)] overflow-hidden"
             >
-              <X className="w-5 h-5" />
-            </button>
+              {/* Background ambient glow */}
+              <div className="absolute top-0 left-1/2 -translate-x-1/2 w-full h-1/2 bg-emerald-500/20 blur-[80px] rounded-full pointer-events-none"></div>
 
-            <div className="text-center space-y-2">
-              <div className="w-14 h-14 rounded-full bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center mx-auto text-emerald-400 shadow-[0_0_20px_rgba(16,185,129,0.3)]">
-                <CheckCircle2 className="w-8 h-8" />
-              </div>
-              <h3 className="text-2xl font-black text-white">Payment Receipt</h3>
-              <p className="text-xs text-emerald-400 font-semibold">Payment Confirmed & Synchronized with Supabase</p>
-            </div>
+              <div className="bg-[#0e0518]/90 backdrop-blur-xl rounded-[1.8rem] p-8 relative z-10">
+                <button
+                  onClick={() => setReceiptModalPayment(null)}
+                  className="absolute top-4 right-4 p-2 text-slate-400 hover:text-white rounded-full hover:bg-white/10 transition-all"
+                >
+                  <X className="w-5 h-5" />
+                </button>
 
-            <div className="space-y-3 bg-surface-container-lowest/80 border border-white/10 rounded-2xl p-4 text-xs">
-              <div className="flex justify-between py-1.5 border-b border-white/5">
-                <span className="text-slate-400">Payment Title</span>
-                <span className="text-white font-bold">{receiptModalPayment.title}</span>
-              </div>
-              <div className="flex justify-between py-1.5 border-b border-white/5">
-                <span className="text-slate-400">Payer Email</span>
-                <span className="text-purple-300 font-mono">{receiptModalPayment.user_email || 'N/A'}</span>
-              </div>
-              <div className="flex justify-between py-1.5 border-b border-white/5">
-                <span className="text-slate-400">Category</span>
-                <span className="text-purple-300 font-semibold">{receiptModalPayment.category}</span>
-              </div>
-              <div className="flex justify-between py-1.5 border-b border-white/5">
-                <span className="text-slate-400">Amount Paid</span>
-                <span className="text-emerald-400 font-extrabold text-sm">
-                  ₹{Number(receiptModalPayment.amount).toLocaleString('en-IN')} INR
-                </span>
-              </div>
-              <div className="flex justify-between py-1.5 border-b border-white/5">
-                <span className="text-slate-400">Razorpay Payment ID</span>
-                <span className="text-slate-200 font-mono">{receiptModalPayment.razorpay_payment_id || 'N/A'}</span>
-              </div>
-              <div className="flex justify-between py-1.5 border-b border-white/5">
-                <span className="text-slate-400">Razorpay Order ID</span>
-                <span className="text-slate-200 font-mono">{receiptModalPayment.razorpay_order_id || 'N/A'}</span>
-              </div>
-              <div className="flex justify-between py-1.5">
-                <span className="text-slate-400">Timestamp</span>
-                <span className="text-slate-300 font-mono">
-                  {receiptModalPayment.paid_at
-                    ? new Date(receiptModalPayment.paid_at).toLocaleString('en-IN')
-                    : 'N/A'}
-                </span>
-              </div>
-            </div>
+                {/* Success Header */}
+                <div className="text-center space-y-4 mb-8">
+                  <motion.div
+                    initial={{ scale: 0 }}
+                    animate={{ scale: 1 }}
+                    transition={{ type: "spring", damping: 15, stiffness: 200, delay: 0.2 }}
+                    className="w-20 h-20 rounded-full bg-emerald-500/10 border border-emerald-500/40 flex items-center justify-center mx-auto text-emerald-400 shadow-[0_0_30px_rgba(16,185,129,0.3)] relative"
+                  >
+                    <motion.div
+                      animate={{ opacity: [0.5, 1, 0.5], scale: [1, 1.2, 1] }}
+                      transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
+                      className="absolute inset-0 rounded-full bg-emerald-500/20 blur-md"
+                    ></motion.div>
+                    <CheckCircle2 className="w-10 h-10 relative z-10" />
+                  </motion.div>
+                  
+                  <div>
+                    <h3 className="text-3xl font-black text-transparent bg-clip-text bg-gradient-to-r from-emerald-400 to-teal-200">
+                      Payment Successful
+                    </h3>
+                    <p className="text-xs text-emerald-400/80 font-mono tracking-widest uppercase mt-2">
+                      Transaction Verified & Synced
+                    </p>
+                  </div>
+                </div>
 
-            <div className="flex gap-3">
-              <button
-                onClick={() => window.print()}
-                className="flex-1 py-3 rounded-xl bg-white/10 hover:bg-white/20 text-white font-bold text-xs transition-all flex items-center justify-center gap-2"
-              >
-                <Download className="w-4 h-4" />
-                <span>Print Receipt</span>
-              </button>
-              <button
-                onClick={() => setReceiptModalPayment(null)}
-                className="flex-1 py-3 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs shadow-[0_0_20px_rgba(168,85,247,0.4)] transition-all"
-              >
-                Done
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+                {/* Digital Ticket / Receipt Details */}
+                <div className="relative">
+                  {/* Dashed line separator mimicking a ticket */}
+                  <div className="absolute -top-4 -left-8 -right-8 border-t-2 border-dashed border-white/10"></div>
+                  
+                  <div className="space-y-4 bg-black/40 border border-white/5 rounded-2xl p-5 text-sm mt-4 relative overflow-hidden">
+                    {/* Subtle watermark */}
+                    <div className="absolute -bottom-8 -right-8 opacity-5 rotate-12 pointer-events-none">
+                       <CheckCircle2 className="w-48 h-48 text-white" />
+                    </div>
+
+                    <div className="flex flex-col gap-1 pb-3 border-b border-white/5">
+                      <span className="text-[10px] text-slate-500 font-bold tracking-wider uppercase">Item / Campaign</span>
+                      <span className="text-white font-semibold">{receiptModalPayment.title}</span>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4 pb-3 border-b border-white/5">
+                      <div className="flex flex-col gap-1">
+                        <span className="text-[10px] text-slate-500 font-bold tracking-wider uppercase">Amount Paid</span>
+                        <span className="text-emerald-400 font-black text-lg">
+                          ₹{Number(receiptModalPayment.amount).toLocaleString('en-IN')}
+                        </span>
+                      </div>
+                      <div className="flex flex-col gap-1 text-right">
+                        <span className="text-[10px] text-slate-500 font-bold tracking-wider uppercase">Category</span>
+                        <span className="text-purple-300 font-medium">{receiptModalPayment.category}</span>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2 pt-1">
+                      <div className="flex justify-between items-center">
+                        <span className="text-[10px] text-slate-500 font-bold tracking-wider uppercase">Payer</span>
+                        <span className="text-slate-300 font-mono text-xs">{receiptModalPayment.user_email || 'N/A'}</span>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span className="text-[10px] text-slate-500 font-bold tracking-wider uppercase">Txn ID</span>
+                        <span className="text-slate-400 font-mono text-[10px] bg-white/5 px-2 py-1 rounded">
+                          {receiptModalPayment.razorpay_payment_id || 'N/A'}
+                        </span>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span className="text-[10px] text-slate-500 font-bold tracking-wider uppercase">Date</span>
+                        <span className="text-slate-400 text-xs font-medium">
+                          {receiptModalPayment.paid_at
+                            ? new Date(receiptModalPayment.paid_at).toLocaleString('en-IN', {
+                                day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit'
+                              })
+                            : 'N/A'}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Actions */}
+                <div className="flex gap-3 mt-8">
+                  <motion.button
+                    whileHover={{ scale: 1.02 }}
+                    whileTap={{ scale: 0.98 }}
+                    onClick={() => window.print()}
+                    className="flex-1 py-3.5 rounded-xl border border-white/10 hover:bg-white/5 text-white font-bold text-sm transition-colors flex items-center justify-center gap-2"
+                  >
+                    <Download className="w-4 h-4" />
+                    Download
+                  </motion.button>
+                  <motion.button
+                    whileHover={{ scale: 1.02 }}
+                    whileTap={{ scale: 0.98 }}
+                    onClick={() => setReceiptModalPayment(null)}
+                    className="flex-1 py-3.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-white font-bold text-sm shadow-[0_0_20px_rgba(16,185,129,0.3)] transition-all"
+                  >
+                    Done
+                  </motion.button>
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Admin Assign Due to Single Member Modal */}
       {showCreateModal && isAdminState && (

@@ -1,4 +1,4 @@
-import { db } from './firebase';
+import { authDb as db } from './firebase';
 import {
   collection,
   addDoc,
@@ -225,21 +225,9 @@ export async function saveInvoiceToFirestore(invoice: {
   status: PaymentStatus;
   due_date?: string;
 }): Promise<string | null> {
-  try {
-    const docRef = await addDoc(collection(db, INVOICES_COLLECTION), {
-      ...invoice,
-      user_email: invoice.user_email.toLowerCase(),
-      payment_title: invoice.title,
-      currency: invoice.currency || 'INR',
-      created_at: serverTimestamp(),
-      updated_at: serverTimestamp(),
-      source: 'vrgc-forms',
-    });
-    return docRef.id;
-  } catch (err) {
-    console.warn('Firestore invoice write failed:', err);
-    return null;
-  }
+  // We no longer mirror to a separate invoices collection.
+  // The 'payments' collection is the single source of truth.
+  return invoice.payment_id || null;
 }
 
 /**
@@ -260,16 +248,8 @@ export async function saveTransactionToFirestore(tx: {
   paid_at?: string;
 }): Promise<string | null> {
   try {
-    const docRef = await addDoc(collection(db, INVOICES_COLLECTION), {
-      ...tx,
-      user_email: tx.user_email.toLowerCase(),
-      currency: tx.currency || 'INR',
-      created_at: serverTimestamp(),
-      updated_at: serverTimestamp(),
-      source: 'vrgc-forms',
-    });
-
-    // Also update corresponding doc in `payments` collection if payment_id is provided
+    // Instead of creating a new log in 'invoices', we only update the main payment document.
+    // This ensures there is only 1 row per payment that gets updated automatically.
     if (tx.payment_id) {
       await updatePaymentStatusInFirestore(tx.payment_id, {
         status: tx.status as PaymentStatus,
@@ -278,11 +258,11 @@ export async function saveTransactionToFirestore(tx: {
         razorpay_signature: tx.razorpay_signature || '',
         paid_at: tx.paid_at || new Date().toISOString(),
       });
+      return tx.payment_id;
     }
-
-    return docRef.id;
+    return null;
   } catch (err) {
-    console.warn('Firestore transaction write failed:', err);
+    console.warn('Firestore transaction update failed:', err);
     return null;
   }
 }
@@ -291,46 +271,39 @@ export async function saveTransactionToFirestore(tx: {
  * Fetch invoice / transaction logs from Firestore `invoices` collection.
  */
 export async function fetchInvoicesFromFirestore(
-  userEmail?: string,
+  email: string,
   isAdmin: boolean = false
 ): Promise<TransactionLog[]> {
   try {
-    const colRef = collection(db, INVOICES_COLLECTION);
-    let q;
-
-    if (!isAdmin && userEmail && userEmail.trim()) {
-      q = query(colRef, where('user_email', '==', userEmail.toLowerCase()));
-    } else {
-      q = query(colRef);
-    }
+    const colRef = collection(db, PAYMENTS_COLLECTION);
+    
+    const q = isAdmin
+      ? query(colRef, orderBy('created_at', 'desc'))
+      : query(colRef, where('user_email', '==', email.toLowerCase()), orderBy('created_at', 'desc'));
 
     const snapshot = await getDocs(q);
     const logs: TransactionLog[] = [];
 
     snapshot.forEach((docSnap) => {
-      const data: any = docSnap.data();
+      const data = docSnap.data();
       logs.push({
         id: docSnap.id,
-        payment_id: data.payment_id || '',
+        payment_id: docSnap.id,
         user_email: data.user_email || '',
-        payment_title: data.payment_title || data.title || '',
+        payment_title: data.title || '',
         amount: Number(data.amount) || 0,
         currency: data.currency || 'INR',
-        status: data.status || 'Pending',
-        razorpay_order_id: data.razorpay_order_id || '',
+        status: (data.status as any) || 'Pending',
         razorpay_payment_id: data.razorpay_payment_id || '',
-        razorpay_signature: data.razorpay_signature || '',
-        payment_method: data.payment_method || 'Razorpay Online',
+        razorpay_order_id: data.razorpay_order_id || '',
         error_description: data.error_description || '',
-        paid_at: data.paid_at || '',
         created_at: data.created_at?.toDate ? data.created_at.toDate().toISOString() : data.created_at || new Date().toISOString(),
-        updated_at: data.updated_at?.toDate ? data.updated_at.toDate().toISOString() : data.updated_at || new Date().toISOString(),
       });
     });
 
-    return logs.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+    return logs;
   } catch (err) {
-    console.error('Failed to fetch invoices from Firestore:', err);
+    console.error('Failed to fetch transaction logs from Firestore:', err);
     return [];
   }
 }

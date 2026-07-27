@@ -13,13 +13,17 @@ import {
   addDoc,
 } from "firebase/firestore";
 
-import { db } from "../lib/firebase";
+import { authDb as db } from "../lib/firebase";
 import { supabase } from '../lib/supabase';
 import { signInWithPopup, signOut, onAuthStateChanged, User } from 'firebase/auth';
 
 
 interface ReferralsProps {
   onRedirect: () => void;
+  externalUser?: User | null;
+  externalMemberData?: any;
+  externalIsAdmin?: boolean;
+  externalIsAuthorized?: boolean;
 }
 
 interface MemberData {
@@ -42,6 +46,7 @@ interface ReferralRecord {
   targetTeam?: string;
   referrerName?: string;
   referrerRegNo?: string;
+  referrerEmail?: string;
   referrerPhotoURL?: string | null;
   status?: string;
   [key: string]: any;
@@ -49,11 +54,17 @@ interface ReferralRecord {
 
 const LOCAL_DB_KEY = 'vrgc_referrals_db_v3';
 
-const Referrals: React.FC<ReferralsProps> = ({ onRedirect }) => {
+const Referrals: React.FC<ReferralsProps> = ({ 
+  onRedirect, 
+  externalUser,
+  externalMemberData,
+  externalIsAdmin,
+  externalIsAuthorized
+}) => {
   // Navigation & Authentication
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [isAuthorized, setIsAuthorized] = useState<boolean>(false);
-  const [authLoading, setAuthLoading] = useState<boolean>(true);
+  const [currentUser, setCurrentUser] = useState<User | null>(externalUser ?? null);
+  const [isAuthorized, setIsAuthorized] = useState<boolean>(externalIsAuthorized ?? false);
+  const [authLoading, setAuthLoading] = useState<boolean>(!externalUser);
   const [authError, setAuthError] = useState<string>('');
   const [activeTab, setActiveTab] = useState<'form' | 'leaderboard' | 'my_ops' | 'admin'>('form');
 
@@ -206,6 +217,23 @@ const Referrals: React.FC<ReferralsProps> = ({ onRedirect }) => {
   };
 
   useEffect(() => {
+    if (externalUser) {
+      setCurrentUser(externalUser);
+      setIsAuthorized(externalIsAuthorized ?? false);
+      if (externalMemberData) {
+        setReferrerInfo({
+          Name: externalMemberData.name,
+          'Registration Number': externalMemberData.registrationNumber,
+          Email: externalMemberData.email,
+          Phone: externalMemberData.phone,
+          Team: externalMemberData.team,
+          Position: externalMemberData.position
+        });
+      }
+      setAuthLoading(false);
+      return;
+    }
+
     if (members.length === 0 && adminEmails.length === 0) return;
 
     setAuthLoading(true);
@@ -320,10 +348,6 @@ const Referrals: React.FC<ReferralsProps> = ({ onRedirect }) => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!validateForm()) return;
-    if (dailyCount >= 5) {
-      alert('Security limit exceeded: Maximum 5 referrals per 24 hours.');
-      return;
-    }
 
     setIsSubmitting(true);
     const candidateData: ReferralRecord = {
@@ -335,6 +359,7 @@ const Referrals: React.FC<ReferralsProps> = ({ onRedirect }) => {
       targetTeam: targetTeam,
       referrerName: referrerInfo?.Name || currentUser?.displayName || 'VRGC Member',
       referrerRegNo: referrerInfo?.['Registration Number'] || extractRegNo(currentUser?.email),
+      referrerEmail: currentUser?.email || '',
       referrerPhotoURL: currentUser?.photoURL || null,
       status: 'Pending'
     };
@@ -491,11 +516,20 @@ const Referrals: React.FC<ReferralsProps> = ({ onRedirect }) => {
   };
 
   const getMyReferrals = () => {
-    if (!referrerInfo) return [];
-    const myReg = referrerInfo['Registration Number'];
+    if (!currentUser?.email) return [];
     return referrals.filter(ref => {
-      const reg = getRefVal(ref, 'Referrer Registration Number') || getRefVal(ref, 'referrerRegNo');
-      return reg && reg.toString().toUpperCase() === myReg.toUpperCase();
+      // Prioritize the explicitly saved referrerEmail if available
+      if (ref.referrerEmail) {
+        return ref.referrerEmail.toLowerCase() === currentUser.email!.toLowerCase();
+      }
+      
+      // Fallback for old referrals that might not have referrerEmail
+      if (referrerInfo) {
+        const myReg = referrerInfo['Registration Number'];
+        const reg = getRefVal(ref, 'Referrer Registration Number') || getRefVal(ref, 'referrerRegNo');
+        return reg && reg.toString().toUpperCase() === myReg?.toUpperCase();
+      }
+      return false;
     });
   };
 

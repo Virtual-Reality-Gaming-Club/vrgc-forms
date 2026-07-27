@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import Razorpay from 'razorpay';
-import { supabase } from '@/lib/supabase';
+import { db } from '@/lib/firebase';
+import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
 
 export async function POST(request: Request) {
   try {
@@ -50,20 +51,17 @@ export async function POST(request: Request) {
 
     const order = await instance.orders.create(options);
 
-    // If paymentId is a valid UUID, safely update status to Processing in Supabase
-    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    if (paymentId && uuidRegex.test(String(paymentId))) {
+    // Update payment status to 'Processing' in Firestore payments collection
+    if (paymentId) {
       try {
-        await supabase
-          .from('payments')
-          .update({
-            razorpay_order_id: order.id,
-            status: 'Processing',
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', paymentId);
+        const docRef = doc(db, 'payments', String(paymentId));
+        await updateDoc(docRef, {
+          razorpay_order_id: order.id,
+          status: 'Processing',
+          updated_at: serverTimestamp(),
+        });
       } catch (dbErr) {
-        console.warn('Supabase status update warning during order creation:', dbErr);
+        console.warn('Firestore status update warning during order creation:', dbErr);
       }
     }
 

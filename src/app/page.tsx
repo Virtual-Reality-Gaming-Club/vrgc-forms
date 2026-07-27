@@ -139,7 +139,15 @@ function AppContent() {
             user ? <Lobby24MemberEntry onRedirect={() => handlePageChange('dashboard')} /> : renderRestrictedSignIn('Lobby 24')
           )}
           {activePage === 'referrals' && (
-            user ? <Referrals onRedirect={() => handlePageChange('dashboard')} /> : renderRestrictedSignIn('Referrals')
+            user ? (
+              <Referrals 
+                onRedirect={() => handlePageChange('dashboard')} 
+                externalUser={user}
+                externalMemberData={memberData}
+                externalIsAdmin={isAdmin}
+                externalIsAuthorized={isAuthorized}
+              />
+            ) : renderRestrictedSignIn('Referrals')
           )}
           {activePage === 'idcard' && (
             user ? (

@@ -1,27 +1,34 @@
 import { NextResponse } from 'next/server';
-import { supabase } from '@/lib/supabase';
+import { db } from '@/lib/firebase';
+import { collection, getDocs, query, where, orderBy } from 'firebase/firestore';
 
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
     const titleFilter = searchParams.get('title');
 
-    let query = supabase
-      .from('payments')
-      .select('*')
-      .order('paid_at', { ascending: false });
+    const colRef = collection(db, 'payments');
+    let q;
 
     if (titleFilter) {
-      query = query.eq('title', titleFilter);
+      q = query(colRef, where('title', '==', titleFilter));
+    } else {
+      q = query(colRef);
     }
 
-    const { data: paymentsData, error } = await query;
+    const snapshot = await getDocs(q);
+    const payments: any[] = [];
 
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 });
-    }
+    snapshot.forEach((docSnap) => {
+      payments.push({ id: docSnap.id, ...docSnap.data() });
+    });
 
-    const payments = paymentsData || [];
+    // Sort by paid_at descending (client-side since Firestore may not have composite index)
+    payments.sort((a, b) => {
+      const dateA = a.paid_at ? new Date(a.paid_at).getTime() : 0;
+      const dateB = b.paid_at ? new Date(b.paid_at).getTime() : 0;
+      return dateB - dateA;
+    });
 
     // Construct CSV Header
     const headers = [
@@ -46,7 +53,7 @@ export async function GET(request: Request) {
       `"${p.paid_at ? new Date(p.paid_at).toLocaleString('en-IN') : ''}"`,
       `"${p.razorpay_payment_id || ''}"`,
       `"${p.razorpay_order_id || ''}"`,
-      `"${p.created_at ? new Date(p.created_at).toLocaleString('en-IN') : ''}"`,
+      `"${p.created_at?.toDate ? p.created_at.toDate().toLocaleString('en-IN') : (p.created_at ? new Date(p.created_at).toLocaleString('en-IN') : '')}"`,
     ]);
 
     const csvContent = [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
@@ -66,3 +73,4 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: err.message || 'CSV Export failed' }, { status: 500 });
   }
 }
+

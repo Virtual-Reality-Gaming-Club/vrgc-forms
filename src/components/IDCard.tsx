@@ -1,8 +1,9 @@
 "use client";
 
 import React, { useState, useEffect } from 'react';
-import { auth, googleProvider } from '../lib/firebase';
+import { auth, googleProvider, authDb as db } from '../lib/firebase';
 import { signInWithPopup, signOut, onAuthStateChanged, User } from 'firebase/auth';
+import { collection, query, where, getDocs, getDoc, addDoc, updateDoc, deleteDoc, doc, orderBy, onSnapshot } from 'firebase/firestore';
 import { supabase } from '../lib/supabase';
 import { CONFIG } from '../lib/config';
 
@@ -170,13 +171,7 @@ const IDCard: React.FC<IDCardProps> = ({
         details,
         timestamp: new Date().toISOString()
       };
-      const { error } = await supabase
-  .from("admin_logs")
-  .insert([logEntry]);
-
-if (error) {
-  console.error(error);
-}
+      const logRef = await addDoc(collection(db, "admin_logs"), logEntry);
     } catch (err) {
       console.error("Failed to write admin activity log:", err);
     }
@@ -188,12 +183,7 @@ if (error) {
       return;
     }
     try {
-      const { error } = await supabase
-  .from("admin_logs")
-  .delete()
-  .eq("id", logId);
-
-if (error) throw error;
+      await deleteDoc(doc(db, "admin_logs", logId));
       setAdminLogs(prev => prev.filter(l => l.id !== logId));
       setSyncToastMessage("Activity log entry deleted.");
       setTimeout(() => setSyncToastMessage(null), 3000);
@@ -207,13 +197,11 @@ if (error) throw error;
   if (!isAdmin) return;
 
   const loadLogs = async () => {
-    const { data, error } = await supabase
-      .from("admin_logs")
-      .select("*")
-      .order("timestamp", { ascending: false })
-      .limit(100);
-
-    if (!error) setAdminLogs(data || []);
+    const q = query(collection(db, "admin_logs"), orderBy("timestamp", "desc"));
+    const snapshot = await getDocs(q);
+    const data: any[] = [];
+    snapshot.forEach(doc => data.push({ id: doc.id, ...doc.data() }));
+    setAdminLogs(data);
   };
 
   loadLogs();
@@ -367,16 +355,12 @@ if (error) throw error;
   const loadCandidates = async () => {
     setLoadingData(true);
 
-    const { data, error } = await supabase
-      .from("id_cards")
-      .select("*")
-      .order("submittedAt", { ascending: false });
-
-    if (error) {
-      console.error(error);
-    } else {
-      setCandidates(data || []);
-    }
+    const q = query(collection(db, "id_cards"));
+    const snapshot = await getDocs(q);
+    const data: any[] = [];
+    snapshot.forEach(doc => data.push({ id: doc.id, ...doc.data() }));
+    data.sort((a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime());
+    setCandidates(data);
 
     setLoadingData(false);
   };
@@ -386,17 +370,31 @@ if (error) throw error;
 
   const checkExistingSubmission = async (email: string) => {
   try {
-    const { data } = await supabase
-      .from("id_cards")
-      .select("*")
-      .eq("email", email.toLowerCase())
-      .single();
-
-    setExistingSubmission(data ?? null);
+    const q = query(collection(db, "id_cards"), where("email", "==", email.toLowerCase()));
+    const snapshot = await getDocs(q);
+    
+    if (!snapshot.empty) {
+      const docData = snapshot.docs[0];
+      setExistingSubmission({ id: docData.id, ...docData.data() } as any);
+    } else {
+      const docRef = doc(db, "id_cards", email.toLowerCase());
+      const docSnap = await getDoc(docRef);
+      if (docSnap.exists()) {
+        setExistingSubmission({ id: docSnap.id, ...docSnap.data() } as any);
+      } else {
+        setExistingSubmission(null);
+      }
+    }
   } catch (err) {
     console.error("Error checking existing submission:", err);
   }
 };
+
+  useEffect(() => {
+    if (currentUser?.email) {
+      checkExistingSubmission(currentUser.email);
+    }
+  }, [currentUser?.email]);
 
   const handleLogin = async () => {
     setAuthError('');
@@ -632,13 +630,11 @@ if (error) throw error;
         status: 'Pending'
       };
 
-      const { error } = await supabase
-  .from("id_cards")
-  .upsert([submissionData], {
-    onConflict: "email",
-  });
-
-if (error) throw error;
+      if (existingSubmission?.id) {
+        await updateDoc(doc(db, "id_cards", existingSubmission.id), submissionData);
+      } else {
+        await addDoc(collection(db, "id_cards"), submissionData);
+      }
 
       if (CONFIG.GOOGLE_SCRIPT_ID_CARD_URL) {
         const sheetSyncUrl = `${CONFIG.GOOGLE_SCRIPT_ID_CARD_URL}?action=sync_idcard&email=${encodeURIComponent(submissionData.email)}&name=${encodeURIComponent(submissionData.name)}&regNo=${encodeURIComponent(submissionData.registrationNumber)}&phone=${encodeURIComponent(submissionData.phone || '')}&team=${encodeURIComponent(submissionData.team || '')}&position=${encodeURIComponent(submissionData.position || 'Member')}&photoUrl=${encodeURIComponent(submissionData.photoUrl || '')}&avatarUrl=${encodeURIComponent(submissionData.avatarUrl || '')}&qrCodeUrl=${encodeURIComponent(submissionData.qrCodeUrl || '')}&submittedAt=${encodeURIComponent(submissionData.submittedAt || '')}&status=${encodeURIComponent(submissionData.status || 'Pending')}`;
@@ -663,20 +659,16 @@ if (error) throw error;
     setReportStatus(null);
 
     try {
-      const { error } = await supabase
-  .from("data_reports")
-  .insert([{
-    name: memberData.name,
-    registrationNumber: memberData.registrationNumber,
-    email: currentUser.email,
-    team: memberData.team,
-    position: memberData.position,
-    reportedIssue: reportIssueText,
-    submittedAt: new Date().toISOString(),
-    status: "Pending"
-  }]);
-
-if (error) throw error;
+      await addDoc(collection(db, "data_reports"), {
+        name: memberData.name,
+        registrationNumber: memberData.registrationNumber,
+        email: currentUser.email,
+        team: memberData.team,
+        position: memberData.position,
+        reportedIssue: reportIssueText,
+        submittedAt: new Date().toISOString(),
+        status: "Pending"
+      });
 
       setReportStatus('success');
       setReportIssueText('');
@@ -873,12 +865,15 @@ const activeCandidates: CandidateSubmission[] = data || [];
       }
 
       // Delete from Firestore database
-      const { error } = await supabase
-  .from("id_cards")
-  .delete()
-  .eq("email", candidate.email.toLowerCase());
-
-if (error) throw error;
+      if (candidate.id) {
+        await deleteDoc(doc(db, "id_cards", candidate.id));
+      } else {
+        const q = query(collection(db, "id_cards"), where("email", "==", candidate.email.toLowerCase()));
+        const snap = await getDocs(q);
+        if (!snap.empty) {
+          await deleteDoc(doc(db, "id_cards", snap.docs[0].id));
+        }
+      }
 
       // Instantly remove from local candidates state array
       setCandidates(prev => prev.filter(c => c.email.toLowerCase() !== candidate.email.toLowerCase()));
@@ -919,12 +914,15 @@ if (error) throw error;
     try {
       const currentStatus = candidate.status || 'Pending';
       const newStatus = currentStatus === 'Approved' ? 'Pending' : 'Approved';
-      const { error } = await supabase
-  .from("id_cards")
-  .update({ status: newStatus })
-  .eq("email", candidate.email.toLowerCase());
-
-if (error) throw error;
+      if (candidate.id) {
+        await updateDoc(doc(db, "id_cards", candidate.id), { status: newStatus });
+      } else {
+        const q = query(collection(db, "id_cards"), where("email", "==", candidate.email.toLowerCase()));
+        const snap = await getDocs(q);
+        if (!snap.empty) {
+          await updateDoc(doc(db, "id_cards", snap.docs[0].id), { status: newStatus });
+        }
+      }
 
       // Log admin activity
       logAdminAction(
