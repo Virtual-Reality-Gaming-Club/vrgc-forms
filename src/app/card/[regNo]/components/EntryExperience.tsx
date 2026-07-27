@@ -24,11 +24,22 @@ const PHASE_ORDER: CardPhase[] = [
 function useIsMobile(): boolean {
   const [isMobile, setIsMobile] = useState<boolean>(false);
   useEffect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return;
     const mq = window.matchMedia('(max-width: 767px)');
     setIsMobile(mq.matches);
     const handler = (e: MediaQueryListEvent) => setIsMobile(e.matches);
-    mq.addEventListener('change', handler);
-    return () => mq.removeEventListener('change', handler);
+    if (mq.addEventListener) {
+      mq.addEventListener('change', handler);
+    } else if ((mq as any).addListener) {
+      (mq as any).addListener(handler);
+    }
+    return () => {
+      if (mq.removeEventListener) {
+        mq.removeEventListener('change', handler);
+      } else if ((mq as any).removeListener) {
+        (mq as any).removeListener(handler);
+      }
+    };
   }, []);
   return isMobile;
 }

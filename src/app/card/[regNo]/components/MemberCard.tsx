@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import Image from 'next/image';
 import { UnifiedMember } from '../types';
 
@@ -11,12 +11,14 @@ interface MemberCardProps {
 }
 
 export default function MemberCard({ member, isRevealed, onAspectRatioChange }: MemberCardProps) {
-  // Real photo pipeline: only photoUrl / imageUrl — never fall back to avatarUrl (that's the GIF avatar)
+  const [imgError, setImgError] = useState(false);
+
+  // Real photo pipeline: photoUrl / imageUrl — fall back to pixel art if error or empty
   const realPhoto = member.photoUrl || member.imageUrl;
   const fallbackImg = `https://api.dicebear.com/9.x/pixel-art/svg?seed=${encodeURIComponent(member.name || member.regNo)}&backgroundColor=0a0a0f`;
 
-  // When revealed: show real photo. Before reveal: doesn't matter (this face is hidden).
-  const displayImage = realPhoto && realPhoto.trim() !== '' ? realPhoto : fallbackImg;
+  // When revealed: show real photo unless error occurred
+  const displayImage = !imgError && realPhoto && realPhoto.trim() !== '' ? realPhoto : fallbackImg;
 
   // Measure real image dimensions once for aspect-ratio morphing — abort on cleanup
   useEffect(() => {
@@ -29,6 +31,10 @@ export default function MemberCard({ member, isRevealed, onAspectRatioChange }: 
       if (img.naturalWidth && img.naturalHeight > 0) {
         onAspectRatioChange(img.naturalWidth / img.naturalHeight);
       }
+    };
+    img.onerror = () => {
+      if (cancelled) return;
+      setImgError(true);
     };
     img.src = displayImage;
     return () => { cancelled = true; };
@@ -84,6 +90,8 @@ export default function MemberCard({ member, isRevealed, onAspectRatioChange }: 
           src={displayImage}
           alt={member.name || 'Member Photo'}
           onLoad={handleImageLoad}
+          onError={() => setImgError(true)}
+          unoptimized={true}
           referrerPolicy="no-referrer"
           className="object-cover rounded-xl shadow-lg border border-purple-500/30 block pointer-events-none select-none"
           priority={true}

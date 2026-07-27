@@ -68,7 +68,7 @@ export const AnimatedCard = memo(({
   children,
   isMobile = false,
 }: AnimatedCardProps) => {
-  const prefersReduced = useReducedMotion();
+  const prefersReduced = false;
 
   const revealX = 0;
   const revealY = 40;
@@ -190,10 +190,8 @@ export const AnimatedCard = memo(({
           rotateY: Math.max(-75, Math.min(75, orbitalPosition.x * 0.08)),
           rotateX: orbitalPosition.y * 0.12,
           transition: {
-            type: 'spring' as const,
-            stiffness: 120,
-            damping: 22,
-            mass: 0.8,
+            duration: 0.05,
+            ease: 'linear',
           },
         };
 
@@ -324,7 +322,6 @@ export const AnimatedCard = memo(({
 
   return (
     <motion.div
-      className={isIdleFloat ? 'animate-card-float' : ''}
       initial={
         prefersReduced
           ? { opacity: 0 }
@@ -344,7 +341,6 @@ export const AnimatedCard = memo(({
         aspectRatio: currentAspectRatio,
         willChange: 'transform, opacity',
         zIndex: getZIndex(),
-        animation: isIdleFloat ? 'card-idle-float 3s ease-in-out infinite' : 'none',
       }}
     >
       {/* ═══ BACK FACE: Real Member Photo — fades in after flip ═══ */}

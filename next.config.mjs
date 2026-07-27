@@ -8,6 +8,7 @@ const nextConfig = {
   },
 
   images: {
+    unoptimized: true,
     remotePatterns: [
       { protocol: 'https', hostname: 'fopyejijjeoumimsdgiz.supabase.co' },
       { protocol: 'https', hostname: 'media.giphy.com' },

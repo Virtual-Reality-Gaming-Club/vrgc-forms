@@ -337,13 +337,29 @@
 .no-scrollbar::-webkit-scrollbar { display: none; }
 .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
 
+/* Native <select> / <option> — force dark background on all platforms */
+select {
+  background-color: #0a0315;
+  color: #e2e8f0;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+select option {
+  background-color: #130828;
+  color: #e2e8f0;
+}
+
+select option:checked,
+select option:hover {
+  background-color: #1e0a38;
+  color: #c084fc;
+}
+
 /* ═══════════════════════════════════════ */
 /* ═══ MOBILE: Pause heavy animations  ═══ */
 /* ═══════════════════════════════════════ */
 @media (max-width: 767px) {
-  /* Disable expensive ambient background animation on mobile */
-  body > * { animation: none !important; }
-
   /* Pause camera-breathe on mobile — causes full subtree repaint */
   .animate-camera-breathe { animation: none !important; }
 
@@ -352,15 +368,12 @@
 }
 
 /* ═══════════════════════════════════ */
-/* ═══ REDUCED MOTION: Respect it  ═══ */
+/* ═══ REDUCED MOTION: Smooth Mode ═══ */
 /* ═══════════════════════════════════ */
 @media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
+  .animate-pulse,
+  .animate-spin-slow {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
-    scroll-behavior: auto !important;
   }
 }
