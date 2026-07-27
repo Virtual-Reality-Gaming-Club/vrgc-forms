@@ -1,27 +1,14 @@
 "use client";
 
 import React, { useState, useEffect } from 'react';
-import { auth, googleProvider, authDb as db } from '../lib/firebase';
+import { auth, googleProvider, db } from '../lib/firebase';
 import { signInWithPopup, signOut, onAuthStateChanged, User } from 'firebase/auth';
-import { collection, query, where, getDocs, getDoc, addDoc, updateDoc, deleteDoc, doc, orderBy, onSnapshot } from 'firebase/firestore';
+import { collection, onSnapshot, doc, deleteDoc, updateDoc, setDoc, getDoc, addDoc, getDocs } from 'firebase/firestore';
 import { supabase } from '../lib/supabase';
 import { CONFIG } from '../lib/config';
 
 interface IDCardProps {
   onRedirect: () => void;
-  // External auth from global AuthContext
-  externalUser?: User | null;
-  externalMemberData?: {
-    name: string;
-    registrationNumber: string;
-    phone: string;
-    email: string;
-    team: string;
-    position: string;
-  } | null;
-  externalIsAdmin?: boolean;
-  externalIsAuthorized?: boolean;
-  onLogout?: () => void;
 }
 
 interface MemberData {
@@ -43,30 +30,11 @@ interface CandidateSubmission {
   email: string;
   photoUrl: string;
   avatarUrl: string;
-  qrCodeUrl?: string;
   submittedAt: string;
   status: string;
 }
 
-interface AdminActivityLog {
-  id?: string;
-  action: 'DELETE_DOSSIER' | 'APPROVE_DOSSIER' | 'REVERT_PENDING_DOSSIER' | 'FORCE_SHEETS_SYNC' | 'DATA_REPORT_SUBMITTED';
-  performedBy: string;
-  targetEmail?: string;
-  targetName?: string;
-  targetRegNo?: string;
-  details: string;
-  timestamp: string;
-}
-
-const IDCard: React.FC<IDCardProps> = ({
-  onRedirect,
-  externalUser,
-  externalMemberData,
-  externalIsAdmin = false,
-  externalIsAuthorized = false,
-  onLogout,
-}) => {
+const IDCard: React.FC<IDCardProps> = ({ onRedirect }) => {
   const getAdminDisplayRoleOrTeam = (team?: string, position?: string) => {
     const t = (team || '').toLowerCase();
     const p = (position || '').toLowerCase();
@@ -85,28 +53,18 @@ const IDCard: React.FC<IDCardProps> = ({
     };
   };
 
-  const getQrCodeImageUrl = (regNo?: string, savedQrUrl?: string) => {
-    if (savedQrUrl && savedQrUrl.trim()) return savedQrUrl;
-    const origin = typeof window !== 'undefined' ? window.location.origin : (process.env.NEXT_PUBLIC_APP_URL || 'https://vrgcforms.vercel.app');
-    return `https://api.qrserver.com/v1/create-qr-code/?size=140x140&color=0-0-0&bgcolor=ffffff&data=${encodeURIComponent(`${origin}/card/${regNo || ''}`)}`;
-  };
-
   // Authentication & Member Data States
-  // When external auth is provided (from the global AuthContext), use it directly.
-  const [currentUser, setCurrentUser] = useState<User | null>(externalUser ?? null);
-  const [isAuthorized, setIsAuthorized] = useState<boolean>(externalIsAuthorized);
-  const [authLoading, setAuthLoading] = useState<boolean>(!externalUser); // skip loading if already authed
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [isAuthorized, setIsAuthorized] = useState<boolean>(false);
+  const [authLoading, setAuthLoading] = useState<boolean>(true);
   const [authError, setAuthError] = useState<string>('');
-  const [isAdmin, setIsAdmin] = useState<boolean>(externalIsAdmin);
+  const [isAdmin, setIsAdmin] = useState<boolean>(false);
 
   // Tab selections
   const [activeSubTab, setActiveSubTab] = useState<'portal' | 'admin'>('portal');
 
   // Member Fields
-  const [memberData, setMemberData] = useState<MemberData | null>(
-    externalMemberData as MemberData | null ?? null
-  );
-
+  const [memberData, setMemberData] = useState<MemberData | null>(null);
 
   // Form Submission States
   const [photoFile, setPhotoFile] = useState<File | null>(null);
@@ -132,9 +90,7 @@ const IDCard: React.FC<IDCardProps> = ({
   const [loadingData, setLoadingData] = useState<boolean>(false);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedTeam, setSelectedTeam] = useState<string>('All');
-  const [selectedStatus, setSelectedStatus] = useState<string>('All');
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
-  const [downloadingAvatarId, setDownloadingAvatarId] = useState<string | null>(null);
   const [previewCandidate, setPreviewCandidate] = useState<CandidateSubmission | null>(null);
   
   // Admin 3D Card View & Flipping states
@@ -145,67 +101,6 @@ const IDCard: React.FC<IDCardProps> = ({
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [menuDirections, setMenuDirections] = useState<Record<string, 'up' | 'down'>>({});
   const [candidateToDelete, setCandidateToDelete] = useState<CandidateSubmission | null>(null);
-
-  // Admin Activity Logs States
-  const [adminSectionTab, setAdminSectionTab] = useState<'dossiers' | 'logs'>('dossiers');
-  const [adminLogs, setAdminLogs] = useState<AdminActivityLog[]>([]);
-  const [logSearchQuery, setLogSearchQuery] = useState<string>('');
-  const [logActionFilter, setLogActionFilter] = useState<string>('All');
-
-  // Log helper for admin activity audit trail
-  const logAdminAction = async (
-    action: AdminActivityLog['action'],
-    details: string,
-    targetEmail?: string,
-    targetName?: string,
-    targetRegNo?: string
-  ) => {
-    try {
-      if (!currentUser) return;
-      const logEntry: AdminActivityLog = {
-        action,
-        performedBy: currentUser.email || 'Admin',
-        targetEmail: targetEmail || 'N/A',
-        targetName: targetName || 'N/A',
-        targetRegNo: targetRegNo || 'N/A',
-        details,
-        timestamp: new Date().toISOString()
-      };
-      const logRef = await addDoc(collection(db, "admin_logs"), logEntry);
-    } catch (err) {
-      console.error("Failed to write admin activity log:", err);
-    }
-  };
-
-  const handleDeleteLog = async (logId?: string) => {
-    if (!logId) return;
-    if (!isAdmin) {
-      return;
-    }
-    try {
-      await deleteDoc(doc(db, "admin_logs", logId));
-      setAdminLogs(prev => prev.filter(l => l.id !== logId));
-      setSyncToastMessage("Activity log entry deleted.");
-      setTimeout(() => setSyncToastMessage(null), 3000);
-    } catch (err: any) {
-      console.error("Failed to delete log entry:", err);
-    }
-  };
-
-  // Real-time listener for admin_logs
-  useEffect(() => {
-  if (!isAdmin) return;
-
-  const loadLogs = async () => {
-    const q = query(collection(db, "admin_logs"), orderBy("timestamp", "desc"));
-    const snapshot = await getDocs(q);
-    const data: any[] = [];
-    snapshot.forEach(doc => data.push({ id: doc.id, ...doc.data() }));
-    setAdminLogs(data);
-  };
-
-  loadLogs();
-}, [isAdmin]);
 
   // Close mobile 3-dots menu on outside click
   useEffect(() => {
@@ -232,23 +127,11 @@ const IDCard: React.FC<IDCardProps> = ({
     return () => clearInterval(timer);
   }, [sheetsCooldown]);
 
-  const [loadedMembersList, setLoadedMembersList] = useState<MemberData[]>([]);
-
-  // Fetch whitelist admin emails and member roster from CSVs
-  // Skip this entire flow when external auth is provided (handled by AuthContext globally)
+  // Fetch CSV files & monitor Auth State on mount
   useEffect(() => {
-    if (externalUser) {
-      setCurrentUser(externalUser);
-      setIsAdmin(externalIsAdmin);
-      setIsAuthorized(externalIsAuthorized);
-      setAuthLoading(false);
-      return;
-    }
-
     const fetchCSVData = async () => {
       setAuthLoading(true);
       try {
-
         const adminRes = await fetch('/admins.csv');
         let adminEmailsList: string[] = [];
         if (adminRes.ok) {
@@ -286,8 +169,6 @@ const IDCard: React.FC<IDCardProps> = ({
           }
         }
 
-        setLoadedMembersList(membersList);
-
         const unsubscribe = onAuthStateChanged(auth, async (user) => {
           if (user) {
             setCurrentUser(user);
@@ -295,20 +176,8 @@ const IDCard: React.FC<IDCardProps> = ({
             const matchedAdmin = adminEmailsList.includes(lowerEmail);
             setIsAdmin(matchedAdmin);
 
-            const userEntries = membersList.filter(m => m.email === lowerEmail);
-            if (userEntries.length > 0) {
-              const teams = Array.from(new Set(userEntries.map(m => m.team).filter(Boolean))).join(', ');
-              const positions = Array.from(new Set(userEntries.map(m => m.position).filter(Boolean))).join(', ');
-
-              const matchedMember: MemberData = {
-                name: userEntries[0].name,
-                registrationNumber: userEntries[0].registrationNumber,
-                phone: userEntries[0].phone,
-                email: userEntries[0].email,
-                team: teams,
-                position: positions
-              };
-
+            const matchedMember = membersList.find(m => m.email === lowerEmail);
+            if (matchedMember) {
               setMemberData(matchedMember);
               setIsAuthorized(true);
               await checkExistingSubmission(user.email || '');
@@ -350,51 +219,38 @@ const IDCard: React.FC<IDCardProps> = ({
 
   // Subscribe to real-time updates from 'id_cards' Firestore collection (Admins only)
   useEffect(() => {
-  if (!currentUser || !isAdmin) return;
+    if (!currentUser || !isAdmin) return;
 
-  const loadCandidates = async () => {
     setLoadingData(true);
+    const unsub = onSnapshot(collection(db, 'id_cards'), (snapshot) => {
+      const candidatesData: CandidateSubmission[] = [];
+      snapshot.forEach((doc) => {
+        candidatesData.push({ id: doc.id, ...doc.data() } as CandidateSubmission);
+      });
+      candidatesData.sort((a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime());
+      setCandidates(candidatesData);
+      setLoadingData(false);
+    }, (error) => {
+      console.error("Firestore subscription error:", error);
+      setLoadingData(false);
+    });
 
-    const q = query(collection(db, "id_cards"));
-    const snapshot = await getDocs(q);
-    const data: any[] = [];
-    snapshot.forEach(doc => data.push({ id: doc.id, ...doc.data() }));
-    data.sort((a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime());
-    setCandidates(data);
-
-    setLoadingData(false);
-  };
-
-  loadCandidates();
-}, [currentUser, isAdmin]);
+    return () => unsub();
+  }, [currentUser, isAdmin]);
 
   const checkExistingSubmission = async (email: string) => {
-  try {
-    const q = query(collection(db, "id_cards"), where("email", "==", email.toLowerCase()));
-    const snapshot = await getDocs(q);
-    
-    if (!snapshot.empty) {
-      const docData = snapshot.docs[0];
-      setExistingSubmission({ id: docData.id, ...docData.data() } as any);
-    } else {
-      const docRef = doc(db, "id_cards", email.toLowerCase());
+    try {
+      const docRef = doc(db, 'id_cards', email.toLowerCase());
       const docSnap = await getDoc(docRef);
       if (docSnap.exists()) {
-        setExistingSubmission({ id: docSnap.id, ...docSnap.data() } as any);
+        setExistingSubmission(docSnap.data() as CandidateSubmission);
       } else {
         setExistingSubmission(null);
       }
+    } catch (err) {
+      console.error('Error checking existing submission:', err);
     }
-  } catch (err) {
-    console.error("Error checking existing submission:", err);
-  }
-};
-
-  useEffect(() => {
-    if (currentUser?.email) {
-      checkExistingSubmission(currentUser.email);
-    }
-  }, [currentUser?.email]);
+  };
 
   const handleLogin = async () => {
     setAuthError('');
@@ -414,18 +270,13 @@ const IDCard: React.FC<IDCardProps> = ({
 
   const handleLogout = async () => {
     try {
-      if (onLogout) {
-        // Use global logout from AuthContext
-        await onLogout();
-      } else {
-        await signOut(auth);
-        setCurrentUser(null);
-        setIsAuthorized(false);
-        setMemberData(null);
-        setExistingSubmission(null);
-        setIsAdmin(false);
-        setActiveSubTab('portal');
-      }
+      await signOut(auth);
+      setCurrentUser(null);
+      setIsAuthorized(false);
+      setMemberData(null);
+      setExistingSubmission(null);
+      setIsAdmin(false);
+      setActiveSubTab('portal');
     } catch (err) {
       console.error('Signout error:', err);
     }
@@ -518,36 +369,15 @@ const IDCard: React.FC<IDCardProps> = ({
         let avatarExt = 'gif';
 
         if (!uploadBlob && avatarUrlInput.trim()) {
-          const gifUrl = avatarUrlInput.trim();
           try {
-            // Attempt 1: Direct fetch of remote link
-            const gifRes = await fetch(gifUrl);
-            if (gifRes.ok) {
-              uploadBlob = await gifRes.blob();
-            } else {
-              throw new Error(`Direct fetch status ${gifRes.status}`);
-            }
+            // Fetch pasted GIF link and convert to Blob for Supabase storage
+            const gifRes = await fetch(avatarUrlInput.trim());
+            uploadBlob = await gifRes.blob();
+            if (uploadBlob.type.includes('png')) avatarExt = 'png';
+            else if (uploadBlob.type.includes('jpeg') || uploadBlob.type.includes('jpg')) avatarExt = 'jpg';
+            else if (uploadBlob.type.includes('webp')) avatarExt = 'webp';
           } catch (e) {
-            console.warn("Direct fetch of remote GIF link failed or CORS blocked, trying server proxy:", e);
-            try {
-              // Attempt 2: Server proxy fetch bypassing CORS limits
-              const proxyRes = await fetch(`/api/proxy-image?url=${encodeURIComponent(gifUrl)}`);
-              if (proxyRes.ok) {
-                uploadBlob = await proxyRes.blob();
-              } else {
-                console.warn(`Proxy fetch status ${proxyRes.status}`);
-              }
-            } catch (proxyErr) {
-              console.warn("Proxy fetch of remote GIF link failed:", proxyErr);
-            }
-          }
-
-          if (uploadBlob) {
-            const blobType = (uploadBlob.type || '').toLowerCase();
-            if (blobType.includes('png')) avatarExt = 'png';
-            else if (blobType.includes('jpeg') || blobType.includes('jpg')) avatarExt = 'jpg';
-            else if (blobType.includes('webp')) avatarExt = 'webp';
-            else avatarExt = 'gif';
+            console.warn("Could not fetch remote GIF link as blob, saving link directly:", e);
           }
         } else if (avatarFile) {
           avatarExt = avatarFile.name.split('.').pop() || 'gif';
@@ -562,7 +392,7 @@ const IDCard: React.FC<IDCardProps> = ({
             .upload(avatarFilePath, uploadBlob, {
               cacheControl: '3600',
               upsert: true,
-              contentType: uploadBlob.type || (avatarExt === 'gif' ? 'image/gif' : `image/${avatarExt}`)
+              contentType: uploadBlob.type || 'image/gif'
             });
 
           if (avatarUploadError) {
@@ -575,45 +405,6 @@ const IDCard: React.FC<IDCardProps> = ({
           }
         }
       }
-      
-      let qrCodePublicUrl = '';
-      try {
-        const qrOrigin = typeof window !== 'undefined' ? window.location.origin : (process.env.NEXT_PUBLIC_APP_URL || 'https://vrgcforms.vercel.app');
-        const qrContent = `${qrOrigin}/card/${encodeURIComponent(memberData.registrationNumber)}`;
-        const qrApiUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&color=0-0-0&bgcolor=ffffff&data=${encodeURIComponent(qrContent)}`;
-
-        let qrBlob: Blob | null = null;
-        try {
-          const qrRes = await fetch(qrApiUrl);
-          if (qrRes.ok) qrBlob = await qrRes.blob();
-        } catch {
-          const proxyQrRes = await fetch(`/api/proxy-image?url=${encodeURIComponent(qrApiUrl)}`);
-          if (proxyQrRes.ok) qrBlob = await proxyQrRes.blob();
-        }
-
-        if (qrBlob) {
-          const qrFileName = `${userRegNo}_${userNameStr}_${userEmailStr}_qr_${timestamp}.png`;
-          const qrFilePath = `qrcodes/${qrFileName}`;
-          const { error: qrUploadError } = await supabase.storage
-            .from('qr-codes')
-            .upload(qrFilePath, qrBlob, {
-              cacheControl: '3600',
-              upsert: true,
-              contentType: 'image/png'
-            });
-
-          if (!qrUploadError) {
-            const { data: { publicUrl: uploadedQrUrl } } = supabase.storage
-              .from('qr-codes')
-              .getPublicUrl(qrFilePath);
-            qrCodePublicUrl = uploadedQrUrl;
-          } else {
-            console.warn("Supabase qr-codes upload error:", qrUploadError.message);
-          }
-        }
-      } catch (qrErr) {
-        console.warn("QR code Supabase storage error:", qrErr);
-      }
 
       // 3. Save Submission details to Firestore
       const submissionData: CandidateSubmission = {
@@ -625,21 +416,11 @@ const IDCard: React.FC<IDCardProps> = ({
         email: currentUser.email || '',
         photoUrl: photoPublicUrl,
         avatarUrl: avatarPublicUrl,
-        qrCodeUrl: qrCodePublicUrl || '',
         submittedAt: new Date().toISOString(),
         status: 'Pending'
       };
 
-      if (existingSubmission?.id) {
-        await updateDoc(doc(db, "id_cards", existingSubmission.id), submissionData);
-      } else {
-        await addDoc(collection(db, "id_cards"), submissionData);
-      }
-
-      if (CONFIG.GOOGLE_SCRIPT_ID_CARD_URL) {
-        const sheetSyncUrl = `${CONFIG.GOOGLE_SCRIPT_ID_CARD_URL}?action=sync_idcard&email=${encodeURIComponent(submissionData.email)}&name=${encodeURIComponent(submissionData.name)}&regNo=${encodeURIComponent(submissionData.registrationNumber)}&phone=${encodeURIComponent(submissionData.phone || '')}&team=${encodeURIComponent(submissionData.team || '')}&position=${encodeURIComponent(submissionData.position || 'Member')}&photoUrl=${encodeURIComponent(submissionData.photoUrl || '')}&avatarUrl=${encodeURIComponent(submissionData.avatarUrl || '')}&qrCodeUrl=${encodeURIComponent(submissionData.qrCodeUrl || '')}&submittedAt=${encodeURIComponent(submissionData.submittedAt || '')}&status=${encodeURIComponent(submissionData.status || 'Pending')}`;
-        sendGoogleScriptRequest(sheetSyncUrl);
-      }
+      await setDoc(doc(db, 'id_cards', (currentUser.email || '').toLowerCase()), submissionData);
 
       setSubmitSuccess(true);
       setExistingSubmission(submissionData);
@@ -659,7 +440,7 @@ const IDCard: React.FC<IDCardProps> = ({
     setReportStatus(null);
 
     try {
-      await addDoc(collection(db, "data_reports"), {
+      await addDoc(collection(db, 'data_reports'), {
         name: memberData.name,
         registrationNumber: memberData.registrationNumber,
         email: currentUser.email,
@@ -667,7 +448,7 @@ const IDCard: React.FC<IDCardProps> = ({
         position: memberData.position,
         reportedIssue: reportIssueText,
         submittedAt: new Date().toISOString(),
-        status: "Pending"
+        status: 'Pending'
       });
 
       setReportStatus('success');
@@ -684,32 +465,6 @@ const IDCard: React.FC<IDCardProps> = ({
     }
   };
 
-  const sendGoogleScriptRequest = (url: string): Promise<boolean> => {
-    return new Promise((resolve) => {
-      let resolved = false;
-      const done = (success: boolean) => {
-        if (!resolved) {
-          resolved = true;
-          resolve(success);
-        }
-      };
-
-      // 1. Image Beacon ping (Works 100% reliably in cross-origin / hosted environments)
-      const img = new Image();
-      img.onload = () => done(true);
-      img.onerror = () => done(true); // Apps Script response text triggers onerror on <img>, but GET request executed on Google server
-      img.src = url;
-
-      // 2. Fetch no-cors fallback
-      fetch(url, { mode: 'no-cors', cache: 'no-cache' })
-        .then(() => done(true))
-        .catch(() => done(true));
-
-      // 3. Fallback safety timer
-      setTimeout(() => done(true), 2500);
-    });
-  };
-
   const handleSyncAllToSheets = async () => {
     if (sheetsCooldown > 0 || isSyncingSheets) return;
     if (!CONFIG.GOOGLE_SCRIPT_ID_CARD_URL) {
@@ -722,42 +477,28 @@ const IDCard: React.FC<IDCardProps> = ({
 
     try {
       // Fetch latest active records from Firestore to ensure clean list (excluding deleted entries)
-      const querySnapshot = await getDocs(collection(db, "id_cards"));
-      const activeCandidates: CandidateSubmission[] = querySnapshot.docs.map((d) => ({
-        id: d.id,
-        ...d.data(),
-      })) as CandidateSubmission[];
+      const querySnap = await getDocs(collection(db, 'id_cards'));
+      const activeCandidates: CandidateSubmission[] = [];
+      querySnap.forEach((d) => activeCandidates.push({ id: d.id, ...d.data() } as CandidateSubmission));
 
       // Update local state list
       const sortedCandidates = activeCandidates.sort((a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime());
       setCandidates(sortedCandidates);
 
-      if (sortedCandidates.length === 0) {
-        setSyncToastMessage("No active candidate records found in Firebase to sync.");
-        setTimeout(() => setSyncToastMessage(null), 4000);
-        setIsSyncingSheets(false);
-        return;
-      }
+      const syncPromises = sortedCandidates.map(c => {
+        const sheetSyncUrl = `${CONFIG.GOOGLE_SCRIPT_ID_CARD_URL}?action=sync_idcard&email=${encodeURIComponent(c.email)}&name=${encodeURIComponent(c.name)}&regNo=${encodeURIComponent(c.registrationNumber)}&phone=${encodeURIComponent(c.phone || '')}&team=${encodeURIComponent(c.team || '')}&position=${encodeURIComponent(c.position || 'Member')}&photoUrl=${encodeURIComponent(c.photoUrl || '')}&submittedAt=${encodeURIComponent(c.submittedAt || '')}&status=${encodeURIComponent(c.status || 'Pending')}`;
+        return fetch(sheetSyncUrl, { mode: 'no-cors' })
+          .then(() => true)
+          .catch(err => {
+            console.error("Sheets row sync failed:", err);
+            return false;
+          });
+      });
 
-      let successCount = 0;
-      for (let i = 0; i < sortedCandidates.length; i++) {
-        const c = sortedCandidates[i];
-        const sheetSyncUrl = `${CONFIG.GOOGLE_SCRIPT_ID_CARD_URL}?action=sync_idcard&email=${encodeURIComponent(c.email)}&name=${encodeURIComponent(c.name)}&regNo=${encodeURIComponent(c.registrationNumber)}&phone=${encodeURIComponent(c.phone || '')}&team=${encodeURIComponent(c.team || '')}&position=${encodeURIComponent(c.position || 'Member')}&photoUrl=${encodeURIComponent(c.photoUrl || '')}&avatarUrl=${encodeURIComponent(c.avatarUrl || '')}&qrCodeUrl=${encodeURIComponent(c.qrCodeUrl || '')}&submittedAt=${encodeURIComponent(c.submittedAt || '')}&status=${encodeURIComponent(c.status || 'Pending')}`;
-        
-        const ok = await sendGoogleScriptRequest(sheetSyncUrl);
-        if (ok) successCount++;
+      const results = await Promise.allSettled(syncPromises);
+      const successCount = results.filter(r => r.status === 'fulfilled' && r.value).length;
 
-        if (i < sortedCandidates.length - 1) {
-          await new Promise(res => setTimeout(res, 120));
-        }
-      }
-
-      logAdminAction(
-        'FORCE_SHEETS_SYNC',
-        `Initiated full sync to Google Sheets for ${sortedCandidates.length} candidate submissions`
-      );
-
-      setSyncToastMessage(`Full Sheet Refresh Complete! Successfully refreshed all ${successCount} of ${sortedCandidates.length} active Firebase candidate records (with QR code links) in Google Sheets.`);
+      setSyncToastMessage(`Parallel sync completed! Transmitted ${successCount} active ID record(s) to Google Sheets.`);
       setTimeout(() => setSyncToastMessage(null), 4500);
       setSheetsCooldown(60);
     } catch (err) {
@@ -790,43 +531,6 @@ const IDCard: React.FC<IDCardProps> = ({
       window.open(candidate.photoUrl, '_blank');
     } finally {
       setDownloadingId(null);
-    }
-  };
-
-  const handleDownloadAvatar = async (candidate: CandidateSubmission) => {
-    if (!candidate.avatarUrl) return;
-    const targetId = candidate.id || candidate.email;
-    setDownloadingAvatarId(targetId);
-
-    try {
-      let response;
-      try {
-        response = await fetch(candidate.avatarUrl);
-        if (!response.ok) throw new Error('Direct fetch failed');
-      } catch (e) {
-        response = await fetch(`/api/proxy-image?url=${encodeURIComponent(candidate.avatarUrl)}`);
-      }
-      const blob = await response.blob();
-      const blobUrl = window.URL.createObjectURL(blob);
-
-      const urlLower = candidate.avatarUrl.toLowerCase();
-      const isGif = urlLower.includes('.gif') || blob.type.includes('gif');
-      const isPng = urlLower.includes('.png') || blob.type.includes('png');
-      const isWebp = urlLower.includes('.webp') || blob.type.includes('webp');
-      const ext = isGif ? 'gif' : isPng ? 'png' : isWebp ? 'webp' : 'jpg';
-
-      const link = document.createElement('a');
-      link.href = blobUrl;
-      link.download = `${candidate.registrationNumber || 'ID'}_Avatar.${ext}`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      window.URL.revokeObjectURL(blobUrl);
-    } catch (err) {
-      console.error("Direct avatar download failed, opening in new tab:", err);
-      window.open(candidate.avatarUrl, '_blank');
-    } finally {
-      setDownloadingAvatarId(null);
     }
   };
 
@@ -863,15 +567,7 @@ const IDCard: React.FC<IDCardProps> = ({
       }
 
       // Delete from Firestore database
-      if (candidate.id) {
-        await deleteDoc(doc(db, "id_cards", candidate.id));
-      } else {
-        const q = query(collection(db, "id_cards"), where("email", "==", candidate.email.toLowerCase()));
-        const snap = await getDocs(q);
-        if (!snap.empty) {
-          await deleteDoc(doc(db, "id_cards", snap.docs[0].id));
-        }
-      }
+      await deleteDoc(doc(db, 'id_cards', candidate.email.toLowerCase()));
 
       // Instantly remove from local candidates state array
       setCandidates(prev => prev.filter(c => c.email.toLowerCase() !== candidate.email.toLowerCase()));
@@ -879,7 +575,9 @@ const IDCard: React.FC<IDCardProps> = ({
       // Send deletion signal to Google Sheets via Apps Script
       if (CONFIG.GOOGLE_SCRIPT_ID_CARD_URL) {
         const deleteSheetUrl = `${CONFIG.GOOGLE_SCRIPT_ID_CARD_URL}?action=delete_idcard&email=${encodeURIComponent(candidate.email)}`;
-        sendGoogleScriptRequest(deleteSheetUrl);
+        fetch(deleteSheetUrl, { mode: 'no-cors' })
+          .then(() => console.log("Sent deletion notification to Google Sheets for:", candidate.email))
+          .catch(err => console.error("Sheets deletion call failed:", err));
       }
 
       // Close preview modal if deleting current candidate
@@ -893,13 +591,6 @@ const IDCard: React.FC<IDCardProps> = ({
       }
 
       setSyncToastMessage(`Deleted submission for ${candidate.name}. Form response unlocked & Google Sheets notified.`);
-      logAdminAction(
-        'DELETE_DOSSIER',
-        `Deleted candidate ID card dossier for ${candidate.name} (${candidate.registrationNumber || 'No Reg'})`,
-        candidate.email,
-        candidate.name,
-        candidate.registrationNumber
-      );
       setTimeout(() => setSyncToastMessage(null), 4500);
     } catch (err: any) {
       console.error("Delete failed:", err);
@@ -912,26 +603,9 @@ const IDCard: React.FC<IDCardProps> = ({
     try {
       const currentStatus = candidate.status || 'Pending';
       const newStatus = currentStatus === 'Approved' ? 'Pending' : 'Approved';
-      if (candidate.id) {
-        await updateDoc(doc(db, "id_cards", candidate.id), { status: newStatus });
-      } else {
-        const q = query(collection(db, "id_cards"), where("email", "==", candidate.email.toLowerCase()));
-        const snap = await getDocs(q);
-        if (!snap.empty) {
-          await updateDoc(doc(db, "id_cards", snap.docs[0].id), { status: newStatus });
-        }
-      }
-
-      // Log admin activity
-      logAdminAction(
-        newStatus === 'Approved' ? 'APPROVE_DOSSIER' : 'REVERT_PENDING_DOSSIER',
-        newStatus === 'Approved'
-          ? `Approved digital identity dossier for ${candidate.name} (${candidate.registrationNumber || 'No Reg'})`
-          : `Reverted dossier for ${candidate.name} (${candidate.registrationNumber || 'No Reg'}) back to Pending`,
-        candidate.email,
-        candidate.name,
-        candidate.registrationNumber
-      );
+      await updateDoc(doc(db, 'id_cards', candidate.email.toLowerCase()), {
+        status: newStatus
+      });
 
       // Update local state list
       setCandidates(prev => prev.map(c => 
@@ -942,8 +616,8 @@ const IDCard: React.FC<IDCardProps> = ({
 
       // Trigger status update in Google Sheets
       if (CONFIG.GOOGLE_SCRIPT_ID_CARD_URL) {
-        const statusSyncUrl = `${CONFIG.GOOGLE_SCRIPT_ID_CARD_URL}?action=sync_idcard&email=${encodeURIComponent(candidate.email)}&name=${encodeURIComponent(candidate.name)}&regNo=${encodeURIComponent(candidate.registrationNumber)}&phone=${encodeURIComponent(candidate.phone || '')}&team=${encodeURIComponent(candidate.team || '')}&position=${encodeURIComponent(candidate.position || 'Member')}&photoUrl=${encodeURIComponent(candidate.photoUrl || '')}&avatarUrl=${encodeURIComponent(candidate.avatarUrl || '')}&qrCodeUrl=${encodeURIComponent(candidate.qrCodeUrl || '')}&submittedAt=${encodeURIComponent(candidate.submittedAt || '')}&status=${encodeURIComponent(newStatus)}`;
-        sendGoogleScriptRequest(statusSyncUrl);
+        const statusSyncUrl = `${CONFIG.GOOGLE_SCRIPT_ID_CARD_URL}?action=sync_idcard&email=${encodeURIComponent(candidate.email)}&name=${encodeURIComponent(candidate.name)}&regNo=${encodeURIComponent(candidate.registrationNumber)}&phone=${encodeURIComponent(candidate.phone || '')}&team=${encodeURIComponent(candidate.team || '')}&position=${encodeURIComponent(candidate.position || 'Member')}&photoUrl=${encodeURIComponent(candidate.photoUrl || '')}&submittedAt=${encodeURIComponent(candidate.submittedAt || '')}&status=${encodeURIComponent(newStatus)}`;
+        fetch(statusSyncUrl, { mode: 'no-cors' }).catch(err => console.error("Sheets status sync error:", err));
       }
 
       if (previewCandidate && previewCandidate.email.toLowerCase() === candidate.email.toLowerCase()) {
@@ -968,35 +642,23 @@ const IDCard: React.FC<IDCardProps> = ({
     const matchesSearch = name.includes(search) || reg.includes(search) || email.includes(search);
     
     let matchesTeam = false;
-    const teamLower = (c.team || '').toLowerCase();
-    const posLower = (c.position || '').toLowerCase();
-    const selLower = selectedTeam.toLowerCase();
-
     if (selectedTeam === 'All') {
       matchesTeam = true;
-    } else if (selLower === 'management') {
+    } else if (selectedTeam.toLowerCase() === 'management') {
+      const team = (c.team || '').toLowerCase();
+      const pos = (c.position || '').toLowerCase();
       matchesTeam = 
-        teamLower.includes('management') || 
-        teamLower.includes('coordinator') || 
-        teamLower.includes('president') ||
-        posLower.includes('management') || 
-        posLower.includes('coordinator') || 
-        posLower.includes('president');
-    } else if (selLower.includes('esports') && selLower.includes('pc')) {
-      matchesTeam = teamLower.includes('esports') && teamLower.includes('pc');
-    } else if (selLower.includes('esports') && selLower.includes('mobile')) {
-      matchesTeam = teamLower.includes('esports') && teamLower.includes('mobile');
-    } else if (selLower === 'esports') {
-      matchesTeam = teamLower.includes('esports');
+        team.includes('management') || 
+        team.includes('coordinator') || 
+        team.includes('president') ||
+        pos.includes('management') || 
+        pos.includes('coordinator') || 
+        pos.includes('president');
     } else {
       matchesTeam = c.team && c.team.toLowerCase() === selectedTeam.toLowerCase();
     }
 
-    const matchesStatus =
-      selectedStatus === 'All' ||
-      (c.status || 'Pending').toLowerCase() === selectedStatus.toLowerCase();
-
-    return matchesSearch && matchesTeam && matchesStatus;
+    return matchesSearch && matchesTeam;
   });
 
   if (authLoading) {
@@ -1239,7 +901,7 @@ const IDCard: React.FC<IDCardProps> = ({
                         <div className="my-3 flex flex-col items-center justify-center relative z-10">
                           <div className="w-28 h-28 rounded-xl border border-white/10 bg-white p-1.5 shadow-[0_0_25px_rgba(168,85,247,0.25)]">
                             <img 
-                              src={getQrCodeImageUrl(existingSubmission.registrationNumber, existingSubmission.qrCodeUrl)} 
+                              src={`https://api.qrserver.com/v1/create-qr-code/?size=140x140&color=0-0-0&bgcolor=ffffff&data=${encodeURIComponent(`${typeof window !== 'undefined' ? window.location.origin : 'https://vrgc.club'}/card/${existingSubmission.registrationNumber || ''}`)}`} 
                               alt="Scan to Verify" 
                               className="w-full h-full object-contain"
                             />
@@ -1287,12 +949,25 @@ const IDCard: React.FC<IDCardProps> = ({
                     </button>
                     {existingSubmission.avatarUrl && (
                       <button
-                        onClick={() => handleDownloadAvatar(existingSubmission)}
+                        onClick={async () => {
+                          try {
+                            const response = await fetch(existingSubmission.avatarUrl);
+                            const blob = await response.blob();
+                            const blobUrl = window.URL.createObjectURL(blob);
+                            const link = document.createElement('a');
+                            link.href = blobUrl;
+                            link.download = `${existingSubmission.registrationNumber || 'ID'}_Avatar.jpg`;
+                            document.body.appendChild(link);
+                            link.click();
+                            document.body.removeChild(link);
+                            window.URL.revokeObjectURL(blobUrl);
+                          } catch (err) {
+                            window.open(existingSubmission.avatarUrl, '_blank');
+                          }
+                        }}
                         className="group flex items-center gap-2 px-6 py-2.5 rounded-full border border-[#a855f7]/30 hover:border-[#a855f7] hover:text-white transition-all text-xs font-bold font-label-caps bg-black/40"
                       >
-                        <span className={`material-symbols-outlined text-sm ${downloadingAvatarId === (existingSubmission.id || existingSubmission.email) ? 'animate-spin' : ''}`}>
-                          {downloadingAvatarId === (existingSubmission.id || existingSubmission.email) ? 'sync' : 'sports_esports'}
-                        </span>
+                        <span className="material-symbols-outlined text-sm">sports_esports</span>
                         <span>DOWNLOAD AVATAR</span>
                       </button>
                     )}
@@ -1635,14 +1310,9 @@ const IDCard: React.FC<IDCardProps> = ({
                         </button>
 
                         <button
-                          disabled={isSubmitting ||!photoFile || (!avatarFile && !avatarUrlInput.trim())}
-                          className={`w-full sm:w-auto font-bold py-3.5 px-8 rounded-full transition-all flex items-center justify-center gap-2 text-xs font-label-caps tracking-widest uppercase ${
-  isSubmitting ||
-  !photoFile ||
-  (!avatarFile && !avatarUrlInput.trim())
-    ? 'bg-white/5 text-white/40 border border-white/10 cursor-not-allowed'
-    : 'bg-white/5 hover:bg-white/15 text-white border border-white/25 hover:border-white/50 shadow-[0_0_20px_rgba(255,255,255,0.05)] hover:shadow-[0_0_30px_rgba(255,255,255,0.15)] hover:scale-[1.01] active:scale-95'
-}`}
+                          disabled={isSubmitting}
+                          className="w-full sm:w-auto bg-white/5 hover:bg-white/15 text-white border border-white/25 hover:border-white/50 font-bold py-3.5 px-8 rounded-full shadow-[0_0_20px_rgba(255,255,255,0.05)] hover:shadow-[0_0_30px_rgba(255,255,255,0.15)] hover:scale-[1.01] active:scale-95 transition-all flex items-center justify-center gap-2 text-xs font-label-caps tracking-widest uppercase"
+                          type="submit"
                         >
                           {isSubmitting ? (
                             <>
@@ -1666,10 +1336,9 @@ const IDCard: React.FC<IDCardProps> = ({
           <div className="space-y-6 stagger-in text-left">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-white/5 pb-4">
               <div>
-                <h3 className="font-display-lg text-lg text-white font-bold uppercase tracking-wider flex flex-wrap items-center gap-2.5">
+                <h3 className="font-display-lg text-lg text-white font-bold uppercase tracking-wider flex items-center gap-2">
                   <span className="material-symbols-outlined text-primary text-base">admin_panel_settings</span>
-                  <span>Candidate Dossier Submissions</span>
-                  
+                  Candidate Dossier Submissions
                 </h3>
                 <p className="text-xs text-on-surface-variant max-w-lg mt-0.5">
                   Select and verify candidate digital identity dossiers.
@@ -1698,36 +1367,7 @@ const IDCard: React.FC<IDCardProps> = ({
               </button>
             </div>
 
-            {/* ADMIN SUB-SECTION TABS */}
-            <div className="flex items-center gap-2.5 border-b border-white/10 pb-3">
-              <button
-                onClick={() => setAdminSectionTab('dossiers')}
-                className={`px-4 py-2.5 rounded-xl text-xs font-bold font-label-caps tracking-wider flex items-center gap-2 transition-all duration-200 ${
-                  adminSectionTab === 'dossiers'
-                    ? 'bg-primary/20 border border-primary/40 text-white shadow-[0_0_15px_rgba(168,85,247,0.25)]'
-                    : 'bg-black/30 border border-white/5 text-white/60 hover:text-white hover:bg-white/5'
-                }`}
-              >
-                <span className="material-symbols-outlined text-base">badge</span>
-                <span>DOSSIERS ({candidates.length})</span>
-              </button>
-
-              <button
-                onClick={() => setAdminSectionTab('logs')}
-                className={`px-4 py-2.5 rounded-xl text-xs font-bold font-label-caps tracking-wider flex items-center gap-2 transition-all duration-200 ${
-                  adminSectionTab === 'logs'
-                    ? 'bg-primary/20 border border-primary/40 text-white shadow-[0_0_15px_rgba(168,85,247,0.25)]'
-                    : 'bg-black/30 border border-white/5 text-white/60 hover:text-white hover:bg-white/5'
-                }`}
-              >
-                <span className="material-symbols-outlined text-base">history</span>
-                <span>ACTIVITY LOGS ({adminLogs.length})</span>
-              </button>
-            </div>
-
-            {adminSectionTab === 'dossiers' && (
-              <div className="space-y-6">
-                <div className="glass-panel p-3.5 sm:p-4 rounded-xl border border-white/5 bg-white/5 flex flex-col md:flex-row md:items-center gap-3 sm:gap-4">
+            <div className="glass-panel p-3.5 sm:p-4 rounded-xl border border-white/5 bg-white/5 flex flex-col md:flex-row md:items-center gap-3 sm:gap-4">
               <div className="relative flex-1 w-full">
                 <span className="material-symbols-outlined absolute left-3 top-2.5 text-outline text-sm">search</span>
                 <input
@@ -1739,39 +1379,22 @@ const IDCard: React.FC<IDCardProps> = ({
                 />
               </div>
 
-              <div className="flex flex-wrap items-center justify-between md:justify-end gap-3 shrink-0 w-full md:w-auto">
+              <div className="flex items-center justify-between md:justify-end gap-3 shrink-0 w-full md:w-auto">
                 <div className="flex items-center gap-2 min-w-0">
                   <label className="text-[10px] font-label-caps text-outline tracking-wider font-bold shrink-0">TEAM:</label>
                   <select
                     value={selectedTeam}
                     onChange={(e) => setSelectedTeam(e.target.value)}
-                    className="w-full sm:w-auto bg-black/50 border border-outline-variant/30 text-white rounded-lg px-3 py-1.5 text-xs focus:ring-0 focus:border-primary cursor-pointer hover:bg-black/80 font-label-caps shrink-0"
+                    className="bg-black/50 border border-outline-variant/30 text-white rounded-lg px-3 py-1.5 text-xs focus:ring-0 focus:border-primary cursor-pointer hover:bg-black/80 font-label-caps shrink-0"
                   >
                     <option value="All">All Teams</option>
                     <option value="Design">Design</option>
                     <option value="Education">Education</option>
-                    <option value="Esports (PC)">Esports (PC)</option>
-                    <option value="Esports (Mobile)">Esports (Mobile)</option>
+                    <option value="Esports">Esports</option>
                     <option value="PR">PR</option>
                     <option value="Social Media">Social Media</option>
                     <option value="Technical">Technical</option>
                     <option value="Management">Management</option>
-                  </select>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <label className="text-[10px] font-label-caps text-outline tracking-wider font-bold">
-                    STATUS:
-                  </label>
-
-                  <select
-                    value={selectedStatus}
-                    onChange={(e) => setSelectedStatus(e.target.value)}
-                    className="w-full sm:w-auto bg-black/50 border border-outline-variant/30 text-white rounded-lg px-3 py-1.5 text-xs focus:ring-0 focus:border-primary cursor-pointer hover:bg-black/80 font-label-caps"
-                  >
-                    <option value="All">All</option>
-                    <option value="Pending">Pending</option>
-                    <option value="Approved">Approved</option>
                   </select>
                 </div>
 
@@ -1790,20 +1413,6 @@ const IDCard: React.FC<IDCardProps> = ({
             </div>
 
             <div className="glass-panel p-4 rounded-2xl relative space-y-4 pb-28 sm:pb-16">
-              <div className="flex flex-wrap items-center justify-between gap-2 px-1 pb-3 border-b border-white/5 text-xs text-on-surface-variant font-code-sm">
-                <div className="flex items-center gap-2">
-                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-                  <span className="text-white/80 font-bold">TOTAL REGISTERED:</span>
-                  <span className="text-primary font-black text-sm">{candidates.length}</span>
-                  <span className="text-white/40 font-bold">/ {loadedMembersList.length > 4 ? loadedMembersList.length - 4 : 50}</span>
-                </div>
-                {filteredCandidates.length !== candidates.length && (
-                  <div className="text-purple-300/90 text-[11px] font-medium bg-purple-500/10 border border-purple-500/20 px-2.5 py-0.5 rounded-full">
-                    Showing {filteredCandidates.length} filtered candidate{filteredCandidates.length === 1 ? '' : 's'}
-                  </div>
-                )}
-              </div>
-
               <div className="space-y-4 relative z-10">
                 {loadingData ? (
                   <div className="py-12 text-center text-on-surface-variant font-code-sm animate-pulse">
@@ -1926,29 +1535,125 @@ const IDCard: React.FC<IDCardProps> = ({
                           </div>
 
                           {/* MOBILE CLEAN DOSSIER CARD VIEW */}
-                          <div className="flex md:hidden items-center justify-between p-3.5 gap-3">
-                            <div className="flex items-center gap-3 min-w-0 flex-1">
-                              <div className="w-11 h-11 rounded-lg border border-primary/30 bg-black/40 overflow-hidden shrink-0">
-                                <img src={c.photoUrl} alt="Avatar" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                          <div className="flex md:hidden flex-col p-3.5 space-y-2.5">
+                            <div className="flex items-center justify-between gap-2.5">
+                              <div className="flex items-center gap-3 min-w-0 flex-1">
+                                <div className="w-10 h-10 rounded-lg border border-primary/30 bg-black/40 overflow-hidden shrink-0">
+                                  <img src={c.photoUrl} alt="Avatar" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                                </div>
+                                <div className="min-w-0 flex-1">
+                                  <div className="font-bold text-white text-xs truncate">{c.name}</div>
+                                  <div className="text-[10px] text-primary font-code-sm font-bold">{c.registrationNumber}</div>
+                                </div>
                               </div>
-                              <div className="min-w-0 flex-1">
-                                <div className="font-bold text-white text-xs truncate">{c.name}</div>
-                                <div className="text-[10px] text-primary font-code-sm font-bold truncate">{c.registrationNumber}</div>
-                                <div className="text-[10px] text-white/50 font-code-sm truncate">{c.team || display.value}</div>
+
+                              <div className="flex items-center gap-2 shrink-0">
+                                <span
+                                  className={`px-2 py-0.5 rounded-full border text-[8px] font-label-caps font-bold tracking-wider ${
+                                    c.status === 'Approved'
+                                      ? 'bg-green-500/10 border-green-500/30 text-green-400'
+                                      : 'bg-yellow-500/10 border-yellow-500/30 text-yellow-400'
+                                  }`}
+                                >
+                                  {c.status || 'Pending'}
+                                </span>
+
+                                {/* Mobile 3-Dots Menu Box */}
+                                <div className="relative">
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      const menuKey = c.id || c.email;
+                                      const rect = e.currentTarget.getBoundingClientRect();
+                                      const spaceBelow = window.innerHeight - rect.bottom;
+                                      const openUp = spaceBelow < 220;
+                                      setMenuDirections(prev => ({ ...prev, [menuKey]: openUp ? 'up' : 'down' }));
+                                      setOpenMenuId(openMenuId === menuKey ? null : menuKey);
+                                    }}
+                                    className="p-1.5 rounded-lg bg-black/60 border border-white/10 text-white/80 hover:text-white hover:border-purple-500/50 transition-all"
+                                    title="Actions Menu"
+                                  >
+                                    <span className="material-symbols-outlined text-base">more_vert</span>
+                                  </button>
+
+                                  {openMenuId === (c.id || c.email) && (
+                                    <div
+                                      onClick={(e) => e.stopPropagation()}
+                                      className={`absolute right-0 ${
+                                        menuDirections[c.id || c.email] === 'up' ? 'bottom-full mb-2' : 'top-9'
+                                      } z-[300] w-48 bg-[#12081c] border border-[#a855f7]/40 backdrop-blur-2xl rounded-xl shadow-[0_10px_30px_rgba(0,0,0,0.9)] py-1.5 text-xs font-body-md`}
+                                    >
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setOpenMenuId(null);
+                                          setPreviewCandidate(c);
+                                          setPreviewModalTab('card');
+                                          setPreviewFlipped(false);
+                                        }}
+                                        className="w-full px-3.5 py-2.5 text-left flex items-center gap-2.5 text-purple-400 font-bold hover:bg-white/10 transition-colors"
+                                      >
+                                        <span className="material-symbols-outlined text-base">style</span>
+                                        <span>3D Card View</span>
+                                      </button>
+
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setOpenMenuId(null);
+                                          toggleStatus(c);
+                                        }}
+                                        className={`w-full px-3.5 py-2.5 text-left flex items-center gap-2.5 hover:bg-white/10 transition-colors ${
+                                          c.status === 'Approved' ? 'text-yellow-400 font-bold' : 'text-green-400 font-bold'
+                                        }`}
+                                      >
+                                        <span className="material-symbols-outlined text-base">
+                                          {c.status === 'Approved' ? 'history' : 'verified'}
+                                        </span>
+                                        <span>{c.status === 'Approved' ? 'Mark Pending' : 'Approve Dossier'}</span>
+                                      </button>
+
+                                      <button
+                                        disabled={downloadingId === c.id}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setOpenMenuId(null);
+                                          handleDownload(c);
+                                        }}
+                                        className="w-full px-3.5 py-2.5 text-left flex items-center gap-2.5 text-white/90 hover:bg-white/10 transition-colors font-bold"
+                                      >
+                                        <span className={`material-symbols-outlined text-base ${downloadingId === c.id ? 'animate-spin' : ''}`}>
+                                          {downloadingId === c.id ? 'sync' : 'download'}
+                                        </span>
+                                        <span>Download ID Photo</span>
+                                      </button>
+
+                                      <div className="my-1 border-t border-white/10"></div>
+
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setOpenMenuId(null);
+                                          handleDelete(c);
+                                        }}
+                                        className="w-full px-3.5 py-2.5 text-left flex items-center gap-2.5 text-red-400 hover:bg-red-500/20 transition-colors font-bold"
+                                      >
+                                        <span className="material-symbols-outlined text-base">delete</span>
+                                        <span>Delete Dossier</span>
+                                      </button>
+                                    </div>
+                                  )}
+                                </div>
                               </div>
                             </div>
 
-                            <div className="flex items-center gap-2 shrink-0">
-                              <span
-                                className={`px-2.5 py-1 rounded-full border text-[9px] font-label-caps font-bold tracking-wider ${
-                                  c.status === 'Approved'
-                                    ? 'bg-green-500/10 border-green-500/30 text-green-400'
-                                    : 'bg-yellow-500/10 border-yellow-500/30 text-yellow-400'
-                                }`}
-                              >
-                                {c.status || 'Pending'}
+                            <div className="flex items-center justify-between gap-2 pt-1 border-t border-white/5 text-[10px]">
+                              <span className="px-2 py-0.5 rounded bg-purple-500/15 text-purple-300 font-bold uppercase text-[9px] font-label-caps border border-purple-500/20 truncate max-w-[150px]">
+                                {display.value}
                               </span>
-                              <span className="material-symbols-outlined text-white/40 text-sm">chevron_right</span>
+                              <span className="text-white/50 truncate font-code-sm text-[10px]">
+                                {c.email}
+                              </span>
                             </div>
                           </div>
                         </div>
@@ -1995,13 +1700,10 @@ const IDCard: React.FC<IDCardProps> = ({
                                   <div className="flex flex-col items-center justify-center my-2 relative z-10">
                                     <div className="w-28 h-28 rounded-xl border-2 border-[#a855f7]/30 p-1 bg-black/40 shadow-[0_0_20px_rgba(168,85,247,0.15)] relative overflow-hidden">
                                       <img 
-                                        src={c.photoUrl || `https://api.dicebear.com/9.x/pixel-art/svg?seed=${encodeURIComponent(c.name || 'Member')}&backgroundColor=0a0a0f`} 
+                                        src={c.photoUrl} 
                                         alt={c.name} 
                                         className="w-full h-full object-cover rounded-lg"
                                         referrerPolicy="no-referrer"
-                                        onError={(e) => {
-                                          (e.target as HTMLImageElement).src = `https://api.dicebear.com/9.x/pixel-art/svg?seed=${encodeURIComponent(c.name || 'Member')}&backgroundColor=0a0a0f`;
-                                        }}
                                       />
                                       <div className={`absolute bottom-1 right-1 text-white text-[5px] font-black px-1 py-0.5 rounded tracking-widest uppercase shadow-md pointer-events-none ${
                                         c.status === 'Approved' ? 'bg-green-500/80' : 'bg-yellow-500/80'
@@ -2080,7 +1782,7 @@ const IDCard: React.FC<IDCardProps> = ({
                                   <div className="my-2 flex flex-col items-center justify-center relative z-10">
                                     <div className="w-24 h-24 rounded-xl border border-white/10 bg-white p-1.5 shadow-[0_0_20px_rgba(168,85,247,0.2)]">
                                       <img 
-                                        src={getQrCodeImageUrl(c.registrationNumber, c.qrCodeUrl)}
+                                        src={`https://api.qrserver.com/v1/create-qr-code/?size=140x140&color=0-0-0&bgcolor=ffffff&data=${encodeURIComponent(`${typeof window !== 'undefined' ? window.location.origin : 'https://vrgc.club'}/card/${c.registrationNumber || ''}`)}`} 
                                         alt="Scan to Verify" 
                                         className="w-full h-full object-contain"
                                       />
@@ -2155,20 +1857,6 @@ const IDCard: React.FC<IDCardProps> = ({
                               </span>
                             </button>
 
-                            {c.avatarUrl && (
-                              <button
-                                type="button"
-                                disabled={downloadingAvatarId === (c.id || c.email)}
-                                onClick={() => handleDownloadAvatar(c)}
-                                className="p-1.5 rounded-lg bg-purple-500/10 border border-purple-500/20 text-purple-300 hover:text-white transition-all"
-                                title="Download Gaming Avatar"
-                              >
-                                <span className={`material-symbols-outlined text-xs ${downloadingAvatarId === (c.id || c.email) ? 'animate-spin' : ''}`}>
-                                  {downloadingAvatarId === (c.id || c.email) ? 'sync' : 'sports_esports'}
-                                </span>
-                              </button>
-                            )}
-
                             <button
                               type="button"
                               onClick={() => handleDelete(c)}
@@ -2185,172 +1873,6 @@ const IDCard: React.FC<IDCardProps> = ({
                 )}
               </div>
             </div>
-          </div>
-        )}
-
-          {/* ADMIN ACTIVITY LOGS SUBTAB */}
-            {adminSectionTab === 'logs' && (
-              <div className="space-y-4">
-                {/* Search & Action Filter Controls */}
-                <div className="glass-panel p-3.5 sm:p-4 rounded-xl border border-white/5 bg-white/5 flex flex-col md:flex-row md:items-center gap-3 sm:gap-4">
-                  <div className="relative flex-1 w-full">
-                    <span className="material-symbols-outlined absolute left-3 top-2.5 text-outline text-sm">search</span>
-                    <input
-                      type="text"
-                      placeholder="Search admin email, candidate name, reg number, or details..."
-                      value={logSearchQuery}
-                      onChange={(e) => setLogSearchQuery(e.target.value)}
-                      className="w-full bg-black/30 border border-outline-variant/30 rounded-lg pl-9 pr-4 py-2 text-xs text-white focus:outline-none focus:border-primary placeholder:text-white/25 transition-all duration-300"
-                    />
-                  </div>
-
-                  <div className="flex items-center gap-2 shrink-0">
-                    <label className="text-[10px] font-label-caps text-outline tracking-wider font-bold">ACTION TYPE:</label>
-                    <select
-                      value={logActionFilter}
-                      onChange={(e) => setLogActionFilter(e.target.value)}
-                      className="bg-black/50 border border-outline-variant/30 text-white rounded-lg px-3 py-1.5 text-xs focus:ring-0 focus:border-primary cursor-pointer hover:bg-black/80 font-label-caps"
-                    >
-                      <option value="All">All Actions</option>
-                      <option value="APPROVE_DOSSIER">Approvals</option>
-                      <option value="REVERT_PENDING_DOSSIER">Reversions to Pending</option>
-                      <option value="DELETE_DOSSIER">Deletions</option>
-                      <option value="FORCE_SHEETS_SYNC">Google Sheets Syncs</option>
-                    </select>
-                  </div>
-                </div>
-
-                {/* Audit Logs Table List */}
-                {(() => {
-                  const canDeleteLogs = (currentUser?.email || '').toLowerCase() === 'abhinav.25bcy10254@vitbhopal.ac.in';
-                  const filteredLogs = adminLogs.filter(log => {
-                    const matchesSearch =
-                      !logSearchQuery.trim() ||
-                      (log.performedBy || '').toLowerCase().includes(logSearchQuery.toLowerCase()) ||
-                      (log.targetName || '').toLowerCase().includes(logSearchQuery.toLowerCase()) ||
-                      (log.targetRegNo || '').toLowerCase().includes(logSearchQuery.toLowerCase()) ||
-                      (log.details || '').toLowerCase().includes(logSearchQuery.toLowerCase());
-                    const matchesAction = logActionFilter === 'All' || log.action === logActionFilter;
-                    return matchesSearch && matchesAction;
-                  });
-
-                  if (filteredLogs.length === 0) {
-                    return (
-                      <div className="glass-panel p-12 rounded-2xl border border-white/5 bg-white/5 text-center space-y-3">
-                        <span className="material-symbols-outlined text-4xl text-white/30">find_in_page</span>
-                        <div className="text-white font-bold text-sm">No Activity Logs Found</div>
-                        <p className="text-xs text-white/50 max-w-md mx-auto">
-                          {logSearchQuery || logActionFilter !== 'All'
-                            ? 'No logs match your current search query or action type filter.'
-                            : 'All administrative activities (approvals, reversions to pending, deletions, syncs) will automatically record here in real-time.'}
-                        </p>
-                      </div>
-                    );
-                  }
-
-                  return (
-                    <div className="glass-panel rounded-2xl border border-white/5 bg-black/40 overflow-hidden shadow-2xl">
-                      <div className="overflow-x-auto">
-                        <table className="w-full text-left border-collapse">
-                          <thead>
-                            <tr className="border-b border-white/10 bg-white/5 text-[10px] font-label-caps text-outline tracking-wider uppercase">
-                              <th className="py-3.5 px-4">Timestamp</th>
-                              <th className="py-3.5 px-4">Action</th>
-                              <th className="py-3.5 px-4">Admin Email</th>
-                              <th className="py-3.5 px-4">Target Candidate</th>
-                              <th className="py-3.5 px-4">Activity Details</th>
-                              {canDeleteLogs && <th className="py-3.5 px-4 text-right">Actions</th>}
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-white/5 text-xs">
-                            {filteredLogs.map(log => {
-                              const dateObj = new Date(log.timestamp);
-                              const formattedTime = isNaN(dateObj.getTime())
-                                ? log.timestamp
-                                : dateObj.toLocaleString('en-US', {
-                                    month: 'short',
-                                    day: 'numeric',
-                                    year: 'numeric',
-                                    hour: '2-digit',
-                                    minute: '2-digit',
-                                    second: '2-digit'
-                                  });
-
-                              let badgeStyle = 'bg-purple-500/20 text-purple-300 border-purple-500/30';
-                              let badgeLabel: string = log.action;
-                              let badgeIcon = 'info';
-
-                              if (log.action === 'APPROVE_DOSSIER') {
-                                badgeStyle = 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40';
-                                badgeLabel = 'APPROVED';
-                                badgeIcon = 'verified';
-                              } else if (log.action === 'REVERT_PENDING_DOSSIER') {
-                                badgeStyle = 'bg-amber-500/20 text-amber-300 border-amber-500/40';
-                                badgeLabel = 'REVERTED PENDING';
-                                badgeIcon = 'history';
-                              } else if (log.action === 'DELETE_DOSSIER') {
-                                badgeStyle = 'bg-red-500/20 text-red-300 border-red-500/40';
-                                badgeLabel = 'DELETED';
-                                badgeIcon = 'delete';
-                              } else if (log.action === 'FORCE_SHEETS_SYNC') {
-                                badgeStyle = 'bg-purple-500/20 text-purple-300 border-purple-500/40';
-                                badgeLabel = 'SHEETS SYNC';
-                                badgeIcon = 'cloud_upload';
-                              }
-
-                              return (
-                                <tr key={log.id || log.timestamp + Math.random()} className="hover:bg-white/5 transition-colors">
-                                  <td className="py-3.5 px-4 font-code-sm text-[11px] text-white/70 whitespace-nowrap">
-                                    {formattedTime}
-                                  </td>
-                                  <td className="py-3.5 px-4 whitespace-nowrap">
-                                    <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[9px] font-bold font-label-caps tracking-wider ${badgeStyle}`}>
-                                      <span className="material-symbols-outlined text-xs">{badgeIcon}</span>
-                                      <span>{badgeLabel}</span>
-                                    </span>
-                                  </td>
-                                  <td className="py-3.5 px-4 font-bold text-white text-[11px] whitespace-nowrap">
-                                    {log.performedBy}
-                                  </td>
-                                  <td className="py-3.5 px-4 whitespace-nowrap">
-                                    {log.targetName && log.targetName !== 'N/A' ? (
-                                      <div>
-                                        <div className="font-bold text-white text-[11px]">{log.targetName}</div>
-                                        <div className="text-[10px] text-primary font-code-sm">{log.targetRegNo}</div>
-                                      </div>
-                                    ) : (
-                                      <span className="text-white/40 text-[11px]">N/A</span>
-                                    )}
-                                  </td>
-                                  <td className="py-3.5 px-4 text-white/80 text-[11px]">
-                                    {log.details}
-                                  </td>
-                                  {canDeleteLogs && (
-                                    <td className="py-3.5 px-4 text-right whitespace-nowrap">
-                                      <button
-                                        onClick={() => {
-                                          if (log.id && confirm("Are you sure you want to delete this activity log entry?")) {
-                                            handleDeleteLog(log.id);
-                                          }
-                                        }}
-                                        className="p-1.5 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 hover:bg-red-500/20 hover:border-red-500/40 transition-all shrink-0"
-                                        title="Delete Log Entry"
-                                      >
-                                        <span className="material-symbols-outlined text-xs">delete</span>
-                                      </button>
-                                    </td>
-                                  )}
-                                </tr>
-                              );
-                            })}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
-                  );
-                })()}
-              </div>
-            )}
           </div>
         )}
 
@@ -2573,13 +2095,10 @@ const IDCard: React.FC<IDCardProps> = ({
                         <div className="flex flex-col items-center justify-center my-3 relative z-10">
                           <div className="w-32 h-32 rounded-2xl border-2 border-[#a855f7]/30 p-1 bg-black/40 shadow-[0_0_20px_rgba(168,85,247,0.15)] relative overflow-hidden">
                             <img 
-                              src={previewCandidate.photoUrl || `https://api.dicebear.com/9.x/pixel-art/svg?seed=${encodeURIComponent(previewCandidate.name || 'Member')}&backgroundColor=0a0a0f`} 
+                              src={previewCandidate.photoUrl} 
                               alt={previewCandidate.name} 
                               className="w-full h-full object-cover rounded-xl"
                               referrerPolicy="no-referrer"
-                              onError={(e) => {
-                                (e.target as HTMLImageElement).src = `https://api.dicebear.com/9.x/pixel-art/svg?seed=${encodeURIComponent(previewCandidate.name || 'Member')}&backgroundColor=0a0a0f`;
-                              }}
                             />
                             <div className={`absolute bottom-1 right-1 text-white text-[6px] font-black px-1.5 py-0.5 rounded tracking-widest uppercase shadow-md pointer-events-none ${
                               previewCandidate.status === 'Approved' ? 'bg-green-500/80' : 'bg-yellow-500/80'
@@ -2668,7 +2187,7 @@ const IDCard: React.FC<IDCardProps> = ({
                         <div className="my-3 flex flex-col items-center justify-center relative z-10">
                           <div className="w-28 h-28 rounded-xl border border-white/10 bg-white p-1.5 shadow-[0_0_25px_rgba(168,85,247,0.25)]">
                             <img 
-                              src={getQrCodeImageUrl(previewCandidate.registrationNumber, previewCandidate.qrCodeUrl)}
+                              src={`https://api.qrserver.com/v1/create-qr-code/?size=140x140&color=0-0-0&bgcolor=ffffff&data=${encodeURIComponent(`${typeof window !== 'undefined' ? window.location.origin : 'https://vrgc.club'}/card/${previewCandidate.registrationNumber || ''}`)}`} 
                               alt="Scan to Verify" 
                               className="w-full h-full object-contain"
                             />
@@ -2716,14 +2235,14 @@ const IDCard: React.FC<IDCardProps> = ({
                 onClick={() => toggleStatus(previewCandidate)}
                 className={`w-full sm:flex-1 font-bold py-3 px-6 rounded-full text-xs font-bold font-label-caps flex items-center justify-center gap-2 border transition-all duration-300 hover:scale-[1.01] ${
                   previewCandidate.status === 'Approved'
-                    ? 'bg-amber-500/20 border-amber-500/40 text-amber-300 hover:bg-amber-500/30 shadow-[0_0_20px_rgba(245,158,11,0.2)]'
-                    : 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/30 shadow-[0_0_20px_rgba(16,185,129,0.2)]'
+                    ? 'bg-yellow-500/10 border-yellow-500/30 text-yellow-400 hover:bg-yellow-500/20 shadow-[0_0_20px_rgba(250,204,21,0.15)]'
+                    : 'bg-green-500/10 border-green-500/30 text-green-400 hover:bg-green-500/20 shadow-[0_0_20px_rgba(74,222,128,0.15)]'
                 }`}
               >
                 <span className="material-symbols-outlined text-sm font-bold">
                   {previewCandidate.status === 'Approved' ? 'history' : 'verified'}
                 </span>
-                <span>{previewCandidate.status === 'Approved' ? 'REVERT TO PENDING' : 'APPROVE DOSSIER'}</span>
+                <span>{previewCandidate.status === 'Approved' ? 'MARK PENDING' : 'APPROVE DOSSIER'}</span>
               </button>
 
               <button
@@ -2733,18 +2252,6 @@ const IDCard: React.FC<IDCardProps> = ({
                 <span className="material-symbols-outlined text-sm font-bold">download</span>
                 <span>DOWNLOAD PHOTO</span>
               </button>
-
-              {previewCandidate.avatarUrl && (
-                <button
-                  onClick={() => { handleDownloadAvatar(previewCandidate); setPreviewCandidate(null); }}
-                  className="w-full sm:flex-1 bg-purple-600/30 border border-purple-500/40 hover:bg-purple-600/50 text-white font-bold py-3 px-6 rounded-full text-xs font-bold font-label-caps flex items-center justify-center gap-2 transition-all duration-300 hover:scale-[1.01]"
-                >
-                  <span className={`material-symbols-outlined text-sm font-bold ${downloadingAvatarId === (previewCandidate.id || previewCandidate.email) ? 'animate-spin' : ''}`}>
-                    {downloadingAvatarId === (previewCandidate.id || previewCandidate.email) ? 'sync' : 'sports_esports'}
-                  </span>
-                  <span>DOWNLOAD AVATAR</span>
-                </button>
-              )}
 
               <button
                 onClick={() => { handleDelete(previewCandidate); setPreviewCandidate(null); }}

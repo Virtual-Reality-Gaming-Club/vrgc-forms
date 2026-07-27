@@ -206,21 +206,10 @@ export default function CardDeck({
     };
     update();
     // Only need to re-run when isMobile changes — use matchMedia instead of resize
-    if (typeof window === 'undefined' || !window.matchMedia) return;
     const mq = window.matchMedia('(max-width: 767px)');
     const handler = () => update();
-    if (mq.addEventListener) {
-      mq.addEventListener('change', handler);
-    } else if ((mq as any).addListener) {
-      (mq as any).addListener(handler);
-    }
-    return () => {
-      if (mq.removeEventListener) {
-        mq.removeEventListener('change', handler);
-      } else if ((mq as any).removeListener) {
-        (mq as any).removeListener(handler);
-      }
-    };
+    mq.addEventListener('change', handler);
+    return () => mq.removeEventListener('change', handler);
   }, [isMobile]);
 
   // Throttled requestAnimationFrame loop (~30fps) to eliminate TBT and main-thread blocking
@@ -247,8 +236,8 @@ export default function CardDeck({
       lastTime = now;
       accumTime += delta;
 
-      // Update orbital positions smoothly at 60fps (0.016s)
-      if (accumTime >= 0.016) {
+      // Throttle React state update to ~30fps (0.033s)
+      if (accumTime >= 0.033) {
         deckAngleRef.current += config.speed * (accumTime / 0.016);
         timeRef.current += accumTime;
         accumTime = 0;
