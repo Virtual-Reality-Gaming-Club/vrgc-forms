@@ -20,7 +20,7 @@ export async function GET(request: Request) {
     const payments: any[] = [];
 
     snapshot.forEach((docSnap) => {
-      payments.push({ id: docSnap.id, ...docSnap.data() });
+      payments.push({ id: docSnap.id, ...(docSnap.data() as object) });
     });
 
     // Sort by paid_at descending (client-side since Firestore may not have composite index)
