@@ -26,42 +26,46 @@ export default function VerifyCardClient({
   const [error, setError] = useState<string>(initialError || '');
 
   useEffect(() => {
+    // If scannedMember is already provided from SSR, do NOT block client thread fetching CSV
+    if (scannedMember) {
+      setLoading(false);
+      return;
+    }
+
     const loadData = async () => {
       try {
         const csvList = await fetchCsvMembers();
         setAllCsvMembers(csvList);
 
-        if (!member) {
-          const normalizedTargetReg = regNo.toLowerCase();
-          const csvMatch = csvList.find(
-            (m) => m.registrationNumber.trim().toLowerCase() === normalizedTargetReg
-          );
+        const normalizedTargetReg = regNo.toLowerCase();
+        const csvMatch = csvList.find(
+          (m) => m.registrationNumber.trim().toLowerCase() === normalizedTargetReg
+        );
 
-          if (csvMatch) {
-            const photoUrl = `https://api.dicebear.com/9.x/pixel-art/svg?seed=${encodeURIComponent(csvMatch.name)}&backgroundColor=0a0a0f`;
-            const merged: UnifiedMember = {
-              id: regNo,
-              regNo: regNo,
-              name: csvMatch.name,
-              phone: csvMatch.phone || '',
-              email: csvMatch.email || '',
-              assignedTeam: csvMatch.team || 'General',
-              position: csvMatch.position || 'Core Member',
-              role: csvMatch.position || 'Core Member',
-              photoUrl,
-              imageUrl: photoUrl,
-              avatarUrl: photoUrl,
-              joinDate: '2024-08-01',
-              specialization: `${csvMatch.team} Division`,
-              rating: 4.9,
-              fromFirestore: false,
-              fromCsv: true,
-            };
-            setMember(merged);
-            setError('');
-          } else if (!scannedMember) {
-            setError(`No verified ID Card dossier found for registration number: ${regNo}`);
-          }
+        if (csvMatch) {
+          const photoUrl = `https://api.dicebear.com/9.x/pixel-art/svg?seed=${encodeURIComponent(csvMatch.name)}&backgroundColor=0a0a0f`;
+          const merged: UnifiedMember = {
+            id: regNo,
+            regNo: regNo,
+            name: csvMatch.name,
+            phone: csvMatch.phone || '',
+            email: csvMatch.email || '',
+            assignedTeam: csvMatch.team || 'General',
+            position: csvMatch.position || 'Core Member',
+            role: csvMatch.position || 'Core Member',
+            photoUrl,
+            imageUrl: photoUrl,
+            avatarUrl: photoUrl,
+            joinDate: '2024-08-01',
+            specialization: `${csvMatch.team} Division`,
+            rating: 4.9,
+            fromFirestore: false,
+            fromCsv: true,
+          };
+          setMember(merged);
+          setError('');
+        } else {
+          setError(`No verified ID Card dossier found for registration number: ${regNo}`);
         }
       } catch (err) {
         console.error('Error fetching CSV member backup:', err);
@@ -71,7 +75,7 @@ export default function VerifyCardClient({
     };
 
     loadData();
-  }, [regNo, scannedMember, member]);
+  }, [regNo, scannedMember]);
 
   if (loading) {
     return (

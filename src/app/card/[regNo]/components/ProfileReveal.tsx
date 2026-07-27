@@ -13,17 +13,31 @@ import {
   Mail,
   Award,
   Hash,
-  Star,
   Sparkles,
   ChevronDown,
   ChevronUp,
-  Video,
-  Camera,
-  Share2,
   User,
   RotateCcw,
   Home,
 } from 'lucide-react';
+
+// Inline LinkedIn SVG (brand icons removed from lucide-react v1+)
+function LinkedInIcon({ size = 16, color = 'currentColor' }: { size?: number; color?: string }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill={color}
+      xmlns="http://www.w3.org/2000/svg"
+      style={{ flexShrink: 0 }}
+    >
+      <path d="M16 8a6 6 0 0 1 6 6v7h-4v-7a2 2 0 0 0-2-2 2 2 0 0 0-2 2v7h-4v-7a6 6 0 0 1 6-6z" />
+      <rect x="2" y="9" width="4" height="12" />
+      <circle cx="4" cy="4" r="2" />
+    </svg>
+  );
+}
 
 interface ProfileRevealProps {
   member: UnifiedMember | null;
@@ -32,20 +46,34 @@ interface ProfileRevealProps {
   onReplay?: () => void;
 }
 
-const SOCIALS = [
-  { Icon: Globe, href: 'https://vrgc.club/', label: 'Website', accent: '#c084fc' },
-  { Icon: Video, href: 'https://www.youtube.com/@vrgcvitb', label: 'YouTube', accent: '#ff4444' },
-  { Icon: Camera, href: 'https://www.instagram.com/vrgc.vitb', label: 'Instagram', accent: '#e040fb' },
-  { Icon: Share2, href: 'https://www.linkedin.com/company/vrgc-vitb', label: 'LinkedIn', accent: '#a855f7' },
-];
+// Only Website + LinkedIn
+const PORTAL_LINKS: Array<{
+  Icon: React.ElementType | ((props: { size?: number; color?: string }) => React.ReactElement);
+  href: string;
+  label: string;
+  accent: string;
+}> = [
+    {
+      Icon: Globe,
+      href: 'https://vrgc.vercel.app',
+      label: 'Website',
+      accent: '#c084fc',
+    },
+    {
+      Icon: LinkedInIcon,
+      href: 'https://www.linkedin.com/company/vrgc-vitb',
+      label: 'LinkedIn',
+      accent: '#a855f7',
+    },
+  ];
 
-function SocialButton({
+function PortalButton({
   Icon,
   href,
   label,
   accent,
 }: {
-  Icon: React.ElementType;
+  Icon: React.ElementType | ((props: { size?: number; color?: string }) => React.ReactElement);
   href: string;
   label: string;
   accent: string;
@@ -55,18 +83,24 @@ function SocialButton({
       href={href}
       target="_blank"
       rel="noopener noreferrer"
-      className="pointer-events-auto relative group flex items-center gap-2 overflow-hidden px-2.5 py-1.5 rounded-lg transition-transform active:scale-95"
+      className="pointer-events-auto relative group flex items-center justify-center gap-2.5 overflow-hidden rounded-xl transition-transform active:scale-95"
       style={{
-        background: 'rgba(6, 2, 16, 0.9)',
-        border: '1px solid rgba(147, 51, 234, 0.4)',
+        minHeight: '48px',
+        background: 'rgba(6, 2, 16, 0.92)',
+        border: `1px solid ${accent}55`,
         textDecoration: 'none',
+        padding: '10px 16px',
       }}
     >
-      <Icon size={13} style={{ color: accent, flexShrink: 0 }} />
-      <span className="font-mono uppercase text-[10px] text-white/90 tracking-wider whitespace-nowrap">
+      <Icon size={16} color={accent} style={{ flexShrink: 0 }} />
+      <span className="font-mono uppercase text-[11px] sm:text-xs text-white/90 tracking-widest font-semibold">
         {label}
       </span>
-      <ExternalLink size={9} className="opacity-50 group-hover:opacity-100 transition-opacity ml-auto" style={{ color: accent }} />
+      <ExternalLink
+        size={10}
+        className="opacity-40 group-hover:opacity-90 transition-opacity ml-auto shrink-0"
+        style={{ color: accent }}
+      />
     </a>
   );
 }
@@ -75,16 +109,20 @@ export default function ProfileReveal({ member, isVisible, isComplete, onReplay 
   const [seqStep, setSeqStep] = useState<number>(0);
   const [showDossier, setShowDossier] = useState<boolean>(false);
   const [scrollProgress, setScrollProgress] = useState<number>(0);
-  const [isMobile, setIsMobile] = useState<boolean>(false);
 
   const dossierRef = useRef<HTMLDivElement | null>(null);
   const touchStartYRef = useRef<number | null>(null);
+  const autoOpenRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const targetProgressRef = useRef(0);
   const scrollProgressRef = useRef(0);
   const rafScrollRef = useRef<number | null>(null);
 
   const toggleDossier = useCallback((open?: boolean) => {
+    if (autoOpenRef.current) {
+      clearTimeout(autoOpenRef.current);
+      autoOpenRef.current = null;
+    }
     setShowDossier((prev) => {
       const next = open !== undefined ? open : !prev;
       targetProgressRef.current = next ? 1 : 0;
@@ -98,19 +136,12 @@ export default function ProfileReveal({ member, isVisible, isComplete, onReplay 
     return () => window.removeEventListener('toggle-dossier', handleToggleCustom);
   }, [toggleDossier]);
 
-  useEffect(() => {
-    const check = () => setIsMobile(window.innerWidth < 768);
-    check();
-    window.addEventListener('resize', check);
-    return () => window.removeEventListener('resize', check);
-  }, []);
-
   // Butter-smooth Lerp momentum scrolling RAF loop
   useEffect(() => {
     const updateSmoothScroll = () => {
       const diff = targetProgressRef.current - scrollProgressRef.current;
       if (Math.abs(diff) > 0.0003) {
-        scrollProgressRef.current += diff * 0.14; // Silky lerp dampening
+        scrollProgressRef.current += diff * 0.14;
         setScrollProgress(scrollProgressRef.current);
       } else if (scrollProgressRef.current !== targetProgressRef.current) {
         scrollProgressRef.current = targetProgressRef.current;
@@ -133,24 +164,25 @@ export default function ProfileReveal({ member, isVisible, isComplete, onReplay 
       targetProgressRef.current = 0;
       scrollProgressRef.current = 0;
       setScrollProgress(0);
+      if (autoOpenRef.current) clearTimeout(autoOpenRef.current);
       return;
     }
 
     setSeqStep(0);
 
-    const t1 = setTimeout(() => {
-      setSeqStep(1);
-    }, 550);
-
+    const t1 = setTimeout(() => setSeqStep(1), 550);
     const t2 = setTimeout(() => {
       setSeqStep(2);
+      // Auto-open dossier 600ms after intro animation completes
+      autoOpenRef.current = setTimeout(() => toggleDossier(true), 600);
     }, 1100);
 
     return () => {
       clearTimeout(t1);
       clearTimeout(t2);
+      if (autoOpenRef.current) clearTimeout(autoOpenRef.current);
     };
-  }, [isVisible]);
+  }, [isVisible, toggleDossier]);
 
   // Lock mobile pull-to-refresh & page overscroll while dossier card active
   useEffect(() => {
@@ -171,14 +203,10 @@ export default function ProfileReveal({ member, isVisible, isComplete, onReplay 
     if (seqStep < 2) return;
 
     if (!targetProgressRef.current || targetProgressRef.current < 0.5) {
-      if (e.deltaY > 5) {
-        toggleDossier(true);
-      }
+      if (e.deltaY > 5) toggleDossier(true);
     } else {
       const el = dossierRef.current;
-      if (el && el.scrollTop <= 5 && e.deltaY < -15) {
-        toggleDossier(false);
-      }
+      if (el && el.scrollTop <= 5 && e.deltaY < -15) toggleDossier(false);
     }
   }, [seqStep, toggleDossier]);
 
@@ -194,17 +222,10 @@ export default function ProfileReveal({ member, isVisible, isComplete, onReplay 
     touchStartYRef.current = null;
 
     if (targetProgressRef.current < 0.5) {
-      // First scroll/swipe up: Open details dossier
-      if (diff > 15) {
-        toggleDossier(true);
-      }
+      if (diff > 15) toggleDossier(true);
     } else {
-      // Dossier is open:
-      // Swiping down to close ONLY triggers when dossier is scrolled to the absolute top (scrollTop <= 5)
       const el = dossierRef.current;
-      if (diff < -25 && (!el || el.scrollTop <= 5)) {
-        toggleDossier(false);
-      }
+      if (diff < -25 && (!el || el.scrollTop <= 5)) toggleDossier(false);
     }
   }, [seqStep, toggleDossier]);
 
@@ -217,14 +238,13 @@ export default function ProfileReveal({ member, isVisible, isComplete, onReplay 
   if (!member) return null;
 
   const joinFormatted = member.joinDate
-    ? new Date(member.joinDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }).toUpperCase()
+    ? new Date(member.joinDate)
+      .toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
+      .toUpperCase()
     : '2024 - 2025';
 
-  const topCanvasTop = seqStep === 0 ? '42vh' : `${4 - scrollProgress * 2.5}vh`;
-  const topCanvasScale = seqStep === 0 ? 1 : 1 - scrollProgress * 0.08;
-
-  const detailsCanvasTop = `${100 - scrollProgress * 52}vh`;
-  const detailsCanvasOpacity = seqStep === 2 ? Math.min(1, scrollProgress * 1.6) : 0;
+  const topCanvasTop = `${3.5 - scrollProgress * 2}vh`;
+  const topCanvasScale = 1 - scrollProgress * 0.08;
 
   return (
     <div
@@ -237,16 +257,7 @@ export default function ProfileReveal({ member, isVisible, isComplete, onReplay 
         willChange: 'opacity',
       }}
     >
-      {/* Soft violet radial glow */}
-      <div
-        className="fixed left-1/2 top-[34vh] -translate-x-1/2 -translate-y-1/2 w-[320px] h-[320px] rounded-full pointer-events-none z-10 transition-opacity duration-500"
-        style={{
-          opacity: seqStep === 2 ? 0.35 : 0,
-          background: 'radial-gradient(circle, rgba(192, 132, 252, 0.25) 0%, rgba(168, 85, 247, 0.15) 50%, transparent 80%)',
-        }}
-      />
-
-      {/* ═══ TOP CANVAS: NAME & POSITION ═══ */}
+      {/* ═══ TOP CANVAS: VERIFIED LABEL + NAME ONLY ═══ */}
       <motion.div
         initial={{ x: '-50%', scale: 0.15, opacity: 0 }}
         animate={{
@@ -255,187 +266,145 @@ export default function ProfileReveal({ member, isVisible, isComplete, onReplay 
           opacity: isVisible ? 1 : 0,
         }}
         transition={{ duration: 0.45, ease: [0.16, 1, 0.3, 1] }}
-        className="fixed left-1/2 flex flex-col items-center text-center w-[92%] max-w-[420px] px-5 py-3.5 rounded-2xl z-30 pointer-events-auto transition-all duration-500 ease-out"
+        className="fixed left-1/2 flex flex-col items-center text-center w-[88%] max-w-[400px] px-5 py-3 rounded-2xl z-30 pointer-events-auto transition-all duration-500 ease-out"
         style={{
           top: topCanvasTop,
           background: '#070212',
-          border: '1px solid rgba(147, 51, 234, 0.5)',
-          boxShadow: '0 8px 24px rgba(0, 0, 0, 0.9)',
+          border: '1px solid rgba(147, 51, 234, 0.45)',
+          boxShadow: '0 6px 20px rgba(0, 0, 0, 0.85)',
           willChange: 'transform, top',
         }}
       >
+        {/* Top accent line */}
         <div className="absolute top-0 left-1/4 right-1/4 h-[2px] bg-gradient-to-r from-transparent via-[#c084fc] to-transparent" />
 
-        <span className="font-mono text-[9px] uppercase tracking-[0.3em] text-[#c084fc] flex items-center gap-1.5 mb-1">
-          <Sparkles size={11} className="text-[#c084fc]" /> // VERIFIED DOSSIER LOADED
+        {/* Verified label */}
+        <span className="font-mono text-[9px] uppercase tracking-[0.3em] text-[#c084fc] flex items-center gap-1.5 mb-2">
+          <Sparkles size={10} className="text-[#c084fc]" />
+          // VERIFIED DOSSIER LOADED
         </span>
 
-        <div className="flex items-center gap-2 mb-1 flex-wrap justify-center">
-          <div className="inline-flex items-center gap-1.5 px-3 py-0.5 rounded-full border border-[#c084fc]/70 bg-[#4c1d95]/50 text-[#d8b4fe]">
-            <span className="w-1.5 h-1.5 rounded-full bg-[#c084fc]" />
-            <span className="font-mono text-[10px] sm:text-xs font-bold tracking-wider uppercase">
-              {member.role || member.position || 'CORE MEMBER'}
-            </span>
-          </div>
-          {member.assignedTeam && (
-            <>
-              <span className="text-[#a855f7]/60 text-xs">•</span>
-              <span className="font-rajdhani uppercase font-bold text-white/90 text-xs sm:text-sm tracking-widest">
-                {member.assignedTeam}
-              </span>
-            </>
-          )}
-        </div>
-
-        <h1 className="font-orbitron font-extrabold uppercase text-white tracking-wider text-xl sm:text-2xl md:text-3xl leading-tight">
-          {member.name}
+        {/* Member Name */}
+        <h1 className="font-orbitron font-extrabold uppercase text-white tracking-wider text-lg sm:text-2xl md:text-3xl leading-tight break-words max-w-full">
+          {member.name || 'VRGC MEMBER'}
         </h1>
 
-        <div className="absolute top-2 left-2 w-2.5 h-2.5 border-t-2 border-l-2 border-[#c084fc]/70 pointer-events-none" />
-        <div className="absolute top-2 right-2 w-2.5 h-2.5 border-t-2 border-r-2 border-[#c084fc]/70 pointer-events-none" />
-        <div className="absolute bottom-2 left-2 w-2.5 h-2.5 border-b-2 border-l-2 border-[#c084fc]/70 pointer-events-none" />
-        <div className="absolute bottom-2 right-2 w-2.5 h-2.5 border-b-2 border-r-2 border-[#c084fc]/70 pointer-events-none" />
+        {/* Corner marks */}
+        <div className="absolute top-2 left-2 w-2.5 h-2.5 border-t-2 border-l-2 border-[#c084fc]/60 pointer-events-none" />
+        <div className="absolute top-2 right-2 w-2.5 h-2.5 border-t-2 border-r-2 border-[#c084fc]/60 pointer-events-none" />
+        <div className="absolute bottom-2 left-2 w-2.5 h-2.5 border-b-2 border-l-2 border-[#c084fc]/60 pointer-events-none" />
+        <div className="absolute bottom-2 right-2 w-2.5 h-2.5 border-b-2 border-r-2 border-[#c084fc]/60 pointer-events-none" />
       </motion.div>
 
       {/* ═══ BOTTOM DETAILS DOSSIER CANVAS ═══ */}
       <div
         ref={dossierRef}
-        className="fixed left-1/2 w-[92%] max-w-[420px] p-4 sm:p-5 rounded-2xl flex flex-col gap-3 overflow-hidden z-40 no-scrollbar pointer-events-auto"
+        className="fixed left-1/2 w-[92%] max-w-[420px] p-4 sm:p-5 rounded-2xl flex flex-col gap-3 z-40 no-scrollbar pointer-events-auto"
         style={{
-          top: '48vh',
-          maxHeight: '50vh',
+          top: '46dvh',
+          maxHeight: '48dvh',
           overflowY: 'auto',
+          touchAction: 'pan-y',
+          WebkitOverflowScrolling: 'touch',
+          overscrollBehaviorY: 'contain',
           background: '#060212',
-          border: '1px solid rgba(147, 51, 234, 0.5)',
-          boxShadow: '0 8px 24px rgba(0, 0, 0, 0.95)',
+          border: '1px solid rgba(147, 51, 234, 0.45)',
+          boxShadow: '0 6px 20px rgba(0, 0, 0, 0.9)',
           transform: showDossier && seqStep === 2 ? 'translate(-50%, 0)' : 'translate(-50%, 120%)',
           opacity: showDossier && seqStep === 2 ? 1 : 0,
-          transition: 'transform 0.25s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.2s linear',
+          transition: 'transform 0.28s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.2s linear',
           willChange: 'transform, opacity',
         }}
       >
         {/* Header Bar */}
-        <div className="flex items-center justify-between pb-2 border-b border-[#a855f7]/35 shrink-0">
+        <div className="flex items-center justify-between pb-2 border-b border-[#a855f7]/30 shrink-0">
           <div className="flex items-center gap-1.5">
-            <ShieldCheck className="text-[#c084fc]" size={16} />
-            <span className="font-orbitron font-bold text-xs sm:text-sm tracking-widest text-white uppercase">
+            <ShieldCheck className="text-[#c084fc]" size={15} />
+            <span className="font-orbitron font-bold text-xs tracking-widest text-white uppercase">
               MEMBER DOSSIER
             </span>
           </div>
-          <span className="font-mono text-[9px] tracking-widest text-[#00ff88] uppercase font-bold flex items-center gap-1">
-            <span className="w-1.5 h-1.5 rounded-full bg-[#00ff88] animate-pulse" />
-            OFFICIAL VERIFIED
-          </span>
+          <div className="flex flex-col items-end">
+            <span className="font-mono text-[9px] tracking-widest text-[#00ff88] uppercase font-bold flex items-center gap-1">
+              <span className="w-1.5 h-1.5 rounded-full bg-[#00ff88] animate-pulse" />
+              VERIFIED
+            </span>
+            <span className="font-mono text-[9px] tracking-wider text-[#d8b4fe] uppercase mt-0.5">
+              {joinFormatted}
+            </span>
+          </div>
         </div>
 
-        {/* Complete Unified Details Grid */}
+        {/* Details Grid — 2 columns, 2 rows */}
         <div className="grid grid-cols-2 gap-2 text-left shrink-0">
-          {/* Reg No */}
-          <div className="p-2.5 rounded-xl bg-white/[0.03] border border-white/[0.08]">
+          {/* Top Row: Registration Number */}
+          <div className="p-2.5 rounded-xl bg-white/[0.03] border border-white/[0.07]">
             <span className="font-mono text-[8px] sm:text-[9px] uppercase tracking-wider text-[#c084fc] flex items-center gap-1">
-              <Hash size={10} /> REGISTRATION NO.
+              <Hash size={9} /> REGISTRATION NUMBER
             </span>
             <p className="font-rajdhani font-semibold text-xs sm:text-sm text-white mt-0.5">
               {member.regNo}
             </p>
           </div>
 
-          {/* Team / Division */}
-          <div className="p-2.5 rounded-xl bg-white/[0.03] border border-white/[0.08]">
+          {/* Top Row: Contact */}
+          <div className="p-2.5 rounded-xl bg-white/[0.03] border border-white/[0.07]">
             <span className="font-mono text-[8px] sm:text-[9px] uppercase tracking-wider text-[#c084fc] flex items-center gap-1">
-              <Award size={10} /> TEAM / DIVISION
-            </span>
-            <p className="font-rajdhani font-semibold text-xs sm:text-sm text-white mt-0.5 uppercase truncate">
-              {member.assignedTeam || 'VRGC'}
-            </p>
-          </div>
-
-          {/* Role / Position */}
-          <div className="p-2.5 rounded-xl bg-white/[0.03] border border-white/[0.08]">
-            <span className="font-mono text-[8px] sm:text-[9px] uppercase tracking-wider text-[#c084fc] flex items-center gap-1">
-              <User size={10} /> POSITION / ROLE
-            </span>
-            <p className="font-rajdhani font-semibold text-xs sm:text-sm text-white mt-0.5 uppercase truncate">
-              {member.position || member.role || 'CORE MEMBER'}
-            </p>
-          </div>
-
-          {/* Phone */}
-          <div className="p-2.5 rounded-xl bg-white/[0.03] border border-white/[0.08]">
-            <span className="font-mono text-[8px] sm:text-[9px] uppercase tracking-wider text-[#c084fc] flex items-center gap-1">
-              <Phone size={10} /> PHONE NUMBER
+              <Phone size={9} /> CONTACT
             </span>
             <p className="font-rajdhani font-semibold text-xs text-white mt-0.5">
               {member.phone || 'N/A'}
             </p>
           </div>
 
-          {/* Specialization / Department */}
-          <div className="p-2.5 rounded-xl bg-white/[0.03] border border-white/[0.08]">
+          {/* Second Row: Position */}
+          <div className="p-2.5 rounded-xl bg-white/[0.03] border border-white/[0.07]">
             <span className="font-mono text-[8px] sm:text-[9px] uppercase tracking-wider text-[#c084fc] flex items-center gap-1">
-              <Sparkles size={10} /> SPECIALIZATION
+              <User size={9} /> POSITION
             </span>
             <p className="font-rajdhani font-semibold text-xs sm:text-sm text-white mt-0.5 uppercase truncate">
-              {member.specialization}
+              {member.position || member.role || 'CORE MEMBER'}
             </p>
           </div>
 
-          {/* Joined Date */}
-          <div className="p-2.5 rounded-xl bg-white/[0.03] border border-white/[0.08]">
+          {/* Second Row: Team */}
+          <div className="p-2.5 rounded-xl bg-white/[0.03] border border-white/[0.07]">
             <span className="font-mono text-[8px] sm:text-[9px] uppercase tracking-wider text-[#c084fc] flex items-center gap-1">
-              <Calendar size={10} /> JOINED DATE
+              <Award size={9} /> TEAM
             </span>
-            <p className="font-rajdhani font-semibold text-xs sm:text-sm text-white mt-0.5 uppercase">
-              {joinFormatted}
+            <p className="font-rajdhani font-semibold text-xs sm:text-sm text-white mt-0.5 uppercase truncate">
+              {member.assignedTeam || 'VRGC'}
             </p>
           </div>
         </div>
 
-        {/* Email Row */}
-        <div className="p-2.5 rounded-xl bg-white/[0.03] border border-white/[0.08] text-left shrink-0">
+        {/* Third Row: Email Address — full width */}
+        <div className="p-2.5 rounded-xl bg-white/[0.03] border border-white/[0.07] text-left shrink-0">
           <span className="font-mono text-[8px] sm:text-[9px] uppercase tracking-wider text-[#c084fc] flex items-center gap-1">
-            <Mail size={10} /> EMAIL ADDRESS
+            <Mail size={9} /> EMAIL ADDRESS
           </span>
           <p className="font-rajdhani font-semibold text-xs sm:text-sm text-white mt-0.5 truncate">
-            {member.email || `${member.name.split(' ')[0].toLowerCase()}@vrgc.club`}
+            {member.email || `${(member.name || 'member').split(' ')[0].toLowerCase()}@vrgc.club`}
           </p>
         </div>
 
-        {/* Member Rating */}
-        <div className="p-2.5 rounded-xl bg-white/[0.03] border border-white/[0.08] flex items-center justify-between text-left shrink-0">
-          <span className="font-mono text-[8px] sm:text-[9px] uppercase tracking-wider text-[#c084fc] flex items-center gap-1">
-            <Star size={10} /> MEMBER RATING
+        {/* Portal Links — two-card layout */}
+        <div className="pt-2 border-t border-[#a855f7]/25 flex flex-col gap-2 shrink-0">
+          <span className="font-mono text-[8px] sm:text-[9px] uppercase tracking-wider text-[#c084fc] text-left font-semibold">
+            // CONNECT &amp; PORTAL LINKS
           </span>
-          <div className="flex items-center gap-1.5">
-            <div className="flex text-[#c084fc] text-xs">
-              {[1, 2, 3, 4, 5].map((s) => (
-                <span key={s} style={{ opacity: s <= Math.round(member.rating) ? 1 : 0.2 }}>
-                  ★
-                </span>
-              ))}
-            </div>
-            <span className="font-orbitron font-bold text-xs text-[#c084fc]">
-              {member.rating ? member.rating.toFixed(1) : '5.0'}
-            </span>
-          </div>
-        </div>
-
-        {/* Social Links */}
-        <div className="pt-2 border-t border-[#a855f7]/30 flex flex-col gap-1.5 shrink-0">
-          <span className="font-mono text-[8px] sm:text-[9px] uppercase tracking-wider text-[#c084fc]/80 text-left">
-            // CONNECT & PORTAL LINKS
-          </span>
-          <div className="grid grid-cols-2 gap-1.5">
-            {SOCIALS.map((s) => (
-              <SocialButton key={s.label} {...s} />
+          <div className="grid grid-cols-2 gap-2">
+            {PORTAL_LINKS.map((s) => (
+              <PortalButton key={s.label} {...s} />
             ))}
           </div>
         </div>
 
-        <div className="absolute top-2 left-2 w-3 h-3 border-t-2 border-l-2 border-[#c084fc]/70 pointer-events-none" />
-        <div className="absolute top-2 right-2 w-3 h-3 border-t-2 border-r-2 border-[#c084fc]/70 pointer-events-none" />
-        <div className="absolute bottom-2 left-2 w-3 h-3 border-b-2 border-l-2 border-[#c084fc]/70 pointer-events-none" />
-        <div className="absolute bottom-2 right-2 w-3 h-3 border-b-2 border-r-2 border-[#c084fc]/70 pointer-events-none" />
+        {/* Corner marks */}
+        <div className="absolute top-2 left-2 w-3 h-3 border-t-2 border-l-2 border-[#c084fc]/60 pointer-events-none" />
+        <div className="absolute top-2 right-2 w-3 h-3 border-t-2 border-r-2 border-[#c084fc]/60 pointer-events-none" />
+        <div className="absolute bottom-2 left-2 w-3 h-3 border-b-2 border-l-2 border-[#c084fc]/60 pointer-events-none" />
+        <div className="absolute bottom-2 right-2 w-3 h-3 border-b-2 border-r-2 border-[#c084fc]/60 pointer-events-none" />
       </div>
 
       {/* ═══ BOTTOM ACTION CONTROLS ═══ */}
@@ -446,19 +415,19 @@ export default function ProfileReveal({ member, isVisible, isComplete, onReplay 
             <button
               type="button"
               onClick={onReplay}
-              className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full border border-purple-500/70 bg-[#070214]/95 backdrop-blur-xl text-purple-300 hover:text-white hover:border-purple-400 hover:scale-105 active:scale-95 transition-all shadow-[0_0_20px_rgba(168,85,247,0.4)] font-mono text-[9px] sm:text-[10px] font-bold tracking-wider cursor-pointer"
+              className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full border border-purple-500/60 bg-[#070214]/95 text-purple-300 hover:text-white hover:border-purple-400 hover:scale-105 active:scale-95 transition-transform font-mono text-[9px] sm:text-[10px] font-bold tracking-wider cursor-pointer"
             >
-              <RotateCcw size={13} className="text-purple-400" />
-              <span className="whitespace-nowrap">REPLAY ANIMATION</span>
+              <RotateCcw size={12} className="text-purple-400" />
+              <span className="whitespace-nowrap">REPLAY</span>
             </button>
           )}
 
           {/* Main Portal Button */}
           <Link
             href="/"
-            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full border border-white/30 bg-black/90 backdrop-blur-xl text-slate-200 hover:text-white hover:border-white/60 hover:scale-105 active:scale-95 transition-all shadow-[0_0_20px_rgba(255,255,255,0.15)] font-mono text-[9px] sm:text-[10px] font-bold tracking-wider cursor-pointer"
+            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full border border-white/25 bg-black/90 text-slate-200 hover:text-white hover:border-white/50 hover:scale-105 active:scale-95 transition-transform font-mono text-[9px] sm:text-[10px] font-bold tracking-wider cursor-pointer"
           >
-            <Home size={13} className="text-purple-400" />
+            <Home size={12} className="text-purple-400" />
             <span className="whitespace-nowrap">MAIN PORTAL</span>
           </Link>
 
@@ -466,15 +435,15 @@ export default function ProfileReveal({ member, isVisible, isComplete, onReplay 
           <button
             type="button"
             onClick={() => toggleDossier()}
-            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full border border-[#a855f7]/60 bg-[#04010a]/95 backdrop-blur-md text-[#d8b4fe] shadow-[0_0_20px_rgba(147,51,234,0.5)] transition-transform active:scale-95 cursor-pointer"
+            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full border border-[#a855f7]/55 bg-[#04010a]/95 text-[#d8b4fe] transition-transform active:scale-95 cursor-pointer"
           >
             <span className="font-mono text-[9px] sm:text-[10px] uppercase tracking-widest font-semibold whitespace-nowrap">
               {scrollProgress < 0.5 ? 'DOSSIER' : 'CLOSE'}
             </span>
             {scrollProgress < 0.5 ? (
-              <ChevronDown size={13} className="animate-bounce text-[#c084fc]" />
+              <ChevronDown size={12} className="animate-bounce text-[#c084fc]" />
             ) : (
-              <ChevronUp size={13} className="animate-bounce text-[#c084fc]" />
+              <ChevronUp size={12} className="animate-bounce text-[#c084fc]" />
             )}
           </button>
         </div>

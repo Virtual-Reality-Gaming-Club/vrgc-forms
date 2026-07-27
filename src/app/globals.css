@@ -1,5 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Sora:wght@400;600;700;800&family=Hanken+Grotesk:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;700&family=Orbitron:wght@400;600;700;800;900&family=Rajdhani:wght@500;600;700&display=swap');
-@import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap');
+/* Fonts loaded via layout.tsx <link> tags for best LCP performance */
 @import "tailwindcss";
 
 @layer base {
@@ -23,6 +22,14 @@
     color: var(--on-surface);
     font-family: 'Hanken Grotesk', 'Inter', system-ui, sans-serif;
     overflow-x: hidden;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeSpeed;
+  }
+
+  button, a {
+    touch-action: manipulation;
   }
 }
 
@@ -329,3 +336,31 @@
 
 .no-scrollbar::-webkit-scrollbar { display: none; }
 .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+/* ═══════════════════════════════════════ */
+/* ═══ MOBILE: Pause heavy animations  ═══ */
+/* ═══════════════════════════════════════ */
+@media (max-width: 767px) {
+  /* Disable expensive ambient background animation on mobile */
+  body > * { animation: none !important; }
+
+  /* Pause camera-breathe on mobile — causes full subtree repaint */
+  .animate-camera-breathe { animation: none !important; }
+
+  /* Reduce blur cost on mobile filters */
+  .blur-heavy { filter: blur(20px) !important; }
+}
+
+/* ═══════════════════════════════════ */
+/* ═══ REDUCED MOTION: Respect it  ═══ */
+/* ═══════════════════════════════════ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

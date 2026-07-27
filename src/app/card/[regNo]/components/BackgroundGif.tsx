@@ -1,75 +1,44 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import { motion } from 'framer-motion';
 
 interface BackgroundGifProps {
   avatarUrl: string;
   isVisible: boolean;
-  isComplete?: boolean;
 }
 
-export default function BackgroundGif({ avatarUrl, isVisible, isComplete = false }: BackgroundGifProps) {
-  const [isDesktop, setIsDesktop] = useState<boolean>(false);
-
-  useEffect(() => {
-    const handleResize = () => {
-      setIsDesktop(window.innerWidth >= 768);
-    };
-    handleResize();
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, []);
-
-  if (!avatarUrl) return null;
-
-  // On mobile phones, suppress background GIF completely until animation is complete!
-  const shouldRenderMobile = isDesktop || isComplete;
-  if (!shouldRenderMobile) return null;
+export default function BackgroundGif({ avatarUrl, isVisible }: BackgroundGifProps) {
+  if (!avatarUrl || !isVisible) return null;
 
   return (
     <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: isVisible ? 0.76 : 0 }}
-      transition={{ duration: 1.2, ease: 'easeInOut' }}
-      className="fixed inset-0 pointer-events-none z-0 overflow-hidden flex items-center justify-center"
+      initial={{ opacity: 0, scale: 0.9 }}
+      animate={{
+        opacity: isVisible ? 0.42 : 0,
+        scale: isVisible ? 1 : 0.9,
+      }}
+      transition={{ duration: 0.75, ease: [0.16, 1, 0.3, 1] }}
+      className="fixed inset-0 pointer-events-none z-0 overflow-hidden"
     >
-      {isDesktop ? (
-        /* PC / Desktop Mode: Horizontal Mode */
-        <div className="relative w-full h-full flex items-center justify-center bg-black/10">
-          <img
-            src={avatarUrl}
-            alt="Cyberpunk Avatar Background (PC)"
-            className="w-full h-full object-cover filter brightness-105 contrast-110 saturate-125"
-            loading="eager"
-            decoding="async"
-            style={{
-              objectPosition: 'center 35%',
-              willChange: 'transform, opacity',
-            }}
-            referrerPolicy="no-referrer"
-          />
-          <div className="absolute inset-0 bg-gradient-to-t from-[#020006] via-transparent to-[#020006]/50" />
-          <div className="absolute inset-0 bg-gradient-to-r from-[#020006]/60 via-transparent to-[#020006]/60" />
-        </div>
-      ) : (
-        /* Phone / Mobile Mode: Vertical Mode */
-        <div className="relative w-full h-full flex items-center justify-center bg-black/10">
-          <img
-            src={avatarUrl}
-            alt="Cyberpunk Avatar Background (Mobile)"
-            className="w-full h-full object-cover filter brightness-105 contrast-110 saturate-125"
-            loading="eager"
-            decoding="async"
-            style={{
-              objectPosition: 'center center',
-              willChange: 'transform, opacity',
-            }}
-            referrerPolicy="no-referrer"
-          />
-          <div className="absolute inset-0 bg-gradient-to-b from-[#020006]/60 via-transparent to-[#020006]/70" />
-        </div>
-      )}
+      {/* Single <img> — CSS handles mobile vs desktop framing */}
+      <img
+        src={avatarUrl}
+        alt=""
+        aria-hidden="true"
+        referrerPolicy="no-referrer"
+        loading="eager"
+        decoding="async"
+        fetchPriority="high"
+        className="w-full h-full object-cover filter brightness-105 contrast-110 saturate-120"
+        style={{
+          objectPosition: 'center 30%',
+          willChange: 'opacity',
+        }}
+      />
+      {/* Gradient vignette — blends avatar into background */}
+      <div className="absolute inset-0 bg-gradient-to-t from-[#020006]/80 via-transparent to-[#020006]/40" />
+      <div className="absolute inset-0 bg-gradient-to-r from-[#020006]/50 via-transparent to-[#020006]/50" />
     </motion.div>
   );
 }

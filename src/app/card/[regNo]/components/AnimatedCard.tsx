@@ -36,6 +36,7 @@ interface AnimatedCardProps {
   targetAspectRatio?: number;
   cardMember?: UnifiedMember;
   children?: React.ReactNode;
+  isMobile?: boolean;
 }
 
 function getStaticCardPhoto(member?: UnifiedMember, index: number = 0): string {
@@ -65,6 +66,7 @@ export const AnimatedCard = memo(({
   targetAspectRatio = 2 / 3,
   cardMember,
   children,
+  isMobile = false,
 }: AnimatedCardProps) => {
   const prefersReduced = useReducedMotion();
 
@@ -75,19 +77,15 @@ export const AnimatedCard = memo(({
     isSelected &&
     ['CARD_FLIP', 'AVATAR_REVEAL', 'PROFILE_EXPAND', 'COMPLETE'].includes(phase);
 
-  // Reveal target GIF ONLY after animation phase is over (PROFILE_EXPAND or COMPLETE)
-  const isAnimationOver = isSelected && ['PROFILE_EXPAND', 'COMPLETE'].includes(phase);
+  // Memoized — avoids repeated string work on every render
+  const staticPhoto = React.useMemo(() => getStaticCardPhoto(cardMember, index), [cardMember, index]);
 
-  const staticPhoto = getStaticCardPhoto(cardMember, index);
-
-  // Strictly static member photo during 3D shuffle. Target GIF is revealed ONLY when animation is over.
-  const cardDisplayImage = isAnimationOver
-    ? (cardMember?.avatarUrl || staticPhoto)
+  // Front face: avatar GIF. Never show real photo on front face.
+  const cardDisplayImage = cardMember?.avatarUrl && !cardMember.avatarUrl.endsWith('.svg')
+    ? cardMember.avatarUrl
     : staticPhoto;
 
   const currentAspectRatio = isFlipped ? targetAspectRatio : 2 / 3;
-
-  const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
 
   const getState = (): TargetAndTransition => {
     if (prefersReduced) {
@@ -258,7 +256,7 @@ export const AnimatedCard = memo(({
               rotateX: 0,
               transition: {
                 duration: 0.55,
-                ease: 'easeInOut',
+                ease: [0.16, 1, 0.3, 1],
               },
             }
           : {
@@ -314,7 +312,6 @@ export const AnimatedCard = memo(({
   const getZIndex = (): number => {
     if (isActive) return 200;
     if (phase === 'ENTRY' || phase === 'DECK_APPEAR') {
-      // Card 1 is static on top (zIndex 100). Card 0 glides up BENEATH Card 1 (zIndex 50).
       if (index === 1) return 100;
       if (index === 0) return 50;
       return totalCards - index;
@@ -340,52 +337,47 @@ export const AnimatedCard = memo(({
               rotateX: 0,
             }
       }
-      animate={{
-        ...getState(),
-        aspectRatio: currentAspectRatio,
-      }}
-      transition={{
-        aspectRatio: {
-          type: 'spring',
-          stiffness: 140,
-          damping: 18,
-        },
-      }}
+      animate={getState()}
       style={{
         position: 'absolute',
         width: 'clamp(200px, 58vw, 320px)',
+        aspectRatio: currentAspectRatio,
         willChange: 'transform, opacity',
         zIndex: getZIndex(),
-        contain: 'layout',
-        transform: 'translateZ(0)',
         animation: isIdleFloat ? 'card-idle-float 3s ease-in-out infinite' : 'none',
       }}
     >
-      {/* ═══ SIDE 2: Selected Member Photo Canvas (Displayed after flip) ═══ */}
+      {/* ═══ BACK FACE: Real Member Photo — fades in after flip ═══ */}
       <div
         className="absolute inset-0 rounded-2xl overflow-hidden pointer-events-auto"
         style={{
-          zIndex: isFlipped ? 20 : 1,
           opacity: isFlipped ? 1 : 0,
-          transition: phase === 'CARD_FLIP' ? 'opacity 0.01s linear 0.2s' : 'opacity 0.25s ease-in-out',
+          transition: isFlipped ? 'opacity 0.4s ease-in' : 'opacity 0.15s ease-out',
+          zIndex: isFlipped ? 10 : 1,
         }}
       >
-        <div className="w-full h-full rounded-2xl overflow-hidden flex flex-col items-center justify-center">
+        <div
+          className="w-full h-full rounded-2xl overflow-hidden"
+          style={{
+            border: '1.5px solid #c084fc',
+            boxShadow: '0 0 20px rgba(168,85,247,0.5), 0 8px 32px rgba(0,0,0,0.9)',
+          }}
+        >
           {children}
         </div>
       </div>
 
-      {/* ═══ SIDE 1: Member Avatar GIF Face (Displayed during starting shuffle animation) ═══ */}
+      {/* ═══ FRONT FACE: Avatar / Illustration — visible until flip ═══ */}
       <div
         className="absolute inset-0 rounded-2xl pointer-events-none overflow-hidden"
         style={{
-          zIndex: isFlipped ? 1 : 10,
           opacity: isFlipped ? 0 : 1,
-          transition: phase === 'CARD_FLIP' ? 'opacity 0.01s linear 0.2s' : 'opacity 0.25s ease-in-out',
+          transition: isFlipped ? 'opacity 0.3s ease-out' : 'opacity 0.3s ease-in',
+          zIndex: isFlipped ? 1 : 10,
         }}
       >
         {isActive && (
-          <div 
+          <div
             className="absolute inset-0 rounded-2xl pointer-events-none"
             style={{
               transform: 'scale(1.05)',
@@ -400,23 +392,19 @@ export const AnimatedCard = memo(({
             backgroundColor: '#05020c',
             border: isActive ? '1.5px solid #c084fc' : '1.5px solid rgba(168, 85, 247, 0.45)',
             boxShadow: isActive
-              ? '0 0 20px rgba(168,85,247,0.4), 0 6px 24px rgba(0,0,0,0.8)'
+              ? '0 0 16px rgba(168,85,247,0.4), 0 6px 24px rgba(0,0,0,0.8)'
               : '0 4px 16px rgba(0,0,0,0.5)',
-            transition: 'border-color 0.5s ease-in-out',
-            contain: isActive ? 'strict' : 'layout',
-            transform: 'translateZ(0)',
           }}
         >
-          {/* Member Card Photo / GIF Canvas */}
+          {/* Avatar Photo Canvas */}
           <div className="relative w-full h-full p-1 flex items-center justify-center overflow-hidden">
             <img
               src={cardDisplayImage}
               alt={cardMember?.name || 'Member Photo'}
               referrerPolicy="no-referrer"
               className="w-full h-full object-cover rounded-xl shadow-lg border border-purple-500/30 block"
-              loading="eager"
+              loading={isSelected ? "eager" : "lazy"}
               decoding="async"
-              style={{ willChange: 'transform, opacity' }}
             />
 
             {/* Holographic Scanline */}
@@ -430,9 +418,9 @@ export const AnimatedCard = memo(({
               }}
             />
 
-            {/* Crosshatch geometric overlay */}
+            {/* Crosshatch geometric overlay — desktop only */}
             <div
-              className="absolute inset-0 pointer-events-none opacity-10"
+              className="hidden md:block absolute inset-0 pointer-events-none opacity-10"
               style={{
                 backgroundImage: `
                   repeating-linear-gradient(45deg, rgba(168,85,247,0.5) 0px, rgba(168,85,247,0.5) 1px, transparent 1px, transparent 10px),
@@ -461,4 +449,3 @@ export const AnimatedCard = memo(({
 });
 
 export default AnimatedCard;
-

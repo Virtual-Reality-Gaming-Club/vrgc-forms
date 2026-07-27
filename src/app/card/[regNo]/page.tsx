@@ -1,9 +1,12 @@
-import React from 'react';
+import React, { cache } from 'react';
 import { Metadata } from 'next';
-import { collection, query, where, getDocs } from 'firebase/firestore';
+import { collection, query, where, getDocs, limit } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import VerifyCardClient from './VerifyCardClient';
 import { UnifiedMember } from './types';
+
+// ISR: revalidate this page every 5 minutes
+export const revalidate = 300;
 
 interface PageProps {
   params: Promise<{
@@ -29,7 +32,8 @@ function formatSupabaseUrl(urlOrPath: string, isAvatar: boolean = false): string
   return `${SUPABASE_STORAGE_BASE}/id-photos/${cleanPath}`;
 }
 
-async function getMemberData(regNo: string) {
+// cache() deduplicates calls — generateMetadata and VerifyCardPage share one Firestore fetch
+const getMemberData = cache(async function getMemberData(regNo: string) {
   let member: any = null;
   let otherMembers: UnifiedMember[] = [];
   let error: string | null = null;
@@ -60,9 +64,9 @@ async function getMemberData(regNo: string) {
           member = doc.data();
         });
 
-        // Fetch remaining roster for orbital deck animation
+        // Fetch small sample roster for orbital deck animation (limit 8 for instant speed)
         try {
-          const allQ = query(collection(db, 'id_cards'));
+          const allQ = query(collection(db, 'id_cards'), limit(8));
           const allSnapshot = await getDocs(allQ);
           allSnapshot.forEach(docSnap => {
             const d = docSnap.data();
@@ -103,7 +107,7 @@ async function getMemberData(regNo: string) {
   }
 
   return { member, otherMembers, error };
-}
+});
 
 // Dynamic OpenGraph SEO Metadata for Social Media Sharing (SSR)
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {

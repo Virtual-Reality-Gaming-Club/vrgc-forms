@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useEffect } from 'react';
+import Image from 'next/image';
 import { UnifiedMember } from '../types';
 
 interface MemberCardProps {
@@ -10,31 +11,33 @@ interface MemberCardProps {
 }
 
 export default function MemberCard({ member, isRevealed, onAspectRatioChange }: MemberCardProps) {
-  // Image pipeline: photoUrl -> imageUrl -> avatarUrl from Firebase document -> fallback
-  const photoUrl = member.photoUrl || member.imageUrl || member.avatarUrl;
+  // Real photo pipeline: only photoUrl / imageUrl — never fall back to avatarUrl (that's the GIF avatar)
+  const realPhoto = member.photoUrl || member.imageUrl;
   const fallbackImg = `https://api.dicebear.com/9.x/pixel-art/svg?seed=${encodeURIComponent(member.name || member.regNo)}&backgroundColor=0a0a0f`;
-  
-  const displayImage = photoUrl && photoUrl.trim() !== '' ? photoUrl : fallbackImg;
 
-  // Pre-load natural image dimensions for dynamic container aspect ratio morphing
+  // When revealed: show real photo. Before reveal: doesn't matter (this face is hidden).
+  const displayImage = realPhoto && realPhoto.trim() !== '' ? realPhoto : fallbackImg;
+
+  // Measure real image dimensions once for aspect-ratio morphing — abort on cleanup
   useEffect(() => {
-    if (displayImage) {
-      const img = new Image();
-      img.src = displayImage;
-      img.onload = () => {
-        if (img.naturalWidth && img.naturalHeight && img.naturalHeight > 0) {
-          const ratio = img.naturalWidth / img.naturalHeight;
-          onAspectRatioChange?.(ratio);
-        }
-      };
-    }
+    if (!displayImage || !onAspectRatioChange) return;
+    let cancelled = false;
+    const img = new window.Image();
+    img.decoding = 'async';
+    img.onload = () => {
+      if (cancelled) return;
+      if (img.naturalWidth && img.naturalHeight > 0) {
+        onAspectRatioChange(img.naturalWidth / img.naturalHeight);
+      }
+    };
+    img.src = displayImage;
+    return () => { cancelled = true; };
   }, [displayImage, onAspectRatioChange]);
 
   const handleImageLoad = (e: React.SyntheticEvent<HTMLImageElement>) => {
     const img = e.currentTarget;
-    if (img.naturalWidth && img.naturalHeight && img.naturalHeight > 0) {
-      const ratio = img.naturalWidth / img.naturalHeight;
-      onAspectRatioChange?.(ratio);
+    if (img.naturalWidth && img.naturalHeight > 0) {
+      onAspectRatioChange?.(img.naturalWidth / img.naturalHeight);
     }
   };
 
@@ -77,19 +80,20 @@ export default function MemberCard({ member, isRevealed, onAspectRatioChange }: 
 
       {/* Member Photo Canvas (Fills entire card canvas) */}
       <div className="relative w-full h-full flex items-center justify-center overflow-hidden p-1.5 z-10">
-        <img
+        <Image
           src={displayImage}
           alt={member.name || 'Member Photo'}
           onLoad={handleImageLoad}
           referrerPolicy="no-referrer"
-          decoding="async"
-          className="w-full h-full object-cover rounded-xl shadow-lg border border-purple-500/30 block"
-          loading="eager"
+          className="object-cover rounded-xl shadow-lg border border-purple-500/30 block pointer-events-none select-none"
+          priority={true}
+          fill
+          sizes="(max-width: 768px) 100vw, 400px"
         />
 
-        {/* Holographic glass reflection */}
+        {/* Holographic glass reflection — desktop only (hidden on mobile via CSS) */}
         <div
-          className="absolute inset-0 pointer-events-none z-[5]"
+          className="hidden md:block absolute inset-0 pointer-events-none z-[5]"
           style={{
             background:
               'linear-gradient(135deg, transparent 35%, rgba(255,255,255,0.04) 45%, rgba(255,255,255,0.08) 50%, rgba(255,255,255,0.04) 55%, transparent 65%)',

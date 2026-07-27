@@ -39,14 +39,14 @@ function computeOrbitalPositions(
 }
 
 const REAL_CYBERPUNK_GIFS = [
-  'https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExbnY5aG51aWVrcTFldGJhYjRycndzYnlvcmV6aGlsYzRxeXUwdDNtZyZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/LqT855y03dANy/giphy.gif',
-  'https://media.giphy.com/media/26tn33aiTi1jkl6H6/giphy.gif',
-  'https://media.giphy.com/media/3oKIPnAiaMCws8nOsE/giphy.gif',
-  'https://media.giphy.com/media/d9A3XKqxodGjC/giphy.gif',
-  'https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExM3Zsd24ybjRhNDRnbnJraGlnNHZwcmhrMHR4ZnpuaHczOTI3dnA2ZyZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/13Hgw8hCXKvhwQ/giphy.gif',
-  'https://media.giphy.com/media/xT9IgzoKnwFNmISR8I/giphy.gif',
-  'https://media.giphy.com/media/3o7TKSjRrfIPjeiVyM/giphy.gif',
-  'https://media.giphy.com/media/l41YoV54ZT606Bwzv/giphy.gif',
+  'https://api.dicebear.com/9.x/bottts/svg?seed=cyber_nexus_1&backgroundColor=0a0a0f',
+  'https://api.dicebear.com/9.x/bottts/svg?seed=cyber_matrix_2&backgroundColor=0a0a0f',
+  'https://api.dicebear.com/9.x/shapes/svg?seed=cyber_grid_3&backgroundColor=0a0a0f',
+  'https://api.dicebear.com/9.x/bottts/svg?seed=cyber_synth_4&backgroundColor=0a0a0f',
+  'https://api.dicebear.com/9.x/shapes/svg?seed=cyber_pulse_5&backgroundColor=0a0a0f',
+  'https://api.dicebear.com/9.x/bottts/svg?seed=cyber_core_6&backgroundColor=0a0a0f',
+  'https://api.dicebear.com/9.x/shapes/svg?seed=cyber_wave_7&backgroundColor=0a0a0f',
+  'https://api.dicebear.com/9.x/bottts/svg?seed=cyber_glow_8&backgroundColor=0a0a0f',
 ];
 
 interface CardDeckProps {
@@ -57,6 +57,7 @@ interface CardDeckProps {
   onPhaseComplete: (phase: CardPhase) => void;
   onMemberSelected?: (member: UnifiedMember) => void;
   isPreloading?: boolean;
+  isMobile?: boolean;
 }
 
 export default function CardDeck({
@@ -67,18 +68,9 @@ export default function CardDeck({
   onPhaseComplete,
   onMemberSelected,
   isPreloading = false,
+  isMobile = false,
 }: CardDeckProps) {
-  const [isMobile, setIsMobile] = useState<boolean>(false);
   const cardCount = isMobile ? 5 : 6;
-
-  useEffect(() => {
-    const checkMobile = () => {
-      setIsMobile(window.innerWidth < 768);
-    };
-    checkMobile();
-    window.addEventListener('resize', checkMobile);
-    return () => window.removeEventListener('resize', checkMobile);
-  }, []);
 
   const [orbitalPositions, setOrbitalPositions] = useState<OrbitalPosition[]>(
     () => Array.from({ length: cardCount }, () => ({ ...NEUTRAL })),
@@ -183,14 +175,17 @@ export default function CardDeck({
 
     const realTargetAvatar =
       targetMember.avatarUrl ||
-      targetMember.imageUrl ||
-      targetMember.photoUrl ||
       REAL_CYBERPUNK_GIFS[0];
+
+    const realTargetPhoto =
+      targetMember.photoUrl ||
+      targetMember.imageUrl;
 
     const finalTargetMember: UnifiedMember = {
       ...targetMember,
       avatarUrl: realTargetAvatar,
-      photoUrl: targetMember.photoUrl || realTargetAvatar,
+      photoUrl: realTargetPhoto || realTargetAvatar,
+      imageUrl: realTargetPhoto || realTargetAvatar,
     };
 
     return [finalTargetMember, ...selectedOthers];
@@ -210,11 +205,14 @@ export default function CardDeck({
       });
     };
     update();
-    window.addEventListener('resize', update);
-    return () => window.removeEventListener('resize', update);
+    // Only need to re-run when isMobile changes — use matchMedia instead of resize
+    const mq = window.matchMedia('(max-width: 767px)');
+    const handler = () => update();
+    mq.addEventListener('change', handler);
+    return () => mq.removeEventListener('change', handler);
   }, [isMobile]);
 
-  // Performant requestAnimationFrame loop for silky 60fps orbital rotation
+  // Throttled requestAnimationFrame loop (~30fps) to eliminate TBT and main-thread blocking
   useEffect(() => {
     if (rafRef.current) {
       cancelAnimationFrame(rafRef.current);
@@ -231,22 +229,28 @@ export default function CardDeck({
       : { speed: 0.022, spread: 1.0, chaos: 0.08 };
 
     let lastTime = performance.now();
+    let accumTime = 0;
 
     const loop = (now: number) => {
       const delta = Math.min((now - lastTime) / 1000, 0.05);
       lastTime = now;
+      accumTime += delta;
 
-      deckAngleRef.current += config.speed;
-      timeRef.current += delta;
+      // Throttle React state update to ~30fps (0.033s)
+      if (accumTime >= 0.033) {
+        deckAngleRef.current += config.speed * (accumTime / 0.016);
+        timeRef.current += accumTime;
+        accumTime = 0;
 
-      setOrbitalPositions(
-        computeOrbitalPositions(
-          deckAngleRef.current, cardCount,
-          dims.rx, dims.ry,
-          config.spread, config.chaos,
-          timeRef.current,
-        ),
-      );
+        setOrbitalPositions(
+          computeOrbitalPositions(
+            deckAngleRef.current, cardCount,
+            dims.rx, dims.ry,
+            config.spread, config.chaos,
+            timeRef.current,
+          ),
+        );
+      }
 
       rafRef.current = requestAnimationFrame(loop);
     };
@@ -419,16 +423,21 @@ export default function CardDeck({
   }, [targetMember, csvMembers, databaseMembers, cardCount]);
 
   const finalTargetMember = React.useMemo(() => {
+    // Avatar = GIF/illustration for background & front face
     const realTargetAvatar =
       targetMember.avatarUrl ||
-      targetMember.imageUrl ||
-      targetMember.photoUrl ||
       REAL_CYBERPUNK_GIFS[0];
+
+    // Real photo = the actual Supabase member portrait photo
+    const realTargetPhoto =
+      targetMember.photoUrl ||
+      targetMember.imageUrl;
 
     return {
       ...targetMember,
       avatarUrl: realTargetAvatar,
-      photoUrl: targetMember.photoUrl || realTargetAvatar,
+      photoUrl: realTargetPhoto || realTargetAvatar,
+      imageUrl: realTargetPhoto || realTargetAvatar,
     };
   }, [targetMember]);
 
@@ -461,6 +470,7 @@ export default function CardDeck({
             orbitalPosition={orbitalPositions[i] || NEUTRAL}
             targetAspectRatio={i === selectedIndex ? targetAspectRatio : 2 / 3}
             cardMember={cardMemberData}
+            isMobile={isMobile}
           >
             <MemberCard
               member={cardMemberData}

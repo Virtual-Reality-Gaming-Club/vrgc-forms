@@ -124,36 +124,7 @@ export default function HudOverlay({ phase }: HudOverlayProps) {
         </div>
       ))}
 
-      {/* Status block */}
-      <div
-        className="absolute flex items-center gap-1.5"
-        style={{
-          top: 'clamp(36px, 5vh, 52px)',
-          left: 'clamp(10px, 2vw, 18px)',
-        }}
-      >
-        <div
-          className="rounded-full shrink-0"
-          style={{
-            width: '5px',
-            height: '5px',
-            backgroundColor: statusColor,
-            boxShadow: isEntry ? 'none' : `0 0 6px ${statusColor}`,
-            animation: isEntry ? 'none' : 'status-blink 2s ease-in-out infinite',
-          }}
-        />
-        <span
-          className="font-mono uppercase"
-          style={{
-            fontSize: 'clamp(0.4rem, 1.2vw, 0.5rem)',
-            letterSpacing: '0.12em',
-            color: statusColor,
-            animation: 'hud-flicker 4s ease-in-out infinite',
-          }}
-        >
-          {getStatusText(phase)}
-        </span>
-      </div>
+
 
       {/* Timestamp */}
       <div
@@ -165,13 +136,13 @@ export default function HudOverlay({ phase }: HudOverlayProps) {
       >
         <span
           className="font-mono"
-          style={{ fontSize: 'clamp(0.35rem, 1vw, 0.45rem)', color: 'rgba(192,132,252,0.45)', letterSpacing: '0.15em' }}
+          style={{ fontSize: 'clamp(0.35rem, 1vw, 0.45rem)', color: 'rgba(192,132,252,0.85)', letterSpacing: '0.15em' }}
         >
           VRGC NEXUS v2.0
         </span>
         <span
           className="font-mono"
-          style={{ fontSize: 'clamp(0.4rem, 1.2vw, 0.5rem)', color: 'rgba(168,85,247,0.35)', letterSpacing: '0.12em' }}
+          style={{ fontSize: 'clamp(0.4rem, 1.2vw, 0.5rem)', color: 'rgba(192,132,252,0.85)', letterSpacing: '0.12em' }}
         >
           {time}
         </span>
@@ -193,7 +164,7 @@ export default function HudOverlay({ phase }: HudOverlayProps) {
               style={{
                 width: 'clamp(100px, 25vw, 180px)',
                 height: '2px',
-                background: 'rgba(168,85,247,0.12)',
+                background: 'rgba(168,85,247,0.25)',
               }}
             >
               <motion.div
@@ -209,7 +180,7 @@ export default function HudOverlay({ phase }: HudOverlayProps) {
                 className="font-mono uppercase"
                 style={{
                   fontSize: 'clamp(0.3rem, 0.9vw, 0.4rem)',
-                  color: 'rgba(192,132,252,0.4)',
+                  color: 'rgba(192,132,252,0.85)',
                   letterSpacing: '0.15em',
                 }}
               >
@@ -218,8 +189,8 @@ export default function HudOverlay({ phase }: HudOverlayProps) {
               <span
                 className="font-mono"
                 style={{
-                  fontSize: '0.3rem',
-                  color: 'rgba(168,85,247,0.3)',
+                  fontSize: '0.35rem',
+                  color: 'rgba(192,132,252,0.8)',
                   marginTop: '2px',
                 }}
               >
