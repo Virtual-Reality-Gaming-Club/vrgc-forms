@@ -39,7 +39,7 @@ interface CandidateSubmission {
   status: string;
 }
 
-const IDCard: React.FC<IDCardProps> = ({ 
+const IDCard: React.FC<IDCardProps> = ({
   onRedirect,
   externalUser,
   externalMemberData,
@@ -104,7 +104,8 @@ const IDCard: React.FC<IDCardProps> = ({
   const [selectedTeam, setSelectedTeam] = useState<string>('All');
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [previewCandidate, setPreviewCandidate] = useState<CandidateSubmission | null>(null);
-  
+  const [totalMembers, setTotalMembers] = useState<number>(0);
+
   // Admin 3D Card View & Flipping states
   const [adminViewMode, setAdminViewMode] = useState<'list' | 'cards'>('list');
   const [flippedCardsMap, setFlippedCardsMap] = useState<Record<string, boolean>>({});
@@ -191,6 +192,30 @@ const IDCard: React.FC<IDCardProps> = ({
 
     return () => unsub();
   }, [currentUser, isAdmin]);
+
+  useEffect(() => {
+    if (isAdmin) {
+      fetch('/members.csv')
+        .then((res) => res.text())
+        .then((txt) => {
+          const lines = txt
+            .split('\n')
+            .map(l => l.trim().toLowerCase())
+            .filter(l => l.length > 0 && !l.startsWith('name,'));
+
+          const uniqueEmails = new Set();
+          lines.forEach(line => {
+            const parts = line.split(',');
+            if (parts.length >= 4) {
+              uniqueEmails.add(parts[3].trim());
+            }
+          });
+
+          setTotalMembers(uniqueEmails.size);
+        })
+        .catch((err) => console.error('Failed to load members.csv:', err));
+    }
+  }, [isAdmin]);
 
   const checkExistingSubmission = async (email: string) => {
     try {
@@ -577,8 +602,8 @@ const IDCard: React.FC<IDCardProps> = ({
       });
 
       // Update local state list
-      setCandidates(prev => prev.map(c => 
-        c.email.toLowerCase() === candidate.email.toLowerCase() 
+      setCandidates(prev => prev.map(c =>
+        c.email.toLowerCase() === candidate.email.toLowerCase()
           ? { ...c, status: newStatus }
           : c
       ));
@@ -612,19 +637,19 @@ const IDCard: React.FC<IDCardProps> = ({
     const search = searchQuery.toLowerCase();
 
     const matchesSearch = name.includes(search) || reg.includes(search) || email.includes(search);
-    
+
     let matchesTeam = false;
     if (selectedTeam === 'All') {
       matchesTeam = true;
     } else if (selectedTeam.toLowerCase() === 'management') {
       const team = (c.team || '').toLowerCase();
       const pos = (c.position || '').toLowerCase();
-      matchesTeam = 
-        team.includes('management') || 
-        team.includes('coordinator') || 
+      matchesTeam =
+        team.includes('management') ||
+        team.includes('coordinator') ||
         team.includes('president') ||
-        pos.includes('management') || 
-        pos.includes('coordinator') || 
+        pos.includes('management') ||
+        pos.includes('coordinator') ||
         pos.includes('president');
     } else {
       matchesTeam = c.team && c.team.toLowerCase() === selectedTeam.toLowerCase();
@@ -697,7 +722,7 @@ const IDCard: React.FC<IDCardProps> = ({
   return (
     <main className="flex-grow min-h-screen relative overflow-hidden text-left bg-mesh">
       <section className="max-w-6xl mx-auto px-4 py-12 md:py-20">
-        
+
         {/* Header Section */}
         <header className="mb-10 flex flex-col md:flex-row md:items-end justify-between gap-6">
           <div className="text-left">
@@ -728,27 +753,23 @@ const IDCard: React.FC<IDCardProps> = ({
           <div className="flex border-b border-outline-variant/30 mb-8 relative z-20">
             <button
               onClick={() => setActiveSubTab('portal')}
-              className={`px-6 py-3 font-label-caps tracking-wider text-xs md:text-sm font-bold border-b-2 transition-all duration-300 ${
-                activeSubTab === 'portal'
-                  ? 'border-primary text-primary shadow-[0_4px_12px_rgba(207,92,255,0.15)]'
-                  : 'border-transparent text-on-surface-variant hover:text-white'
-              }`}
+              className={`px-6 py-3 font-label-caps tracking-wider text-xs md:text-sm font-bold border-b-2 transition-all duration-300 ${activeSubTab === 'portal'
+                ? 'border-primary text-primary shadow-[0_4px_12px_rgba(207,92,255,0.15)]'
+                : 'border-transparent text-on-surface-variant hover:text-white'
+                }`}
             >
               ID CARD PORTAL
             </button>
             <button
               onClick={() => setActiveSubTab('admin')}
-              className={`px-6 py-3 font-label-caps tracking-wider text-xs md:text-sm font-bold border-b-2 transition-all duration-300 flex items-center gap-2 ${
-                activeSubTab === 'admin'
-                  ? 'border-red-500 text-red-400 shadow-[0_4px_12px_rgba(239,68,68,0.25)]'
-                  : 'border-transparent text-red-400/80 hover:text-red-400'
-              }`}
+              className={`px-6 py-3 font-label-caps tracking-wider text-xs md:text-sm font-bold border-b-2 transition-all duration-300 flex items-center gap-2 ${activeSubTab === 'admin'
+                ? 'border-red-500 text-red-400 shadow-[0_4px_12px_rgba(239,68,68,0.25)]'
+                : 'border-transparent text-red-400/80 hover:text-red-400'
+                }`}
             >
               <span className="material-symbols-outlined text-sm text-red-400">admin_panel_settings</span>
               <span>ADMIN DASHBOARD</span>
-              <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-red-500/20 text-red-300 border border-red-500/30">
-                {candidates.length} LOGS
-              </span>
+
             </button>
           </div>
         )}
@@ -759,17 +780,17 @@ const IDCard: React.FC<IDCardProps> = ({
             {existingSubmission ? (
               <div className="flex flex-col items-center justify-center py-10 px-4 stagger-in">
                 {/* 3D Flip Card Container */}
-                <div 
+                <div
                   onClick={() => setIsFlipped(!isFlipped)}
                   className="relative w-full max-w-[340px] aspect-[2.2/3.4] cursor-pointer group [perspective:1000px]"
                 >
                   <div className={`relative w-full h-full duration-700 [transform-style:preserve-3d] ${isFlipped ? '[transform:rotateY(180deg)]' : ''}`}>
-                    
+
                     {/* FRONT OF THE ID CARD */}
                     <div className="absolute inset-0 w-full h-full [backface-visibility:hidden] select-none">
                       <div className="relative overflow-hidden w-full h-full rounded-3xl border border-[#a855f7]/35 bg-gradient-to-b from-[#12051e] via-[#05010a] to-[#0c0416] p-6 flex flex-col justify-between shadow-[0_0_50px_rgba(168,85,247,0.25)]">
                         <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.005)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.005)_1px,transparent_1px)] bg-[size:12px_12px] pointer-events-none opacity-40"></div>
-                        
+
                         <div className="absolute top-3 left-3 w-3 h-3 border-t-2 border-l-2 border-[#a855f7]/40 pointer-events-none"></div>
                         <div className="absolute top-3 right-3 w-3 h-3 border-t-2 border-r-2 border-[#a855f7]/40 pointer-events-none"></div>
                         <div className="absolute bottom-3 left-3 w-3 h-3 border-b-2 border-l-2 border-[#a855f7]/40 pointer-events-none"></div>
@@ -787,9 +808,9 @@ const IDCard: React.FC<IDCardProps> = ({
 
                         <div className="flex flex-col items-center justify-center my-3 relative z-10">
                           <div className="w-36 h-36 rounded-2xl border-2 border-[#a855f7]/30 p-1 bg-black/40 shadow-[0_0_20px_rgba(168,85,247,0.15)] relative overflow-hidden">
-                            <img 
-                              src={existingSubmission.photoUrl} 
-                              alt="Member Avatar" 
+                            <img
+                              src={existingSubmission.photoUrl}
+                              alt="Member Avatar"
                               className="w-full h-full object-cover rounded-xl"
                               referrerPolicy="no-referrer"
                             />
@@ -851,9 +872,9 @@ const IDCard: React.FC<IDCardProps> = ({
                       <div className="relative overflow-hidden w-full h-full rounded-3xl border border-[#a855f7]/35 bg-gradient-to-b from-[#12051e] via-[#05010a] to-[#0c0416] p-6 flex flex-col justify-between shadow-[0_0_50px_rgba(168,85,247,0.25)]">
                         {existingSubmission.avatarUrl && (
                           <div className="absolute inset-0 z-0 overflow-hidden pointer-events-none rounded-3xl">
-                            <img 
-                              src={existingSubmission.avatarUrl} 
-                              alt="Avatar Watermark" 
+                            <img
+                              src={existingSubmission.avatarUrl}
+                              alt="Avatar Watermark"
                               className="w-full h-full object-cover opacity-95 brightness-110 contrast-105"
                               referrerPolicy="no-referrer"
                             />
@@ -862,7 +883,7 @@ const IDCard: React.FC<IDCardProps> = ({
                         )}
 
                         <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.005)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.005)_1px,transparent_1px)] bg-[size:12px_12px] pointer-events-none opacity-40"></div>
-                        
+
                         <div className="absolute top-3 left-3 w-3 h-3 border-t-2 border-l-2 border-[#a855f7]/40 pointer-events-none"></div>
                         <div className="absolute top-3 right-3 w-3 h-3 border-t-2 border-r-2 border-[#a855f7]/40 pointer-events-none"></div>
                         <div className="absolute bottom-3 left-3 w-3 h-3 border-b-2 border-l-2 border-[#a855f7]/40 pointer-events-none"></div>
@@ -875,9 +896,9 @@ const IDCard: React.FC<IDCardProps> = ({
 
                         <div className="my-3 flex flex-col items-center justify-center relative z-10">
                           <div className="w-28 h-28 rounded-xl border border-white/10 bg-white p-1.5 shadow-[0_0_25px_rgba(168,85,247,0.25)]">
-                            <img 
-                              src={`https://api.qrserver.com/v1/create-qr-code/?size=140x140&color=0-0-0&bgcolor=ffffff&data=${encodeURIComponent(`${typeof window !== 'undefined' ? window.location.origin : 'https://vrgc.club'}/card/${existingSubmission.registrationNumber || ''}`)}`} 
-                              alt="Scan to Verify" 
+                            <img
+                              src={`https://api.qrserver.com/v1/create-qr-code/?size=140x140&color=0-0-0&bgcolor=ffffff&data=${encodeURIComponent(`${typeof window !== 'undefined' ? window.location.origin : 'https://vrgc.club'}/card/${existingSubmission.registrationNumber || ''}`)}`}
+                              alt="Scan to Verify"
                               className="w-full h-full object-contain"
                             />
                           </div>
@@ -913,7 +934,7 @@ const IDCard: React.FC<IDCardProps> = ({
                     <span className="material-symbols-outlined text-xs">verified</span>
                     <span>DOSSIER ACTIVE (RESPONSE RECORDED)</span>
                   </div>
-                  
+
                   <div className="flex gap-4 mt-2">
                     <button
                       onClick={() => handleDownload(existingSubmission)}
@@ -958,18 +979,18 @@ const IDCard: React.FC<IDCardProps> = ({
                     <h3 className="font-label-caps text-xs text-outline tracking-wider font-bold">LIVE PREVIEW</h3>
                     <span className="text-[10px] text-[#a855f7] font-bold uppercase tracking-widest font-code-sm">TAP CARD TO FLIP</span>
                   </div>
-                  
-                  <div 
+
+                  <div
                     onClick={() => setIsPreviewFlipped(!isPreviewFlipped)}
                     className="relative w-full max-w-[320px] aspect-[2.2/3.4] cursor-pointer group [perspective:1000px]"
                   >
                     <div className={`relative w-full h-full duration-700 [transform-style:preserve-3d] ${isPreviewFlipped ? '[transform:rotateY(180deg)]' : ''}`}>
-                      
+
                       {/* FRONT PREVIEW */}
                       <div className="absolute inset-0 w-full h-full [backface-visibility:hidden] select-none">
                         <div className="relative overflow-hidden w-full h-full rounded-3xl border border-[#a855f7]/35 bg-gradient-to-b from-[#12051e] via-[#05010a] to-[#0c0416] p-6 flex flex-col justify-between shadow-[0_0_40px_rgba(168,85,247,0.15)]">
                           <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.005)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.005)_1px,transparent_1px)] bg-[size:12px_12px] pointer-events-none opacity-40"></div>
-                          
+
                           <div className="absolute top-3 left-3 w-3 h-3 border-t-2 border-l-2 border-[#a855f7]/40 pointer-events-none"></div>
                           <div className="absolute top-3 right-3 w-3 h-3 border-t-2 border-r-2 border-[#a855f7]/40 pointer-events-none"></div>
                           <div className="absolute bottom-3 left-3 w-3 h-3 border-b-2 border-l-2 border-[#a855f7]/40 pointer-events-none"></div>
@@ -988,9 +1009,9 @@ const IDCard: React.FC<IDCardProps> = ({
                           <div className="flex flex-col items-center justify-center my-3 relative z-10">
                             <div className="w-36 h-36 rounded-2xl border-2 border-dashed border-[#a855f7]/30 p-1 bg-black/40 shadow-[0_0_20px_rgba(168,85,247,0.15)] relative overflow-hidden flex items-center justify-center">
                               {photoPreview ? (
-                                <img 
-                                  src={photoPreview} 
-                                  alt="ID Preview" 
+                                <img
+                                  src={photoPreview}
+                                  alt="ID Preview"
                                   className="w-full h-full object-cover rounded-xl"
                                 />
                               ) : (
@@ -1054,9 +1075,9 @@ const IDCard: React.FC<IDCardProps> = ({
                         <div className="relative overflow-hidden w-full h-full rounded-3xl border border-[#a855f7]/35 bg-gradient-to-b from-[#12051e] via-[#05010a] to-[#0c0416] p-6 flex flex-col justify-between shadow-[0_0_40px_rgba(168,85,247,0.15)]">
                           {avatarPreview && (
                             <div className="absolute inset-0 z-0 overflow-hidden pointer-events-none rounded-3xl">
-                              <img 
-                                src={avatarPreview} 
-                                alt="Avatar Watermark Preview" 
+                              <img
+                                src={avatarPreview}
+                                alt="Avatar Watermark Preview"
                                 className="w-full h-full object-cover opacity-95 brightness-110 contrast-105"
                                 referrerPolicy="no-referrer"
                               />
@@ -1065,7 +1086,7 @@ const IDCard: React.FC<IDCardProps> = ({
                           )}
 
                           <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.005)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.005)_1px,transparent_1px)] bg-[size:12px_12px] pointer-events-none opacity-40"></div>
-                          
+
                           <div className="absolute top-3 left-3 w-3 h-3 border-t-2 border-l-2 border-[#a855f7]/40 pointer-events-none"></div>
                           <div className="absolute top-3 right-3 w-3 h-3 border-t-2 border-r-2 border-[#a855f7]/40 pointer-events-none"></div>
                           <div className="absolute bottom-3 left-3 w-3 h-3 border-b-2 border-l-2 border-[#a855f7]/40 pointer-events-none"></div>
@@ -1078,9 +1099,9 @@ const IDCard: React.FC<IDCardProps> = ({
 
                           <div className="my-3 flex flex-col items-center justify-center relative z-10">
                             <div className="w-28 h-28 rounded-xl border border-white/10 bg-white p-1.5 shadow-[0_0_20px_rgba(168,85,247,0.15)]">
-                              <img 
-                                src={`https://api.qrserver.com/v1/create-qr-code/?size=140x140&color=0-0-0&bgcolor=ffffff&data=${encodeURIComponent(`${typeof window !== 'undefined' ? window.location.origin : 'https://vrgc.club'}/card/${memberData?.registrationNumber || '24XXXXXX'}`)}`} 
-                                alt="Scan to Verify" 
+                              <img
+                                src={`https://api.qrserver.com/v1/create-qr-code/?size=140x140&color=0-0-0&bgcolor=ffffff&data=${encodeURIComponent(`${typeof window !== 'undefined' ? window.location.origin : 'https://vrgc.club'}/card/${memberData?.registrationNumber || '24XXXXXX'}`)}`}
+                                alt="Scan to Verify"
                                 className="w-full h-full object-contain"
                               />
                             </div>
@@ -1170,7 +1191,7 @@ const IDCard: React.FC<IDCardProps> = ({
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-stretch">
                       <div className="flex flex-col space-y-2 h-full">
                         <label className="block font-label-caps text-[10px] text-purple-300 tracking-widest font-bold uppercase truncate">
-                        &nbsp;UPLOAD IDENTIFICATION PHOTO :
+                          &nbsp;UPLOAD IDENTIFICATION PHOTO :
                         </label>
                         <div className="border-2 border-dashed border-purple-500/30 hover:border-purple-400/60 rounded-2xl p-5 transition-all duration-300 bg-black/60 hover:bg-black/80 relative flex-1 min-h-[140px] flex flex-col items-center justify-center text-center cursor-pointer">
                           <input
@@ -1189,7 +1210,7 @@ const IDCard: React.FC<IDCardProps> = ({
 
                       <div className="flex flex-col space-y-2 h-full">
                         <label className="block font-label-caps text-[10px] text-purple-300 tracking-widest font-bold uppercase truncate">
-                        &nbsp;UPLOAD GAMING AVATAR (FOR BACKSIDE) :
+                          &nbsp;UPLOAD GAMING AVATAR (FOR BACKSIDE) :
                         </label>
                         <div className="border-2 border-dashed border-purple-500/30 hover:border-purple-400/60 rounded-2xl p-4 transition-all duration-300 bg-black/60 hover:bg-black/80 relative flex-1 min-h-[110px] flex flex-col items-center justify-center text-center cursor-pointer">
                           <input
@@ -1200,10 +1221,10 @@ const IDCard: React.FC<IDCardProps> = ({
                           />
                           {avatarPreview ? (
                             <div className="relative w-16 h-16 rounded-xl overflow-hidden border border-yellow-400/80 shadow-[0_0_15px_rgba(234,179,8,0.3)]">
-                              <img 
-                                src={avatarPreview} 
-                                alt="Avatar Preview" 
-                                className="w-full h-full object-cover" 
+                              <img
+                                src={avatarPreview}
+                                alt="Avatar Preview"
+                                className="w-full h-full object-cover"
                                 referrerPolicy="no-referrer"
                               />
                             </div>
@@ -1221,7 +1242,7 @@ const IDCard: React.FC<IDCardProps> = ({
                         {/* Direct GIF / Avatar URL Input */}
                         <div className="pt-1">
                           <label className="block text-[9px] font-label-caps text-purple-300/80 mb-1 tracking-wider font-bold">
-                          &nbsp;OR PASTE DIRECT GIF / IMAGE URL &nbsp;LINK:
+                            &nbsp;OR PASTE DIRECT GIF / IMAGE URL &nbsp;LINK:
                           </label>
                           <div className="relative">
                             <input
@@ -1311,9 +1332,14 @@ const IDCard: React.FC<IDCardProps> = ({
           <div className="space-y-6 stagger-in text-left">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-white/5 pb-4">
               <div>
-                <h3 className="font-display-lg text-lg text-white font-bold uppercase tracking-wider flex items-center gap-2">
-                  <span className="material-symbols-outlined text-primary text-base">admin_panel_settings</span>
-                  Candidate Dossier Submissions
+                <h3 className="font-display-lg text-lg text-white font-bold uppercase tracking-wider flex items-center gap-3">
+                  <div className="flex items-center gap-2">
+                    <span className="material-symbols-outlined text-primary text-base">admin_panel_settings</span>
+                    Candidate Dossier Submissions
+                  </div>
+                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-red-500/20 text-red-300 border border-red-500/30 shadow-[0_0_15px_rgba(239,68,68,0.2)]">
+                    {candidates.length} / {totalMembers} MEMBERS
+                  </span>
                 </h3>
                 <p className="text-xs text-on-surface-variant max-w-lg mt-0.5">
                   Select and verify candidate digital identity dossiers.
@@ -1323,20 +1349,19 @@ const IDCard: React.FC<IDCardProps> = ({
               <button
                 disabled={isSyncingSheets || sheetsCooldown > 0}
                 onClick={handleSyncAllToSheets}
-                className={`px-4 py-2.5 rounded-xl border text-xs font-label-caps tracking-wider flex items-center justify-center gap-2 shrink-0 transition-all duration-300 font-bold ${
-                  sheetsCooldown > 0 || isSyncingSheets
-                    ? 'bg-black/40 border-outline-variant/30 text-on-surface-variant/50 cursor-not-allowed'
-                    : 'bg-emerald-500/10 border-emerald-500/40 text-emerald-400 hover:bg-emerald-500/20 hover:border-emerald-400 shadow-[0_0_15px_rgba(16,185,129,0.2)] active:scale-95'
-                }`}
+                className={`px-4 py-2.5 rounded-xl border text-xs font-label-caps tracking-wider flex items-center justify-center gap-2 shrink-0 transition-all duration-300 font-bold ${sheetsCooldown > 0 || isSyncingSheets
+                  ? 'bg-black/40 border-outline-variant/30 text-on-surface-variant/50 cursor-not-allowed'
+                  : 'bg-emerald-500/10 border-emerald-500/40 text-emerald-400 hover:bg-emerald-500/20 hover:border-emerald-400 shadow-[0_0_15px_rgba(16,185,129,0.2)] active:scale-95'
+                  }`}
               >
                 <span className={`material-symbols-outlined text-base ${isSyncingSheets ? 'animate-spin text-emerald-400' : ''}`}>
                   {isSyncingSheets ? 'sync' : sheetsCooldown > 0 ? 'hourglass_top' : 'cloud_upload'}
                 </span>
                 <span>
-                  {isSyncingSheets 
-                    ? 'PARALLEL SYNCING...' 
-                    : sheetsCooldown > 0 
-                      ? `COOLDOWN (${sheetsCooldown}s)` 
+                  {isSyncingSheets
+                    ? 'PARALLEL SYNCING...'
+                    : sheetsCooldown > 0
+                      ? `COOLDOWN (${sheetsCooldown}s)`
                       : 'SYNC TO GOOGLE SHEETS'}
                 </span>
               </button>
@@ -1450,11 +1475,10 @@ const IDCard: React.FC<IDCardProps> = ({
 
                             <div className="col-span-2 text-center flex justify-center">
                               <span
-                                className={`px-3 py-1 rounded-full border text-[9px] font-label-caps font-bold tracking-wider ${
-                                  c.status === 'Approved'
-                                    ? 'bg-green-500/10 border-green-500/30 text-green-400'
-                                    : 'bg-yellow-500/10 border-yellow-500/30 text-yellow-400'
-                                }`}
+                                className={`px-3 py-1 rounded-full border text-[9px] font-label-caps font-bold tracking-wider ${c.status === 'Approved'
+                                  ? 'bg-green-500/10 border-green-500/30 text-green-400'
+                                  : 'bg-yellow-500/10 border-yellow-500/30 text-yellow-400'
+                                  }`}
                               >
                                 {c.status || 'Pending'}
                               </span>
@@ -1476,11 +1500,10 @@ const IDCard: React.FC<IDCardProps> = ({
 
                               <button
                                 onClick={(e) => { e.stopPropagation(); toggleStatus(c); }}
-                                className={`p-2 rounded-lg border transition-all shrink-0 ${
-                                  c.status === 'Approved'
-                                    ? 'bg-yellow-500/10 border-yellow-500/30 text-yellow-400 hover:bg-yellow-500/20'
-                                    : 'bg-green-500/10 border-green-500/30 text-green-400 hover:bg-green-500/20'
-                                }`}
+                                className={`p-2 rounded-lg border transition-all shrink-0 ${c.status === 'Approved'
+                                  ? 'bg-yellow-500/10 border-yellow-500/30 text-yellow-400 hover:bg-yellow-500/20'
+                                  : 'bg-green-500/10 border-green-500/30 text-green-400 hover:bg-green-500/20'
+                                  }`}
                                 title={c.status === 'Approved' ? 'Mark as Pending' : 'Approve Dossier'}
                               >
                                 <span className="material-symbols-outlined text-sm">
@@ -1524,11 +1547,10 @@ const IDCard: React.FC<IDCardProps> = ({
 
                               <div className="flex items-center gap-2 shrink-0">
                                 <span
-                                  className={`px-2 py-0.5 rounded-full border text-[8px] font-label-caps font-bold tracking-wider ${
-                                    c.status === 'Approved'
-                                      ? 'bg-green-500/10 border-green-500/30 text-green-400'
-                                      : 'bg-yellow-500/10 border-yellow-500/30 text-yellow-400'
-                                  }`}
+                                  className={`px-2 py-0.5 rounded-full border text-[8px] font-label-caps font-bold tracking-wider ${c.status === 'Approved'
+                                    ? 'bg-green-500/10 border-green-500/30 text-green-400'
+                                    : 'bg-yellow-500/10 border-yellow-500/30 text-yellow-400'
+                                    }`}
                                 >
                                   {c.status || 'Pending'}
                                 </span>
@@ -1554,9 +1576,8 @@ const IDCard: React.FC<IDCardProps> = ({
                                   {openMenuId === (c.id || c.email) && (
                                     <div
                                       onClick={(e) => e.stopPropagation()}
-                                      className={`absolute right-0 ${
-                                        menuDirections[c.id || c.email] === 'up' ? 'bottom-full mb-2' : 'top-9'
-                                      } z-[300] w-48 bg-[#12081c] border border-[#a855f7]/40 backdrop-blur-2xl rounded-xl shadow-[0_10px_30px_rgba(0,0,0,0.9)] py-1.5 text-xs font-body-md`}
+                                      className={`absolute right-0 ${menuDirections[c.id || c.email] === 'up' ? 'bottom-full mb-2' : 'top-9'
+                                        } z-[300] w-48 bg-[#12081c] border border-[#a855f7]/40 backdrop-blur-2xl rounded-xl shadow-[0_10px_30px_rgba(0,0,0,0.9)] py-1.5 text-xs font-body-md`}
                                     >
                                       <button
                                         onClick={(e) => {
@@ -1578,9 +1599,8 @@ const IDCard: React.FC<IDCardProps> = ({
                                           setOpenMenuId(null);
                                           toggleStatus(c);
                                         }}
-                                        className={`w-full px-3.5 py-2.5 text-left flex items-center gap-2.5 hover:bg-white/10 transition-colors ${
-                                          c.status === 'Approved' ? 'text-yellow-400 font-bold' : 'text-green-400 font-bold'
-                                        }`}
+                                        className={`w-full px-3.5 py-2.5 text-left flex items-center gap-2.5 hover:bg-white/10 transition-colors ${c.status === 'Approved' ? 'text-yellow-400 font-bold' : 'text-green-400 font-bold'
+                                          }`}
                                       >
                                         <span className="material-symbols-outlined text-base">
                                           {c.status === 'Approved' ? 'history' : 'verified'}
@@ -1646,17 +1666,17 @@ const IDCard: React.FC<IDCardProps> = ({
                       return (
                         <div key={cardId} className="flex flex-col items-center gap-3">
                           {/* 3D Flippable Card Element */}
-                          <div 
+                          <div
                             onClick={() => setFlippedCardsMap(prev => ({ ...prev, [cardId]: !prev[cardId] }))}
                             className="relative w-full max-w-[290px] aspect-[2.2/3.4] cursor-pointer group [perspective:1000px]"
                           >
                             <div className={`relative w-full h-full duration-700 [transform-style:preserve-3d] ${isFlipped ? '[transform:rotateY(180deg)]' : ''}`}>
-                              
+
                               {/* FRONT OF THE ID CARD */}
                               <div className="absolute inset-0 w-full h-full [backface-visibility:hidden] select-none">
                                 <div className="relative overflow-hidden w-full h-full rounded-3xl border border-[#a855f7]/35 bg-gradient-to-b from-[#12051e] via-[#05010a] to-[#0c0416] p-5 flex flex-col justify-between shadow-[0_0_35px_rgba(168,85,247,0.2)]">
                                   <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.005)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.005)_1px,transparent_1px)] bg-[size:12px_12px] pointer-events-none opacity-40"></div>
-                                  
+
                                   <div className="absolute top-2.5 left-2.5 w-2.5 h-2.5 border-t-2 border-l-2 border-[#a855f7]/40 pointer-events-none"></div>
                                   <div className="absolute top-2.5 right-2.5 w-2.5 h-2.5 border-t-2 border-r-2 border-[#a855f7]/40 pointer-events-none"></div>
                                   <div className="absolute bottom-2.5 left-2.5 w-2.5 h-2.5 border-b-2 border-l-2 border-[#a855f7]/40 pointer-events-none"></div>
@@ -1674,15 +1694,14 @@ const IDCard: React.FC<IDCardProps> = ({
 
                                   <div className="flex flex-col items-center justify-center my-2 relative z-10">
                                     <div className="w-28 h-28 rounded-xl border-2 border-[#a855f7]/30 p-1 bg-black/40 shadow-[0_0_20px_rgba(168,85,247,0.15)] relative overflow-hidden">
-                                      <img 
-                                        src={c.photoUrl} 
-                                        alt={c.name} 
+                                      <img
+                                        src={c.photoUrl}
+                                        alt={c.name}
                                         className="w-full h-full object-cover rounded-lg"
                                         referrerPolicy="no-referrer"
                                       />
-                                      <div className={`absolute bottom-1 right-1 text-white text-[5px] font-black px-1 py-0.5 rounded tracking-widest uppercase shadow-md pointer-events-none ${
-                                        c.status === 'Approved' ? 'bg-green-500/80' : 'bg-yellow-500/80'
-                                      }`}>
+                                      <div className={`absolute bottom-1 right-1 text-white text-[5px] font-black px-1 py-0.5 rounded tracking-widest uppercase shadow-md pointer-events-none ${c.status === 'Approved' ? 'bg-green-500/80' : 'bg-yellow-500/80'
+                                        }`}>
                                         {c.status === 'Approved' ? 'VERIFIED' : 'PENDING'}
                                       </div>
                                     </div>
@@ -1732,9 +1751,9 @@ const IDCard: React.FC<IDCardProps> = ({
                                 <div className="relative overflow-hidden w-full h-full rounded-3xl border border-[#a855f7]/35 bg-gradient-to-b from-[#12051e] via-[#05010a] to-[#0c0416] p-5 flex flex-col justify-between shadow-[0_0_35px_rgba(168,85,247,0.2)]">
                                   {c.avatarUrl && (
                                     <div className="absolute inset-0 z-0 overflow-hidden pointer-events-none rounded-3xl">
-                                      <img 
-                                        src={c.avatarUrl} 
-                                        alt="Avatar Watermark" 
+                                      <img
+                                        src={c.avatarUrl}
+                                        alt="Avatar Watermark"
                                         className="w-full h-full object-cover opacity-95 brightness-110 contrast-105"
                                         referrerPolicy="no-referrer"
                                       />
@@ -1743,7 +1762,7 @@ const IDCard: React.FC<IDCardProps> = ({
                                   )}
 
                                   <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.005)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.005)_1px,transparent_1px)] bg-[size:12px_12px] pointer-events-none opacity-40"></div>
-                                  
+
                                   <div className="absolute top-2.5 left-2.5 w-2.5 h-2.5 border-t-2 border-l-2 border-[#a855f7]/40 pointer-events-none"></div>
                                   <div className="absolute top-2.5 right-2.5 w-2.5 h-2.5 border-t-2 border-r-2 border-[#a855f7]/40 pointer-events-none"></div>
                                   <div className="absolute bottom-2.5 left-2.5 w-2.5 h-2.5 border-b-2 border-l-2 border-[#a855f7]/40 pointer-events-none"></div>
@@ -1756,9 +1775,9 @@ const IDCard: React.FC<IDCardProps> = ({
 
                                   <div className="my-2 flex flex-col items-center justify-center relative z-10">
                                     <div className="w-24 h-24 rounded-xl border border-white/10 bg-white p-1.5 shadow-[0_0_20px_rgba(168,85,247,0.2)]">
-                                      <img 
-                                        src={`https://api.qrserver.com/v1/create-qr-code/?size=140x140&color=0-0-0&bgcolor=ffffff&data=${encodeURIComponent(`${typeof window !== 'undefined' ? window.location.origin : 'https://vrgc.club'}/card/${c.registrationNumber || ''}`)}`} 
-                                        alt="Scan to Verify" 
+                                      <img
+                                        src={`https://api.qrserver.com/v1/create-qr-code/?size=140x140&color=0-0-0&bgcolor=ffffff&data=${encodeURIComponent(`${typeof window !== 'undefined' ? window.location.origin : 'https://vrgc.club'}/card/${c.registrationNumber || ''}`)}`}
+                                        alt="Scan to Verify"
                                         className="w-full h-full object-contain"
                                       />
                                     </div>
@@ -1808,11 +1827,10 @@ const IDCard: React.FC<IDCardProps> = ({
                             <button
                               type="button"
                               onClick={() => toggleStatus(c)}
-                              className={`p-1.5 rounded-lg border transition-all ${
-                                c.status === 'Approved'
-                                  ? 'bg-yellow-500/10 border-yellow-500/30 text-yellow-400 hover:bg-yellow-500/20'
-                                  : 'bg-green-500/10 border-green-500/30 text-green-400 hover:bg-green-500/20'
-                              }`}
+                              className={`p-1.5 rounded-lg border transition-all ${c.status === 'Approved'
+                                ? 'bg-yellow-500/10 border-yellow-500/30 text-yellow-400 hover:bg-yellow-500/20'
+                                : 'bg-green-500/10 border-green-500/30 text-green-400 hover:bg-green-500/20'
+                                }`}
                               title={c.status === 'Approved' ? 'Mark as Pending' : 'Approve Dossier'}
                             >
                               <span className="material-symbols-outlined text-xs">
@@ -1862,7 +1880,7 @@ const IDCard: React.FC<IDCardProps> = ({
                 <span className="material-symbols-outlined text-red-500 text-base">report_problem</span>
                 <h3 className="font-headline-sm text-sm md:text-base text-white font-bold uppercase tracking-wider">Report Registration Error</h3>
               </div>
-              <button 
+              <button
                 onClick={() => setShowReportModal(false)}
                 className="text-on-surface-variant hover:text-white"
               >
@@ -1888,11 +1906,10 @@ const IDCard: React.FC<IDCardProps> = ({
               </div>
 
               {reportStatus && (
-                <div className={`p-3 rounded-lg text-xs font-bold ${
-                  reportStatus === 'success' 
-                    ? 'bg-green-500/10 border border-green-500/20 text-green-400' 
-                    : 'bg-error/10 border border-error/20 text-error'
-                }`}>
+                <div className={`p-3 rounded-lg text-xs font-bold ${reportStatus === 'success'
+                  ? 'bg-green-500/10 border border-green-500/20 text-green-400'
+                  : 'bg-error/10 border border-error/20 text-error'
+                  }`}>
                   {reportStatus === 'success' ? 'Report logged! Admins have been notified.' : reportStatus}
                 </div>
               )}
@@ -1949,7 +1966,7 @@ const IDCard: React.FC<IDCardProps> = ({
                   </span>
                 </button>
 
-                <button 
+                <button
                   onClick={() => setPreviewCandidate(null)}
                   className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-white/70 hover:text-white flex items-center justify-center transition-all duration-200 shrink-0"
                   title="Close Modal"
@@ -1964,11 +1981,11 @@ const IDCard: React.FC<IDCardProps> = ({
                 <div className="md:col-span-5 flex flex-col items-center justify-center relative py-2 sm:py-4">
                   <div className="w-36 h-36 sm:w-48 sm:h-48 rounded-2xl border-2 border-[#a855f7]/30 p-1 relative z-10 bg-black/40 shadow-[0_0_30px_rgba(168,85,247,0.15)] group">
                     <div className="w-full h-full rounded-xl overflow-hidden bg-black relative">
-                      <img 
-                        src={previewCandidate.photoUrl} 
-                        alt="Avatar" 
-                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" 
-                        referrerPolicy="no-referrer" 
+                      <img
+                        src={previewCandidate.photoUrl}
+                        alt="Avatar"
+                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                        referrerPolicy="no-referrer"
                       />
                     </div>
                   </div>
@@ -2027,11 +2044,10 @@ const IDCard: React.FC<IDCardProps> = ({
                   <div className="flex items-center gap-2.5 pt-1">
                     <span className="font-code-sm text-[8px] text-white/45 tracking-widest block font-bold uppercase">DOSSIER STATUS:</span>
                     <span
-                      className={`px-3 py-1 rounded-full border text-[9px] font-label-caps font-black tracking-wider uppercase ${
-                        previewCandidate.status === 'Approved'
-                          ? 'bg-green-500/10 border-green-500/30 text-green-400 shadow-[0_0_15px_rgba(74,222,128,0.1)]'
-                          : 'bg-yellow-500/10 border-yellow-500/30 text-yellow-400 shadow-[0_0_15px_rgba(250,204,21,0.1)]'
-                      }`}
+                      className={`px-3 py-1 rounded-full border text-[9px] font-label-caps font-black tracking-wider uppercase ${previewCandidate.status === 'Approved'
+                        ? 'bg-green-500/10 border-green-500/30 text-green-400 shadow-[0_0_15px_rgba(74,222,128,0.1)]'
+                        : 'bg-yellow-500/10 border-yellow-500/30 text-yellow-400 shadow-[0_0_15px_rgba(250,204,21,0.1)]'
+                        }`}
                     >
                       {previewCandidate.status || 'Pending'}
                     </span>
@@ -2041,17 +2057,17 @@ const IDCard: React.FC<IDCardProps> = ({
             ) : (
               /* 3D FLIPPABLE CARD TAB IN MODAL */
               <div className="flex flex-col items-center justify-center py-4 space-y-4">
-                <div 
+                <div
                   onClick={() => setPreviewFlipped(!previewFlipped)}
                   className="relative w-full max-w-[310px] aspect-[2.2/3.4] cursor-pointer group [perspective:1000px]"
                 >
                   <div className={`relative w-full h-full duration-700 [transform-style:preserve-3d] ${previewFlipped ? '[transform:rotateY(180deg)]' : ''}`}>
-                    
+
                     {/* FRONT OF CARD */}
                     <div className="absolute inset-0 w-full h-full [backface-visibility:hidden] select-none">
                       <div className="relative overflow-hidden w-full h-full rounded-3xl border border-[#a855f7]/35 bg-gradient-to-b from-[#12051e] via-[#05010a] to-[#0c0416] p-6 flex flex-col justify-between shadow-[0_0_50px_rgba(168,85,247,0.25)]">
                         <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.005)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.005)_1px,transparent_1px)] bg-[size:12px_12px] pointer-events-none opacity-40"></div>
-                        
+
                         <div className="absolute top-3 left-3 w-3 h-3 border-t-2 border-l-2 border-[#a855f7]/40 pointer-events-none"></div>
                         <div className="absolute top-3 right-3 w-3 h-3 border-t-2 border-r-2 border-[#a855f7]/40 pointer-events-none"></div>
                         <div className="absolute bottom-3 left-3 w-3 h-3 border-b-2 border-l-2 border-[#a855f7]/40 pointer-events-none"></div>
@@ -2069,15 +2085,14 @@ const IDCard: React.FC<IDCardProps> = ({
 
                         <div className="flex flex-col items-center justify-center my-3 relative z-10">
                           <div className="w-32 h-32 rounded-2xl border-2 border-[#a855f7]/30 p-1 bg-black/40 shadow-[0_0_20px_rgba(168,85,247,0.15)] relative overflow-hidden">
-                            <img 
-                              src={previewCandidate.photoUrl} 
-                              alt={previewCandidate.name} 
+                            <img
+                              src={previewCandidate.photoUrl}
+                              alt={previewCandidate.name}
                               className="w-full h-full object-cover rounded-xl"
                               referrerPolicy="no-referrer"
                             />
-                            <div className={`absolute bottom-1 right-1 text-white text-[6px] font-black px-1.5 py-0.5 rounded tracking-widest uppercase shadow-md pointer-events-none ${
-                              previewCandidate.status === 'Approved' ? 'bg-green-500/80' : 'bg-yellow-500/80'
-                            }`}>
+                            <div className={`absolute bottom-1 right-1 text-white text-[6px] font-black px-1.5 py-0.5 rounded tracking-widest uppercase shadow-md pointer-events-none ${previewCandidate.status === 'Approved' ? 'bg-green-500/80' : 'bg-yellow-500/80'
+                              }`}>
                               {previewCandidate.status === 'Approved' ? 'VERIFIED' : 'PENDING'}
                             </div>
                           </div>
@@ -2137,9 +2152,9 @@ const IDCard: React.FC<IDCardProps> = ({
                       <div className="relative overflow-hidden w-full h-full rounded-3xl border border-[#a855f7]/35 bg-gradient-to-b from-[#12051e] via-[#05010a] to-[#0c0416] p-6 flex flex-col justify-between shadow-[0_0_50px_rgba(168,85,247,0.25)]">
                         {previewCandidate.avatarUrl && (
                           <div className="absolute inset-0 z-0 overflow-hidden pointer-events-none rounded-3xl">
-                            <img 
-                              src={previewCandidate.avatarUrl} 
-                              alt="Avatar Watermark" 
+                            <img
+                              src={previewCandidate.avatarUrl}
+                              alt="Avatar Watermark"
                               className="w-full h-full object-cover opacity-95 brightness-110 contrast-105"
                               referrerPolicy="no-referrer"
                             />
@@ -2148,7 +2163,7 @@ const IDCard: React.FC<IDCardProps> = ({
                         )}
 
                         <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.005)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.005)_1px,transparent_1px)] bg-[size:12px_12px] pointer-events-none opacity-40"></div>
-                        
+
                         <div className="absolute top-3 left-3 w-3 h-3 border-t-2 border-l-2 border-[#a855f7]/40 pointer-events-none"></div>
                         <div className="absolute top-3 right-3 w-3 h-3 border-t-2 border-r-2 border-[#a855f7]/40 pointer-events-none"></div>
                         <div className="absolute bottom-3 left-3 w-3 h-3 border-b-2 border-l-2 border-[#a855f7]/40 pointer-events-none"></div>
@@ -2161,9 +2176,9 @@ const IDCard: React.FC<IDCardProps> = ({
 
                         <div className="my-3 flex flex-col items-center justify-center relative z-10">
                           <div className="w-28 h-28 rounded-xl border border-white/10 bg-white p-1.5 shadow-[0_0_25px_rgba(168,85,247,0.25)]">
-                            <img 
-                              src={`https://api.qrserver.com/v1/create-qr-code/?size=140x140&color=0-0-0&bgcolor=ffffff&data=${encodeURIComponent(`${typeof window !== 'undefined' ? window.location.origin : 'https://vrgc.club'}/card/${previewCandidate.registrationNumber || ''}`)}`} 
-                              alt="Scan to Verify" 
+                            <img
+                              src={`https://api.qrserver.com/v1/create-qr-code/?size=140x140&color=0-0-0&bgcolor=ffffff&data=${encodeURIComponent(`${typeof window !== 'undefined' ? window.location.origin : 'https://vrgc.club'}/card/${previewCandidate.registrationNumber || ''}`)}`}
+                              alt="Scan to Verify"
                               className="w-full h-full object-contain"
                             />
                           </div>
@@ -2208,11 +2223,10 @@ const IDCard: React.FC<IDCardProps> = ({
             <div className="flex flex-col sm:flex-row gap-3.5 pt-6 border-t border-white/10">
               <button
                 onClick={() => toggleStatus(previewCandidate)}
-                className={`w-full sm:flex-1 font-bold py-3 px-6 rounded-full text-xs font-bold font-label-caps flex items-center justify-center gap-2 border transition-all duration-300 hover:scale-[1.01] ${
-                  previewCandidate.status === 'Approved'
-                    ? 'bg-yellow-500/10 border-yellow-500/30 text-yellow-400 hover:bg-yellow-500/20 shadow-[0_0_20px_rgba(250,204,21,0.15)]'
-                    : 'bg-green-500/10 border-green-500/30 text-green-400 hover:bg-green-500/20 shadow-[0_0_20px_rgba(74,222,128,0.15)]'
-                }`}
+                className={`w-full sm:flex-1 font-bold py-3 px-6 rounded-full text-xs font-bold font-label-caps flex items-center justify-center gap-2 border transition-all duration-300 hover:scale-[1.01] ${previewCandidate.status === 'Approved'
+                  ? 'bg-yellow-500/10 border-yellow-500/30 text-yellow-400 hover:bg-yellow-500/20 shadow-[0_0_20px_rgba(250,204,21,0.15)]'
+                  : 'bg-green-500/10 border-green-500/30 text-green-400 hover:bg-green-500/20 shadow-[0_0_20px_rgba(74,222,128,0.15)]'
+                  }`}
               >
                 <span className="material-symbols-outlined text-sm font-bold">
                   {previewCandidate.status === 'Approved' ? 'history' : 'verified'}
@@ -2298,7 +2312,7 @@ const IDCard: React.FC<IDCardProps> = ({
             <h4 className="text-green-400 font-bold text-xs uppercase tracking-wider">Secure Dossier Registry</h4>
             <p className="text-xs text-on-surface-variant leading-snug">{syncToastMessage}</p>
           </div>
-          <button 
+          <button
             onClick={() => setSyncToastMessage(null)}
             className="text-on-surface-variant hover:text-white p-1 text-xs"
           >
