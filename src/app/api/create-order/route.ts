@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server';
-import Razorpay from 'razorpay';
 import { db } from '@/lib/firebase';
 import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
 
@@ -27,8 +26,21 @@ export async function POST(request: Request) {
       );
     }
 
-    // Robust Razorpay constructor initialization
-    const RazorpayConstructor = typeof Razorpay === 'function' ? Razorpay : (Razorpay as any).default || Razorpay;
+    let RazorpayConstructor: any;
+    try {
+      // @ts-ignore
+      const mod = await import('razorpay').catch(() => null);
+      RazorpayConstructor = mod?.default || mod;
+    } catch {
+      RazorpayConstructor = null;
+    }
+
+    if (!RazorpayConstructor) {
+      return NextResponse.json(
+        { success: false, error: 'Razorpay SDK is currently unavailable.' },
+        { status: 500 }
+      );
+    }
 
     const instance = new RazorpayConstructor({
       key_id: keyId,

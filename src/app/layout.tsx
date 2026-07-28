@@ -50,6 +50,9 @@ export default function RootLayout({
     <html lang="en" className={`dark ${orbitron.variable} ${outfit.variable} ${jetbrainsMono.variable} ${rajdhani.variable}`} suppressHydrationWarning>
       <head>
         <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
+        <link rel="dns-prefetch" href="https://api.qrserver.com" />
         <link rel="preconnect" href="https://fopyejijjeoumimsdgiz.supabase.co" crossOrigin="anonymous" />
         <link rel="dns-prefetch" href="https://api.dicebear.com" />
         <link
