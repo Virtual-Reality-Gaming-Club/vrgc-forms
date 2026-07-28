@@ -583,6 +583,19 @@ const IDCard: React.FC<IDCardProps> = ({
           : c
       ));
 
+      // Trigger status update email notification
+      fetch('/api/send-status-email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          recipientEmail: candidate.email,
+          recipientName: candidate.name,
+          statusType: 'id_card',
+          statusValue: newStatus,
+          regNo: candidate.registrationNumber
+        })
+      }).catch(err => console.error("Email notification trigger error:", err));
+
       // Trigger status update in Google Sheets
       if (CONFIG.GOOGLE_SCRIPT_ID_CARD_URL) {
         const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=140x140&color=0-0-0&bgcolor=ffffff&data=${encodeURIComponent(`https://vrgc.club/card/${candidate.registrationNumber}`)}`;

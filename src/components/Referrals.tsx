@@ -73,7 +73,7 @@ const Referrals: React.FC<ReferralsProps> = ({
   const [isConnectionOffline, setIsConnectionOffline] = useState<boolean>(false);
   const [targetTeam, setTargetTeam] = useState<string>('Technical');
   const [inspectingCandidate, setInspectingCandidate] = useState<ReferralRecord | null>(null);
-  const [pendingStatusChange, setPendingStatusChange] = useState<{ docId?: string; regNo: string; candidateName: string; newStatus: string } | null>(null);
+  const [pendingStatusChange, setPendingStatusChange] = useState<{ docId?: string; regNo: string; candidateName: string; candidateEmail?: string; newStatus: string } | null>(null);
 
   // Admin filter states
   const [adminSearchQuery, setAdminSearchQuery] = useState<string>('');
@@ -364,7 +364,13 @@ const Referrals: React.FC<ReferralsProps> = ({
     }, 1500);
   };
 
-  const executeStatusUpdate = async (docId?: string, candidateRegNo?: string, newStatus?: string) => {
+  const executeStatusUpdate = async (
+    docId?: string, 
+    candidateRegNo?: string, 
+    newStatus?: string, 
+    candidateName?: string, 
+    candidateEmail?: string
+  ) => {
     if (!candidateRegNo || !newStatus) return;
     setIsUpdatingStatus(candidateRegNo);
     try {
@@ -372,6 +378,22 @@ const Referrals: React.FC<ReferralsProps> = ({
         const docRef = doc(db, 'referrals', docId);
         await updateDoc(docRef, { status: newStatus });
       }
+
+      // Trigger status update email notification
+      if (candidateEmail && candidateEmail.trim()) {
+        fetch('/api/send-status-email', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            recipientEmail: candidateEmail.trim(),
+            recipientName: candidateName || 'Candidate',
+            statusType: 'referral',
+            statusValue: newStatus,
+            regNo: candidateRegNo
+          })
+        }).catch(err => console.error("Email notification trigger error:", err));
+      }
+
       setSyncToastMessage(`Candidate dossier status updated to ${newStatus.toUpperCase()}`);
       setTimeout(() => setSyncToastMessage(null), 4000);
     } catch (err) {
@@ -382,12 +404,24 @@ const Referrals: React.FC<ReferralsProps> = ({
     }
   };
 
-  const handleUpdateStatus = (docId?: string, regNo?: string, candidateName?: string, newStatus?: string) => {
+  const handleUpdateStatus = (
+    docId?: string, 
+    regNo?: string, 
+    candidateName?: string, 
+    candidateEmail?: string, 
+    newStatus?: string
+  ) => {
     if (!regNo || !newStatus) return;
     if (newStatus === 'Admitted' || newStatus === 'Rejected') {
-      setPendingStatusChange({ docId, regNo, candidateName: candidateName || 'Candidate', newStatus });
+      setPendingStatusChange({ 
+        docId, 
+        regNo, 
+        candidateName: candidateName || 'Candidate', 
+        candidateEmail: candidateEmail || '', 
+        newStatus 
+      });
     } else {
-      executeStatusUpdate(docId, regNo, newStatus);
+      executeStatusUpdate(docId, regNo, newStatus, candidateName, candidateEmail);
     }
   };
 
@@ -1159,6 +1193,7 @@ const Referrals: React.FC<ReferralsProps> = ({
                     getActiveAdminReferrals().map((ref, idx) => {
                       const cName = getRefVal(ref, "Candidate Name") || getRefVal(ref, "candidateName") || "Candidate Profile";
                       const cReg = getRefVal(ref, "Candidate Registration Number") || getRefVal(ref, "candidateRegNo") || "UNKNOWN";
+                      const cEmail = getRefVal(ref, "Candidate Email") || getRefVal(ref, "candidateEmail") || "";
                       const refName = getRefVal(ref, "Referrer Name") || getRefVal(ref, "referrerName") || "VRGC Recruiter";
                       const refReg = getRefVal(ref, "Referrer Registration Number") || getRefVal(ref, "referrerRegNo") || "UNKNOWN";
                       const currentStatus = getRefVal(ref, "Status") || getRefVal(ref, "status") || "Pending";
@@ -1174,7 +1209,7 @@ const Referrals: React.FC<ReferralsProps> = ({
                             <div className="font-bold text-white">{cName}</div>
                             <div className="text-xs text-purple-400 font-code-sm">{cReg}</div>
                             <div className="text-[10px] text-slate-400 truncate max-w-[160px]">
-                              {getRefVal(ref, "Candidate Email") || getRefVal(ref, "candidateEmail")}
+                              {cEmail}
                             </div>
                           </td>
                           <td className="py-4 px-4 text-xs text-left">
@@ -1192,7 +1227,7 @@ const Referrals: React.FC<ReferralsProps> = ({
                               <select
                                 disabled={isUpdating}
                                 value={currentStatus}
-                                onChange={(e) => handleUpdateStatus(ref.id, cReg, cName, e.target.value)}
+                                onChange={(e) => handleUpdateStatus(ref.id, cReg, cName, cEmail, e.target.value)}
                                 className={`rounded-lg px-3 py-1.5 text-xs focus:outline-none cursor-pointer font-label-caps transition-all ${getSelectStatusColor(currentStatus)}`}
                               >
                                 <option value="Pending">Pending</option>
@@ -1246,8 +1281,8 @@ const Referrals: React.FC<ReferralsProps> = ({
                 </button>
                 <button
                   onClick={() => {
-                    const { docId, regNo, newStatus } = pendingStatusChange;
-                    executeStatusUpdate(docId, regNo, newStatus);
+                    const { docId, regNo, candidateName, candidateEmail, newStatus } = pendingStatusChange;
+                    executeStatusUpdate(docId, regNo, newStatus, candidateName, candidateEmail);
                   }}
                   className={`flex-1 py-3 rounded-xl font-label-caps text-xs text-black font-black tracking-widest ${
                     pendingStatusChange.newStatus.toLowerCase() === 'rejected' 
