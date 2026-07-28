@@ -1,9 +1,9 @@
 "use client";
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { auth, googleProvider, db } from '../lib/firebase';
 import { signInWithPopup, signOut, onAuthStateChanged, User } from 'firebase/auth';
-import { collection, onSnapshot, doc, deleteDoc, updateDoc, setDoc, getDoc, addDoc, getDocs } from 'firebase/firestore';
+import { collection, onSnapshot, doc, deleteDoc, updateDoc, setDoc, getDoc, addDoc, getDocs, query, orderBy, limit } from 'firebase/firestore';
 import { supabase } from '../lib/supabase';
 import { CONFIG } from '../lib/config';
 
@@ -37,6 +37,18 @@ interface CandidateSubmission {
   avatarUrl: string;
   submittedAt: string;
   status: string;
+}
+
+interface AdminActivityLog {
+  id?: string;
+  action: string;
+  performedBy?: string;
+  adminEmail?: string;
+  targetEmail?: string;
+  targetName?: string;
+  targetRegNo?: string;
+  details?: string;
+  timestamp: string;
 }
 
 const IDCard: React.FC<IDCardProps> = ({
@@ -106,6 +118,14 @@ const IDCard: React.FC<IDCardProps> = ({
   const [previewCandidate, setPreviewCandidate] = useState<CandidateSubmission | null>(null);
   const [totalMembers, setTotalMembers] = useState<number>(0);
 
+  // Admin Logs sub-tab state
+  const [adminSectionTab, setAdminSectionTab] = useState<'dossiers' | 'logs'>('dossiers');
+  const [adminLogs, setAdminLogs] = useState<AdminActivityLog[]>([]);
+  const [logSearchQuery, setLogSearchQuery] = useState<string>('');
+  const [logActionFilter, setLogActionFilter] = useState<string>('All');
+  const [selectedLogForDetails, setSelectedLogForDetails] = useState<AdminActivityLog | null>(null);
+  const [openLogMenuId, setOpenLogMenuId] = useState<string | null>(null);
+
   // Admin 3D Card View & Flipping states
   const [adminViewMode, setAdminViewMode] = useState<'list' | 'cards'>('list');
   const [flippedCardsMap, setFlippedCardsMap] = useState<Record<string, boolean>>({});
@@ -117,12 +137,15 @@ const IDCard: React.FC<IDCardProps> = ({
 
   // Close mobile 3-dots menu on outside click
   useEffect(() => {
-    const handleOutsideClick = () => setOpenMenuId(null);
-    if (openMenuId) {
+    const handleOutsideClick = () => {
+      setOpenMenuId(null);
+      setOpenLogMenuId(null);
+    };
+    if (openMenuId || openLogMenuId) {
       window.addEventListener('click', handleOutsideClick);
       return () => window.removeEventListener('click', handleOutsideClick);
     }
-  }, [openMenuId]);
+  }, [openMenuId, openLogMenuId]);
 
   // Google Sheets Force Sync states
   const [isSyncingSheets, setIsSyncingSheets] = useState<boolean>(false);
@@ -216,6 +239,111 @@ const IDCard: React.FC<IDCardProps> = ({
         .catch((err) => console.error('Failed to load members.csv:', err));
     }
   }, [isAdmin]);
+
+  // Real-time listener for admin activity logs
+  useEffect(() => {
+    if (!isAdmin) return;
+    try {
+      const logsQuery = query(collection(db, 'admin_logs'), orderBy('timestamp', 'desc'), limit(100));
+      const unsubscribe = onSnapshot(logsQuery, (snapshot) => {
+        const logsList: AdminActivityLog[] = [];
+        snapshot.forEach(docSnap => {
+          logsList.push({ id: docSnap.id, ...docSnap.data() } as AdminActivityLog);
+        });
+        setAdminLogs(logsList);
+      }, (error) => {
+        console.warn('Real-time admin logs listener notice:', error);
+      });
+      return () => unsubscribe();
+    } catch (e) {
+      console.warn('Could not query admin_logs:', e);
+    }
+  }, [isAdmin]);
+
+  // Inline log writer — keeps everything self-contained in this component
+  const logAdminAction = useCallback(async (
+    action: AdminActivityLog['action'],
+    details: string,
+    targetEmail?: string,
+    targetName?: string,
+    targetRegNo?: string
+  ) => {
+    try {
+      if (!db || !currentUser) return;
+      const userMail = currentUser.email || 'Admin';
+      const logEntry: AdminActivityLog = {
+        action,
+        performedBy: userMail,
+        adminEmail: userMail,
+        targetEmail: targetEmail || 'N/A',
+        targetName: targetName || 'N/A',
+        targetRegNo: targetRegNo || 'N/A',
+        details,
+        timestamp: new Date().toISOString()
+      };
+      await addDoc(collection(db, 'admin_logs'), logEntry);
+    } catch (err) {
+      console.error('Failed to write admin activity log:', err);
+    }
+  }, [currentUser]);
+
+  // Only abhinav can delete individual log entries
+  const handleDeleteLog = useCallback(async (logId?: string) => {
+    if (!logId || !db) return;
+    const userEmail = (currentUser?.email || '').toLowerCase();
+    if (userEmail !== 'abhinav.25bcy10254@vitbhopal.ac.in') return;
+    try {
+      await deleteDoc(doc(db, 'admin_logs', logId));
+      setAdminLogs(prev => prev.filter(l => l.id !== logId));
+      setSyncToastMessage('Activity log entry deleted.');
+      setTimeout(() => setSyncToastMessage(null), 3000);
+    } catch (err) {
+      console.error('Failed to delete log entry:', err);
+    }
+  }, [currentUser?.email]);
+
+  // Performance optimization: Pagination / Windowing states (Massive TBT & LCP boost)
+  const [dossierPageLimit, setDossierPageLimit] = useState<number>(12);
+  const [logPageLimit, setLogPageLimit] = useState<number>(15);
+
+  useEffect(() => {
+    setDossierPageLimit(12);
+  }, [searchQuery, selectedTeam]);
+
+  useEffect(() => {
+    setLogPageLimit(15);
+  }, [logSearchQuery, logActionFilter]);
+
+  const canDeleteLogs = useMemo(() => {
+    return (currentUser?.email || '').toLowerCase() === 'abhinav.25bcy10254@vitbhopal.ac.in';
+  }, [currentUser?.email]);
+
+  const filteredLogs = useMemo(() => {
+    return adminLogs.filter(log => {
+      const adminMail = log.performedBy || log.adminEmail || 'Admin';
+      const matchesSearch =
+        !logSearchQuery.trim() ||
+        adminMail.toLowerCase().includes(logSearchQuery.toLowerCase()) ||
+        (log.targetName || '').toLowerCase().includes(logSearchQuery.toLowerCase()) ||
+        (log.targetRegNo || '').toLowerCase().includes(logSearchQuery.toLowerCase()) ||
+        (log.details || '').toLowerCase().includes(logSearchQuery.toLowerCase());
+
+      let matchesAction = logActionFilter === 'All';
+      if (!matchesAction) {
+        if (logActionFilter === 'APPROVE_DOSSIER') matchesAction = log.action === 'APPROVE_DOSSIER' || log.action === 'VERIFY';
+        else if (logActionFilter === 'REVERT_PENDING_DOSSIER') matchesAction = log.action === 'REVERT_PENDING_DOSSIER' || log.action === 'SET_PENDING';
+        else if (logActionFilter === 'DELETE_DOSSIER') matchesAction = log.action === 'DELETE_DOSSIER' || log.action === 'DELETE';
+        else if (logActionFilter === 'FORCE_SHEETS_SYNC') matchesAction = log.action === 'FORCE_SHEETS_SYNC' || log.action === 'SYNC_SHEETS';
+        else matchesAction = log.action === logActionFilter;
+      }
+
+      return matchesSearch && matchesAction;
+    });
+  }, [adminLogs, logSearchQuery, logActionFilter]);
+
+  const visibleLogs = useMemo(() => {
+    return filteredLogs.slice(0, logPageLimit);
+  }, [filteredLogs, logPageLimit]);
 
   const checkExistingSubmission = async (email: string) => {
     try {
@@ -495,6 +623,12 @@ const IDCard: React.FC<IDCardProps> = ({
       setSyncToastMessage(`Parallel sync completed! Transmitted ${successCount} active ID record(s) to Google Sheets.`);
       setTimeout(() => setSyncToastMessage(null), 4500);
       setSheetsCooldown(60);
+
+      // Log sync action
+      logAdminAction(
+        'FORCE_SHEETS_SYNC',
+        `Initiated parallel sync to Google Sheets for ${sortedCandidates.length} candidate submissions`
+      );
     } catch (err) {
       console.error("Error during force sync to Sheets:", err);
       setSyncToastMessage("Sync failed. Check connection or script configuration.");
@@ -586,6 +720,15 @@ const IDCard: React.FC<IDCardProps> = ({
 
       setSyncToastMessage(`Deleted submission for ${candidate.name}. Form response unlocked & Google Sheets notified.`);
       setTimeout(() => setSyncToastMessage(null), 4500);
+
+      // Log delete action
+      logAdminAction(
+        'DELETE_DOSSIER',
+        `Deleted candidate ID card dossier for ${candidate.name} (${candidate.registrationNumber || 'No Reg'})`,
+        candidate.email,
+        candidate.name,
+        candidate.registrationNumber
+      );
     } catch (err: any) {
       console.error("Delete failed:", err);
       setSyncToastMessage("Failed to delete entry: " + (err?.message || err));
@@ -623,6 +766,17 @@ const IDCard: React.FC<IDCardProps> = ({
 
       setSyncToastMessage(`Updated status for ${candidate.name} to ${newStatus}.`);
       setTimeout(() => setSyncToastMessage(null), 3000);
+
+      // Log status change
+      logAdminAction(
+        newStatus === 'Approved' ? 'APPROVE_DOSSIER' : 'REVERT_PENDING_DOSSIER',
+        newStatus === 'Approved'
+          ? `Approved digital identity dossier for ${candidate.name} (${candidate.registrationNumber || 'No Reg'})`
+          : `Reverted dossier for ${candidate.name} (${candidate.registrationNumber || 'No Reg'}) back to Pending`,
+        candidate.email,
+        candidate.name,
+        candidate.registrationNumber
+      );
     } catch (err: any) {
       console.error("Status update failed:", err);
       setSyncToastMessage("Failed to update status: " + (err?.message || err));
@@ -630,33 +784,39 @@ const IDCard: React.FC<IDCardProps> = ({
     }
   };
 
-  const filteredCandidates = candidates.filter((c) => {
-    const name = (c.name || '').toLowerCase();
-    const reg = (c.registrationNumber || '').toLowerCase();
-    const email = (c.email || '').toLowerCase();
-    const search = searchQuery.toLowerCase();
+  const filteredCandidates = useMemo(() => {
+    return candidates.filter((c) => {
+      const name = (c.name || '').toLowerCase();
+      const reg = (c.registrationNumber || '').toLowerCase();
+      const email = (c.email || '').toLowerCase();
+      const search = searchQuery.toLowerCase();
 
-    const matchesSearch = name.includes(search) || reg.includes(search) || email.includes(search);
+      const matchesSearch = name.includes(search) || reg.includes(search) || email.includes(search);
 
-    let matchesTeam = false;
-    if (selectedTeam === 'All') {
-      matchesTeam = true;
-    } else if (selectedTeam.toLowerCase() === 'management') {
-      const team = (c.team || '').toLowerCase();
-      const pos = (c.position || '').toLowerCase();
-      matchesTeam =
-        team.includes('management') ||
-        team.includes('coordinator') ||
-        team.includes('president') ||
-        pos.includes('management') ||
-        pos.includes('coordinator') ||
-        pos.includes('president');
-    } else {
-      matchesTeam = c.team && c.team.toLowerCase() === selectedTeam.toLowerCase();
-    }
+      let matchesTeam = false;
+      if (selectedTeam === 'All') {
+        matchesTeam = true;
+      } else if (selectedTeam.toLowerCase() === 'management') {
+        const team = (c.team || '').toLowerCase();
+        const pos = (c.position || '').toLowerCase();
+        matchesTeam =
+          team.includes('management') ||
+          team.includes('coordinator') ||
+          team.includes('president') ||
+          pos.includes('management') ||
+          pos.includes('coordinator') ||
+          pos.includes('president');
+      } else {
+        matchesTeam = c.team && c.team.toLowerCase() === selectedTeam.toLowerCase();
+      }
 
-    return matchesSearch && matchesTeam;
-  });
+      return matchesSearch && matchesTeam;
+    });
+  }, [candidates, searchQuery, selectedTeam]);
+
+  const visibleCandidates = useMemo(() => {
+    return filteredCandidates.slice(0, dossierPageLimit);
+  }, [filteredCandidates, dossierPageLimit]);
 
   if (authLoading) {
     return (
@@ -1319,6 +1479,20 @@ const IDCard: React.FC<IDCardProps> = ({
                           )}
                         </button>
                       </div>
+
+                      {/* Load More Activity Logs Button */}
+                      {visibleLogs.length < filteredLogs.length && (
+                        <div className="text-center py-3 border-t border-white/5 bg-black/20">
+                          <button
+                            type="button"
+                            onClick={() => setLogPageLimit(prev => prev + 20)}
+                            className="px-5 py-2 rounded-xl bg-purple-500/10 border border-purple-500/30 text-purple-300 text-xs font-bold font-label-caps tracking-wider hover:bg-purple-500/20 hover:border-purple-500/50 transition-all duration-300 active:scale-95 inline-flex items-center gap-2"
+                          >
+                            <span className="material-symbols-outlined text-sm">expand_more</span>
+                            <span>LOAD MORE LOGS ({filteredLogs.length - visibleLogs.length} REMAINING)</span>
+                          </button>
+                        </div>
+                      )}
                     </div>
                   </form>
                 </div>
@@ -1330,6 +1504,8 @@ const IDCard: React.FC<IDCardProps> = ({
         {/* SUB TAB 2: ADMIN DASHBOARD */}
         {activeSubTab === 'admin' && isAdmin && (
           <div className="space-y-6 stagger-in text-left">
+
+            {/* Admin section header */}
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-white/5 pb-4">
               <div>
                 <h3 className="font-display-lg text-lg text-white font-bold uppercase tracking-wider flex items-center gap-3">
@@ -1367,505 +1543,788 @@ const IDCard: React.FC<IDCardProps> = ({
               </button>
             </div>
 
-            <div className="glass-panel p-3.5 sm:p-4 rounded-xl border border-white/5 bg-white/5 flex flex-col md:flex-row md:items-center gap-3 sm:gap-4">
-              <div className="relative flex-1 w-full">
-                <span className="material-symbols-outlined absolute left-3 top-2.5 text-outline text-sm">search</span>
-                <input
-                  type="text"
-                  placeholder="Search candidate name, registration number, or email..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full bg-black/30 border border-outline-variant/30 rounded-lg pl-9 pr-4 py-2 text-xs text-white focus:outline-none focus:border-primary placeholder:text-white/25 transition-all duration-300"
-                />
-              </div>
+            {/* ADMIN SUB-SECTION TABS */}
+            <div className="flex items-center gap-2.5 border-b border-white/10 pb-3">
+              <button
+                onClick={() => setAdminSectionTab('dossiers')}
+                className={`px-4 py-2.5 rounded-xl text-xs font-bold font-label-caps tracking-wider flex items-center gap-2 transition-all duration-200 ${adminSectionTab === 'dossiers'
+                  ? 'bg-primary/20 border border-primary/40 text-white shadow-[0_0_15px_rgba(168,85,247,0.25)]'
+                  : 'bg-black/30 border border-white/5 text-white/60 hover:text-white hover:bg-white/5'
+                  }`}
+              >
+                <span className="material-symbols-outlined text-base">badge</span>
+                <span>DOSSIERS ({candidates.length})</span>
+              </button>
 
-              <div className="flex items-center justify-between md:justify-end gap-3 shrink-0 w-full md:w-auto">
-                <div className="flex items-center gap-2 min-w-0">
-                  <label className="text-[10px] font-label-caps text-outline tracking-wider font-bold shrink-0">TEAM:</label>
-                  <select
-                    value={selectedTeam}
-                    onChange={(e) => setSelectedTeam(e.target.value)}
-                    className="bg-black/50 border border-outline-variant/30 text-white rounded-lg px-3 py-1.5 text-xs focus:ring-0 focus:border-primary cursor-pointer hover:bg-black/80 font-label-caps shrink-0"
-                  >
-                    <option value="All">All Teams</option>
-                    <option value="Design">Design</option>
-                    <option value="Education">Education</option>
-                    <option value="Esports">Esports</option>
-                    <option value="PR">PR</option>
-                    <option value="Social Media">Social Media</option>
-                    <option value="Technical">Technical</option>
-                    <option value="Management">Management</option>
-                  </select>
-                </div>
-
-                {/* 3D Card View Push Button Switch (Logo Only) */}
-                <button
-                  type="button"
-                  onClick={() => setAdminViewMode(prev => prev === 'cards' ? 'list' : 'cards')}
-                  className="p-2 rounded-lg bg-black/40 border border-white/10 text-white/80 hover:text-white hover:border-primary/50 transition-all duration-300 flex items-center justify-center shrink-0 active:scale-95"
-                  title={adminViewMode === 'cards' ? 'Switch to List View' : 'Switch to 3D Cards View'}
-                >
-                  <span className="material-symbols-outlined text-lg">
-                    {adminViewMode === 'cards' ? 'format_list_bulleted' : 'style'}
-                  </span>
-                </button>
-              </div>
+              <button
+                onClick={() => setAdminSectionTab('logs')}
+                className={`px-4 py-2.5 rounded-xl text-xs font-bold font-label-caps tracking-wider flex items-center gap-2 transition-all duration-200 ${adminSectionTab === 'logs'
+                  ? 'bg-primary/20 border border-primary/40 text-white shadow-[0_0_15px_rgba(168,85,247,0.25)]'
+                  : 'bg-black/30 border border-white/5 text-white/60 hover:text-white hover:bg-white/5'
+                  }`}
+              >
+                <span className="material-symbols-outlined text-base">history</span>
+                <span>ACTIVITY LOGS ({adminLogs.length})</span>
+              </button>
             </div>
 
-            <div className="glass-panel p-4 rounded-2xl relative space-y-4 pb-28 sm:pb-16">
-              <div className="space-y-4 relative z-10">
-                {loadingData ? (
-                  <div className="py-12 text-center text-on-surface-variant font-code-sm animate-pulse">
-                    LOADING SECURE RECORDS...
+            {/* DOSSIERS SUB-TAB */}
+            {adminSectionTab === 'dossiers' && (
+              <div className="space-y-6">
+                <div className="glass-panel p-3.5 sm:p-4 rounded-xl border border-white/5 bg-white/5 flex flex-col md:flex-row md:items-center gap-3 sm:gap-4">
+                  <div className="relative flex-1 w-full">
+                    <span className="material-symbols-outlined absolute left-3 top-2.5 text-outline text-sm">search</span>
+                    <input
+                      type="text"
+                      placeholder="Search candidate name, registration number, or email..."
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      className="w-full bg-black/30 border border-outline-variant/30 rounded-lg pl-9 pr-4 py-2 text-xs text-white focus:outline-none focus:border-primary placeholder:text-white/25 transition-all duration-300"
+                    />
                   </div>
-                ) : filteredCandidates.length === 0 ? (
-                  <div className="py-16 text-center text-on-surface-variant italic text-xs md:text-sm">
-                    No matching candidate ID dossiers found.
-                  </div>
-                ) : adminViewMode === 'list' ? (
-                  <>
-                    <div className="hidden md:grid grid-cols-12 gap-4 px-4 py-2 border-b border-outline-variant/20 text-xs text-on-surface-variant font-label-caps tracking-widest font-bold">
-                      <div className="col-span-3">CANDIDATE</div>
-                      <div className="col-span-3">CONTACT / TEAM</div>
-                      <div className="col-span-2 text-center">SUBMITTED</div>
-                      <div className="col-span-2 text-center">STATUS</div>
-                      <div className="col-span-2 text-right">ACTIONS</div>
+
+                  <div className="flex items-center justify-between md:justify-end gap-3 shrink-0 w-full md:w-auto">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <label className="text-[10px] font-label-caps text-outline tracking-wider font-bold shrink-0">TEAM:</label>
+                      <select
+                        value={selectedTeam}
+                        onChange={(e) => setSelectedTeam(e.target.value)}
+                        className="bg-black/50 border border-outline-variant/30 text-white rounded-lg px-3 py-1.5 text-xs focus:ring-0 focus:border-primary cursor-pointer hover:bg-black/80 font-label-caps shrink-0"
+                      >
+                        <option value="All">All Teams</option>
+                        <option value="Design">Design</option>
+                        <option value="Education">Education</option>
+                        <option value="Esports">Esports</option>
+                        <option value="PR">PR</option>
+                        <option value="Social Media">Social Media</option>
+                        <option value="Technical">Technical</option>
+                        <option value="Management">Management</option>
+                      </select>
                     </div>
 
-                    {filteredCandidates.map((c, index) => {
-                      const submissionDate = c.submittedAt ? new Date(c.submittedAt).toLocaleDateString() : "N/A";
-                      const display = getAdminDisplayRoleOrTeam(c.team, c.position);
-                      const isNearBottom = index >= Math.max(1, filteredCandidates.length - 2);
+                    {/* 3D Card View Push Button Switch (Logo Only) */}
+                    <button
+                      type="button"
+                      onClick={() => setAdminViewMode(prev => prev === 'cards' ? 'list' : 'cards')}
+                      className="p-2 rounded-lg bg-black/40 border border-white/10 text-white/80 hover:text-white hover:border-primary/50 transition-all duration-300 flex items-center justify-center shrink-0 active:scale-95"
+                      title={adminViewMode === 'cards' ? 'Switch to List View' : 'Switch to 3D Cards View'}
+                    >
+                      <span className="material-symbols-outlined text-lg">
+                        {adminViewMode === 'cards' ? 'format_list_bulleted' : 'style'}
+                      </span>
+                    </button>
+                  </div>
+                </div>
 
-                      return (
-                        <div
-                          key={c.id || c.email}
-                          onClick={() => {
-                            setPreviewCandidate(c);
-                            setPreviewModalTab('details');
-                            setPreviewFlipped(false);
-                          }}
-                          className="rounded-xl border border-white/5 bg-white/5 hover:border-primary/30 hover:bg-white/10 transition-all duration-200 cursor-pointer overflow-visible"
-                        >
-                          {/* DESKTOP TABLE ROW VIEW */}
-                          <div className="hidden md:grid grid-cols-12 gap-4 p-4 items-center">
-                            <div className="col-span-3 flex items-center gap-3 min-w-0">
-                              <div className="w-10 h-10 rounded-lg border border-primary/30 bg-black/40 overflow-hidden shrink-0">
-                                <img src={c.photoUrl} alt="Avatar" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
-                              </div>
-                              <div className="min-w-0">
-                                <div className="font-bold text-white text-sm truncate">{c.name}</div>
-                                <div className="text-xs text-primary font-code-sm">{c.registrationNumber}</div>
-                              </div>
-                            </div>
-
-                            <div className="col-span-3 text-xs text-on-surface-variant font-code-sm space-y-0.5 min-w-0">
-                              <div className="truncate text-white">{c.email}</div>
-                              <div className="truncate">
-                                {c.phone || "No Phone"} |{' '}
-                                <span className="text-primary font-bold uppercase">
-                                  {display.value}
-                                </span>
-                              </div>
-                            </div>
-
-                            <div className="col-span-2 text-center text-xs text-on-surface-variant font-code-sm">
-                              {submissionDate}
-                            </div>
-
-                            <div className="col-span-2 text-center flex justify-center">
-                              <span
-                                className={`px-3 py-1 rounded-full border text-[9px] font-label-caps font-bold tracking-wider ${c.status === 'Approved'
-                                  ? 'bg-green-500/10 border-green-500/30 text-green-400'
-                                  : 'bg-yellow-500/10 border-yellow-500/30 text-yellow-400'
-                                  }`}
-                              >
-                                {c.status || 'Pending'}
-                              </span>
-                            </div>
-
-                            <div className="col-span-2 flex justify-end gap-1.5 relative z-30">
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setPreviewCandidate(c);
-                                  setPreviewModalTab('card');
-                                  setPreviewFlipped(false);
-                                }}
-                                className="p-2 rounded-lg bg-primary/10 border border-primary/30 text-primary hover:bg-primary/20 transition-all shrink-0"
-                                title="View Interactive 3D Card"
-                              >
-                                <span className="material-symbols-outlined text-sm">style</span>
-                              </button>
-
-                              <button
-                                onClick={(e) => { e.stopPropagation(); toggleStatus(c); }}
-                                className={`p-2 rounded-lg border transition-all shrink-0 ${c.status === 'Approved'
-                                  ? 'bg-yellow-500/10 border-yellow-500/30 text-yellow-400 hover:bg-yellow-500/20'
-                                  : 'bg-green-500/10 border-green-500/30 text-green-400 hover:bg-green-500/20'
-                                  }`}
-                                title={c.status === 'Approved' ? 'Mark as Pending' : 'Approve Dossier'}
-                              >
-                                <span className="material-symbols-outlined text-sm">
-                                  {c.status === 'Approved' ? 'history' : 'verified'}
-                                </span>
-                              </button>
-
-                              <button
-                                disabled={downloadingId === c.id}
-                                onClick={(e) => { e.stopPropagation(); handleDownload(c); }}
-                                className="p-2 rounded-lg bg-white/5 border border-white/5 text-on-surface-variant hover:text-white hover:border-white/20 transition-all shrink-0"
-                                title="Download ID Photo"
-                              >
-                                <span className={`material-symbols-outlined text-sm ${downloadingId === c.id ? 'animate-spin' : ''}`}>
-                                  {downloadingId === c.id ? 'sync' : 'download'}
-                                </span>
-                              </button>
-
-                              <button
-                                onClick={(e) => { e.stopPropagation(); handleDelete(c); }}
-                                className="p-2 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 hover:bg-red-500/20 hover:border-red-500/40 transition-all shrink-0"
-                                title="Delete and Unlock Response"
-                              >
-                                <span className="material-symbols-outlined text-sm">delete</span>
-                              </button>
-                            </div>
-                          </div>
-
-                          {/* MOBILE CLEAN DOSSIER CARD VIEW */}
-                          <div className="flex md:hidden flex-col p-3.5 space-y-2.5">
-                            <div className="flex items-center justify-between gap-2.5">
-                              <div className="flex items-center gap-3 min-w-0 flex-1">
-                                <div className="w-10 h-10 rounded-lg border border-primary/30 bg-black/40 overflow-hidden shrink-0">
-                                  <img src={c.photoUrl} alt="Avatar" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
-                                </div>
-                                <div className="min-w-0 flex-1">
-                                  <div className="font-bold text-white text-xs truncate">{c.name}</div>
-                                  <div className="text-[10px] text-primary font-code-sm font-bold">{c.registrationNumber}</div>
-                                </div>
-                              </div>
-
-                              <div className="flex items-center gap-2 shrink-0">
-                                <span
-                                  className={`px-2 py-0.5 rounded-full border text-[8px] font-label-caps font-bold tracking-wider ${c.status === 'Approved'
-                                    ? 'bg-green-500/10 border-green-500/30 text-green-400'
-                                    : 'bg-yellow-500/10 border-yellow-500/30 text-yellow-400'
-                                    }`}
-                                >
-                                  {c.status || 'Pending'}
-                                </span>
-
-                                {/* Mobile 3-Dots Menu Box */}
-                                <div className="relative">
-                                  <button
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      const menuKey = c.id || c.email;
-                                      const rect = e.currentTarget.getBoundingClientRect();
-                                      const spaceBelow = window.innerHeight - rect.bottom;
-                                      const openUp = spaceBelow < 220;
-                                      setMenuDirections(prev => ({ ...prev, [menuKey]: openUp ? 'up' : 'down' }));
-                                      setOpenMenuId(openMenuId === menuKey ? null : menuKey);
-                                    }}
-                                    className="p-1.5 rounded-lg bg-black/60 border border-white/10 text-white/80 hover:text-white hover:border-purple-500/50 transition-all"
-                                    title="Actions Menu"
-                                  >
-                                    <span className="material-symbols-outlined text-base">more_vert</span>
-                                  </button>
-
-                                  {openMenuId === (c.id || c.email) && (
-                                    <div
-                                      onClick={(e) => e.stopPropagation()}
-                                      className={`absolute right-0 ${menuDirections[c.id || c.email] === 'up' ? 'bottom-full mb-2' : 'top-9'
-                                        } z-[300] w-48 bg-[#12081c] border border-[#a855f7]/40 backdrop-blur-2xl rounded-xl shadow-[0_10px_30px_rgba(0,0,0,0.9)] py-1.5 text-xs font-body-md`}
-                                    >
-                                      <button
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          setOpenMenuId(null);
-                                          setPreviewCandidate(c);
-                                          setPreviewModalTab('card');
-                                          setPreviewFlipped(false);
-                                        }}
-                                        className="w-full px-3.5 py-2.5 text-left flex items-center gap-2.5 text-purple-400 font-bold hover:bg-white/10 transition-colors"
-                                      >
-                                        <span className="material-symbols-outlined text-base">style</span>
-                                        <span>3D Card View</span>
-                                      </button>
-
-                                      <button
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          setOpenMenuId(null);
-                                          toggleStatus(c);
-                                        }}
-                                        className={`w-full px-3.5 py-2.5 text-left flex items-center gap-2.5 hover:bg-white/10 transition-colors ${c.status === 'Approved' ? 'text-yellow-400 font-bold' : 'text-green-400 font-bold'
-                                          }`}
-                                      >
-                                        <span className="material-symbols-outlined text-base">
-                                          {c.status === 'Approved' ? 'history' : 'verified'}
-                                        </span>
-                                        <span>{c.status === 'Approved' ? 'Mark Pending' : 'Approve Dossier'}</span>
-                                      </button>
-
-                                      <button
-                                        disabled={downloadingId === c.id}
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          setOpenMenuId(null);
-                                          handleDownload(c);
-                                        }}
-                                        className="w-full px-3.5 py-2.5 text-left flex items-center gap-2.5 text-white/90 hover:bg-white/10 transition-colors font-bold"
-                                      >
-                                        <span className={`material-symbols-outlined text-base ${downloadingId === c.id ? 'animate-spin' : ''}`}>
-                                          {downloadingId === c.id ? 'sync' : 'download'}
-                                        </span>
-                                        <span>Download ID Photo</span>
-                                      </button>
-
-                                      <div className="my-1 border-t border-white/10"></div>
-
-                                      <button
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          setOpenMenuId(null);
-                                          handleDelete(c);
-                                        }}
-                                        className="w-full px-3.5 py-2.5 text-left flex items-center gap-2.5 text-red-400 hover:bg-red-500/20 transition-colors font-bold"
-                                      >
-                                        <span className="material-symbols-outlined text-base">delete</span>
-                                        <span>Delete Dossier</span>
-                                      </button>
-                                    </div>
-                                  )}
-                                </div>
-                              </div>
-                            </div>
-
-                            <div className="flex items-center justify-between gap-2 pt-1 border-t border-white/5 text-[10px]">
-                              <span className="px-2 py-0.5 rounded bg-purple-500/15 text-purple-300 font-bold uppercase text-[9px] font-label-caps border border-purple-500/20 truncate max-w-[150px]">
-                                {display.value}
-                              </span>
-                              <span className="text-white/50 truncate font-code-sm text-[10px]">
-                                {c.email}
-                              </span>
-                            </div>
-                          </div>
+                <div className="glass-panel p-4 rounded-2xl relative space-y-4 pb-28 sm:pb-16">
+                  <div className="space-y-4 relative z-10">
+                    {loadingData ? (
+                      <div className="py-12 text-center text-on-surface-variant font-code-sm animate-pulse">
+                        LOADING SECURE RECORDS...
+                      </div>
+                    ) : filteredCandidates.length === 0 ? (
+                      <div className="py-16 text-center text-on-surface-variant italic text-xs md:text-sm">
+                        No matching candidate ID dossiers found.
+                      </div>
+                    ) : adminViewMode === 'list' ? (
+                      <>
+                        <div className="hidden md:grid grid-cols-12 gap-4 px-4 py-2 border-b border-outline-variant/20 text-xs text-on-surface-variant font-label-caps tracking-widest font-bold">
+                          <div className="col-span-3">CANDIDATE</div>
+                          <div className="col-span-3">CONTACT / TEAM</div>
+                          <div className="col-span-2 text-center">SUBMITTED</div>
+                          <div className="col-span-2 text-center">STATUS</div>
+                          <div className="col-span-2 text-right">ACTIONS</div>
                         </div>
-                      );
-                    })}
-                  </>
-                ) : (
-                  /* 3D CARDS GRID VIEW FOR ADMIN */
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8 py-4">
-                    {filteredCandidates.map((c) => {
-                      const cardId = c.id || c.email;
-                      const isFlipped = !!flippedCardsMap[cardId];
-                      const displayInfo = getAdminDisplayRoleOrTeam(c.team, c.position);
 
-                      return (
-                        <div key={cardId} className="flex flex-col items-center gap-3">
-                          {/* 3D Flippable Card Element */}
-                          <div
-                            onClick={() => setFlippedCardsMap(prev => ({ ...prev, [cardId]: !prev[cardId] }))}
-                            className="relative w-full max-w-[290px] aspect-[2.2/3.4] cursor-pointer group [perspective:1000px]"
-                          >
-                            <div className={`relative w-full h-full duration-700 [transform-style:preserve-3d] ${isFlipped ? '[transform:rotateY(180deg)]' : ''}`}>
+                        {visibleCandidates.map((c, index) => {
+                          const submissionDate = c.submittedAt ? new Date(c.submittedAt).toLocaleDateString() : "N/A";
+                          const display = getAdminDisplayRoleOrTeam(c.team, c.position);
+                          const isNearBottom = index >= Math.max(1, filteredCandidates.length - 2);
 
-                              {/* FRONT OF THE ID CARD */}
-                              <div className="absolute inset-0 w-full h-full [backface-visibility:hidden] select-none">
-                                <div className="relative overflow-hidden w-full h-full rounded-3xl border border-[#a855f7]/35 bg-gradient-to-b from-[#12051e] via-[#05010a] to-[#0c0416] p-5 flex flex-col justify-between shadow-[0_0_35px_rgba(168,85,247,0.2)]">
-                                  <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.005)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.005)_1px,transparent_1px)] bg-[size:12px_12px] pointer-events-none opacity-40"></div>
-
-                                  <div className="absolute top-2.5 left-2.5 w-2.5 h-2.5 border-t-2 border-l-2 border-[#a855f7]/40 pointer-events-none"></div>
-                                  <div className="absolute top-2.5 right-2.5 w-2.5 h-2.5 border-t-2 border-r-2 border-[#a855f7]/40 pointer-events-none"></div>
-                                  <div className="absolute bottom-2.5 left-2.5 w-2.5 h-2.5 border-b-2 border-l-2 border-[#a855f7]/40 pointer-events-none"></div>
-                                  <div className="absolute bottom-2.5 right-2.5 w-2.5 h-2.5 border-b-2 border-r-2 border-[#a855f7]/40 pointer-events-none"></div>
-
-                                  <div className="flex justify-between items-start border-b border-[#a855f7]/25 pb-2 relative z-10">
-                                    <div className="text-left w-full">
-                                      <div className="flex items-center gap-1 justify-center">
-                                        <span className="material-symbols-outlined text-[12px] text-[#a855f7]">sports_esports</span>
-                                        <h4 className="font-display-lg text-xs text-white font-black tracking-widest leading-none">VRGC</h4>
-                                      </div>
-                                      <span className="text-[#a855f7]/80 text-[4.5px] font-code-sm tracking-wider uppercase block mt-0.5 font-bold text-center">VIRTUAL REALITY & GAMING CLUB</span>
-                                    </div>
-                                  </div>
-
-                                  <div className="flex flex-col items-center justify-center my-2 relative z-10">
-                                    <div className="w-28 h-28 rounded-xl border-2 border-[#a855f7]/30 p-1 bg-black/40 shadow-[0_0_20px_rgba(168,85,247,0.15)] relative overflow-hidden">
-                                      <img
-                                        src={c.photoUrl}
-                                        alt={c.name}
-                                        className="w-full h-full object-cover rounded-lg"
-                                        referrerPolicy="no-referrer"
-                                      />
-                                      <div className={`absolute bottom-1 right-1 text-white text-[5px] font-black px-1 py-0.5 rounded tracking-widest uppercase shadow-md pointer-events-none ${c.status === 'Approved' ? 'bg-green-500/80' : 'bg-yellow-500/80'
-                                        }`}>
-                                        {c.status === 'Approved' ? 'VERIFIED' : 'PENDING'}
-                                      </div>
-                                    </div>
-                                  </div>
-
-                                  <div className="bg-[#0b0512]/90 border border-[#a855f7]/25 p-2.5 rounded-xl relative z-10 space-y-1.5">
-                                    <div className="border-b border-white/5 pb-1 text-left">
-                                      <span className="font-code-sm text-[5px] text-[#a855f7] uppercase tracking-widest block mb-0.5 font-extrabold">NAME</span>
-                                      <h3 className="font-display-lg text-xs text-white font-extrabold tracking-wide uppercase truncate leading-none">
-                                        {c.name}
-                                      </h3>
-                                    </div>
-
-                                    <div className="grid grid-cols-2 gap-1.5 text-left">
-                                      <div>
-                                        <span className="font-code-sm text-[5px] text-[#a855f7] uppercase tracking-widest block mb-0.5 font-extrabold">REG NO.</span>
-                                        <span className="font-code-sm text-[9px] text-white font-bold tracking-wider block">
-                                          {c.registrationNumber}
-                                        </span>
-                                      </div>
-                                      <div>
-                                        <span className="font-code-sm text-[5px] text-[#a855f7] uppercase tracking-widest block mb-0.5 font-extrabold">
-                                          {displayInfo.label === 'TEAM / DIVISION' ? 'TEAM' : 'ROLE'}
-                                        </span>
-                                        <span className="font-code-sm text-[9px] text-white font-bold tracking-wider block uppercase truncate">
-                                          {displayInfo.value}
-                                        </span>
-                                      </div>
-                                    </div>
-
-                                    <div className="pt-1 border-t border-white/5 flex items-center gap-1 justify-start">
-                                      <span className="w-1.5 h-1.5 rounded-full bg-[#a855f7] shadow-[0_0_8px_#a855f7] animate-pulse"></span>
-                                      <span className="font-code-sm text-[7px] text-[#ddb7ff] font-extrabold uppercase tracking-widest leading-none truncate">
-                                        {displayInfo.isSpecial ? displayInfo.value : (c.position || 'MEMBER')}
-                                      </span>
-                                    </div>
-                                  </div>
-
-                                  <div className="absolute bottom-1 right-2 text-[5px] font-bold text-white/30 font-code-sm uppercase tracking-widest pointer-events-none">
-                                    TAP TO FLIP 🔄
-                                  </div>
-                                </div>
-                              </div>
-
-                              {/* BACK OF THE ID CARD */}
-                              <div className="absolute inset-0 w-full h-full [backface-visibility:hidden] [transform:rotateY(180deg)] select-none">
-                                <div className="relative overflow-hidden w-full h-full rounded-3xl border border-[#a855f7]/35 bg-gradient-to-b from-[#12051e] via-[#05010a] to-[#0c0416] p-5 flex flex-col justify-between shadow-[0_0_35px_rgba(168,85,247,0.2)]">
-                                  {c.avatarUrl && (
-                                    <div className="absolute inset-0 z-0 overflow-hidden pointer-events-none rounded-3xl">
-                                      <img
-                                        src={c.avatarUrl}
-                                        alt="Avatar Watermark"
-                                        className="w-full h-full object-cover opacity-95 brightness-110 contrast-105"
-                                        referrerPolicy="no-referrer"
-                                      />
-                                      <div className="absolute inset-0 bg-[#05010a]/10 bg-gradient-to-b from-transparent via-[#05010a]/20 to-[#05010a]/50"></div>
-                                    </div>
-                                  )}
-
-                                  <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.005)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.005)_1px,transparent_1px)] bg-[size:12px_12px] pointer-events-none opacity-40"></div>
-
-                                  <div className="absolute top-2.5 left-2.5 w-2.5 h-2.5 border-t-2 border-l-2 border-[#a855f7]/40 pointer-events-none"></div>
-                                  <div className="absolute top-2.5 right-2.5 w-2.5 h-2.5 border-t-2 border-r-2 border-[#a855f7]/40 pointer-events-none"></div>
-                                  <div className="absolute bottom-2.5 left-2.5 w-2.5 h-2.5 border-b-2 border-l-2 border-[#a855f7]/40 pointer-events-none"></div>
-                                  <div className="absolute bottom-2.5 right-2.5 w-2.5 h-2.5 border-b-2 border-r-2 border-[#a855f7]/40 pointer-events-none"></div>
-
-                                  <div className="text-center relative z-10 border-b border-[#a855f7]/25 pb-1.5">
-                                    <h4 className="font-display-lg text-xs text-white font-black tracking-widest uppercase">VRGC</h4>
-                                    <span className="font-code-sm text-[4.5px] text-[#a855f7]/80 tracking-wider block mt-0.5">VIRTUAL REALITY & GAMING CLUB</span>
-                                  </div>
-
-                                  <div className="my-2 flex flex-col items-center justify-center relative z-10">
-                                    <div className="w-24 h-24 rounded-xl border border-white/10 bg-white p-1.5 shadow-[0_0_20px_rgba(168,85,247,0.2)]">
-                                      <img
-                                        src={`https://api.qrserver.com/v1/create-qr-code/?size=140x140&color=0-0-0&bgcolor=ffffff&data=${encodeURIComponent(`${typeof window !== 'undefined' ? window.location.origin : 'https://vrgc.club'}/card/${c.registrationNumber || ''}`)}`}
-                                        alt="Scan to Verify"
-                                        className="w-full h-full object-contain"
-                                      />
-                                    </div>
-                                    <span className="font-code-sm text-[5.5px] text-[#a855f7] font-black uppercase tracking-widest block mt-1.5">SCAN TO CONNECT</span>
-                                  </div>
-
-                                  <div className="space-y-1 border-t border-[#a855f7]/25 pt-2 relative z-10 text-[6.5px] font-code-sm text-white/70 text-left w-full pl-2">
-                                    <div className="flex items-center gap-1">
-                                      <span className="material-symbols-outlined text-[9px] text-[#a855f7]">alternate_email</span>
-                                      <span>@vrgc_official</span>
-                                    </div>
-                                    <div className="flex items-center gap-1">
-                                      <span className="material-symbols-outlined text-[9px] text-[#a855f7]">forum</span>
-                                      <span>discord.gg/vrgc</span>
-                                    </div>
-                                  </div>
-
-                                  <div className="text-center text-[6px] font-extrabold text-[#a855f7]/80 tracking-widest mt-1.5 uppercase relative z-10">
-                                    PLAY • CREATE • INNOVATE
-                                  </div>
-
-                                  <div className="absolute bottom-1 right-2 text-[5px] font-bold text-white/30 font-code-sm uppercase tracking-widest pointer-events-none">
-                                    TAP TO FLIP 🔄
-                                  </div>
-                                </div>
-                              </div>
-
-                            </div>
-                          </div>
-
-                          {/* Quick Admin Actions toolbar under 3D card */}
-                          <div className="flex items-center gap-2 bg-black/60 border border-white/10 p-1.5 rounded-xl">
-                            <button
-                              type="button"
+                          return (
+                            <div
+                              key={c.id || c.email}
                               onClick={() => {
                                 setPreviewCandidate(c);
                                 setPreviewModalTab('details');
                                 setPreviewFlipped(false);
                               }}
-                              className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-white text-[10px] font-bold font-label-caps flex items-center gap-1 border border-white/10"
-                              title="View Full Dossier"
+                              className="rounded-xl border border-white/5 bg-white/5 hover:border-primary/30 hover:bg-white/10 transition-all duration-200 cursor-pointer overflow-visible"
                             >
-                              <span className="material-symbols-outlined text-xs">folder_shared</span>
-                              <span>DOSSIER</span>
-                            </button>
+                              {/* DESKTOP TABLE ROW VIEW */}
+                              <div className="hidden md:grid grid-cols-12 gap-4 p-4 items-center">
+                                <div className="col-span-3 flex items-center gap-3 min-w-0">
+                                  <div className="w-10 h-10 rounded-lg border border-primary/30 bg-black/40 overflow-hidden shrink-0">
+                                    <img src={c.photoUrl} alt="Avatar" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                                  </div>
+                                  <div className="min-w-0">
+                                    <div className="font-bold text-white text-sm truncate">{c.name}</div>
+                                    <div className="text-xs text-primary font-code-sm">{c.registrationNumber}</div>
+                                  </div>
+                                </div>
 
-                            <button
-                              type="button"
-                              onClick={() => toggleStatus(c)}
-                              className={`p-1.5 rounded-lg border transition-all ${c.status === 'Approved'
-                                ? 'bg-yellow-500/10 border-yellow-500/30 text-yellow-400 hover:bg-yellow-500/20'
-                                : 'bg-green-500/10 border-green-500/30 text-green-400 hover:bg-green-500/20'
-                                }`}
-                              title={c.status === 'Approved' ? 'Mark as Pending' : 'Approve Dossier'}
-                            >
-                              <span className="material-symbols-outlined text-xs">
-                                {c.status === 'Approved' ? 'history' : 'verified'}
+                                <div className="col-span-3 text-xs text-on-surface-variant font-code-sm space-y-0.5 min-w-0">
+                                  <div className="truncate text-white">{c.email}</div>
+                                  <div className="truncate">
+                                    {c.phone || "No Phone"} |{' '}
+                                    <span className="text-primary font-bold uppercase">
+                                      {display.value}
+                                    </span>
+                                  </div>
+                                </div>
+
+                                <div className="col-span-2 text-center text-xs text-on-surface-variant font-code-sm">
+                                  {submissionDate}
+                                </div>
+
+                                <div className="col-span-2 text-center flex justify-center">
+                                  <span
+                                    className={`px-3 py-1 rounded-full border text-[9px] font-label-caps font-bold tracking-wider ${c.status === 'Approved'
+                                      ? 'bg-green-500/10 border-green-500/30 text-green-400'
+                                      : 'bg-yellow-500/10 border-yellow-500/30 text-yellow-400'
+                                      }`}
+                                  >
+                                    {c.status || 'Pending'}
+                                  </span>
+                                </div>
+
+                                <div className="col-span-2 flex justify-end gap-1.5 relative z-30">
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setPreviewCandidate(c);
+                                      setPreviewModalTab('card');
+                                      setPreviewFlipped(false);
+                                    }}
+                                    className="p-2 rounded-lg bg-primary/10 border border-primary/30 text-primary hover:bg-primary/20 transition-all shrink-0"
+                                    title="View Interactive 3D Card"
+                                  >
+                                    <span className="material-symbols-outlined text-sm">style</span>
+                                  </button>
+
+                                  <button
+                                    onClick={(e) => { e.stopPropagation(); toggleStatus(c); }}
+                                    className={`p-2 rounded-lg border transition-all shrink-0 ${c.status === 'Approved'
+                                      ? 'bg-yellow-500/10 border-yellow-500/30 text-yellow-400 hover:bg-yellow-500/20'
+                                      : 'bg-green-500/10 border-green-500/30 text-green-400 hover:bg-green-500/20'
+                                      }`}
+                                    title={c.status === 'Approved' ? 'Mark as Pending' : 'Approve Dossier'}
+                                  >
+                                    <span className="material-symbols-outlined text-sm">
+                                      {c.status === 'Approved' ? 'history' : 'verified'}
+                                    </span>
+                                  </button>
+
+                                  <button
+                                    disabled={downloadingId === c.id}
+                                    onClick={(e) => { e.stopPropagation(); handleDownload(c); }}
+                                    className="p-2 rounded-lg bg-white/5 border border-white/5 text-on-surface-variant hover:text-white hover:border-white/20 transition-all shrink-0"
+                                    title="Download ID Photo"
+                                  >
+                                    <span className={`material-symbols-outlined text-sm ${downloadingId === c.id ? 'animate-spin' : ''}`}>
+                                      {downloadingId === c.id ? 'sync' : 'download'}
+                                    </span>
+                                  </button>
+
+                                  <button
+                                    onClick={(e) => { e.stopPropagation(); handleDelete(c); }}
+                                    className="p-2 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 hover:bg-red-500/20 hover:border-red-500/40 transition-all shrink-0"
+                                    title="Delete and Unlock Response"
+                                  >
+                                    <span className="material-symbols-outlined text-sm">delete</span>
+                                  </button>
+                                </div>
+                              </div>
+
+                              {/* MOBILE CLEAN DOSSIER CARD VIEW */}
+                              <div className="flex md:hidden flex-col p-3.5 space-y-2.5">
+                                <div className="flex items-center justify-between gap-2.5">
+                                  <div className="flex items-center gap-3 min-w-0 flex-1">
+                                    <div className="w-10 h-10 rounded-lg border border-primary/30 bg-black/40 overflow-hidden shrink-0">
+                                      <img src={c.photoUrl} alt="Avatar" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                                    </div>
+                                    <div className="min-w-0 flex-1">
+                                      <div className="font-bold text-white text-xs truncate">{c.name}</div>
+                                      <div className="text-[10px] text-primary font-code-sm font-bold">{c.registrationNumber}</div>
+                                    </div>
+                                  </div>
+
+                                  <div className="flex items-center gap-2 shrink-0">
+                                    <span
+                                      className={`px-2 py-0.5 rounded-full border text-[8px] font-label-caps font-bold tracking-wider ${c.status === 'Approved'
+                                        ? 'bg-green-500/10 border-green-500/30 text-green-400'
+                                        : 'bg-yellow-500/10 border-yellow-500/30 text-yellow-400'
+                                        }`}
+                                    >
+                                      {c.status || 'Pending'}
+                                    </span>
+
+                                    {/* Mobile 3-Dots Menu Box */}
+                                    <div className="relative">
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          const menuKey = c.id || c.email;
+                                          const rect = e.currentTarget.getBoundingClientRect();
+                                          const spaceBelow = window.innerHeight - rect.bottom;
+                                          const openUp = spaceBelow < 220;
+                                          setMenuDirections(prev => ({ ...prev, [menuKey]: openUp ? 'up' : 'down' }));
+                                          setOpenMenuId(openMenuId === menuKey ? null : menuKey);
+                                        }}
+                                        className="p-1.5 rounded-lg bg-black/60 border border-white/10 text-white/80 hover:text-white hover:border-purple-500/50 transition-all"
+                                        title="Actions Menu"
+                                      >
+                                        <span className="material-symbols-outlined text-base">more_vert</span>
+                                      </button>
+
+                                      {openMenuId === (c.id || c.email) && (
+                                        <div
+                                          onClick={(e) => e.stopPropagation()}
+                                          className={`absolute right-0 ${menuDirections[c.id || c.email] === 'up' ? 'bottom-full mb-2' : 'top-9'
+                                            } z-[300] w-48 bg-[#12081c] border border-[#a855f7]/40 backdrop-blur-2xl rounded-xl shadow-[0_10px_30px_rgba(0,0,0,0.9)] py-1.5 text-xs font-body-md`}
+                                        >
+                                          <button
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              setOpenMenuId(null);
+                                              setPreviewCandidate(c);
+                                              setPreviewModalTab('card');
+                                              setPreviewFlipped(false);
+                                            }}
+                                            className="w-full px-3.5 py-2.5 text-left flex items-center gap-2.5 text-purple-400 font-bold hover:bg-white/10 transition-colors"
+                                          >
+                                            <span className="material-symbols-outlined text-base">style</span>
+                                            <span>3D Card View</span>
+                                          </button>
+
+                                          <button
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              setOpenMenuId(null);
+                                              toggleStatus(c);
+                                            }}
+                                            className={`w-full px-3.5 py-2.5 text-left flex items-center gap-2.5 hover:bg-white/10 transition-colors ${c.status === 'Approved' ? 'text-yellow-400 font-bold' : 'text-green-400 font-bold'
+                                              }`}
+                                          >
+                                            <span className="material-symbols-outlined text-base">
+                                              {c.status === 'Approved' ? 'history' : 'verified'}
+                                            </span>
+                                            <span>{c.status === 'Approved' ? 'Mark Pending' : 'Approve Dossier'}</span>
+                                          </button>
+
+                                          <button
+                                            disabled={downloadingId === c.id}
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              setOpenMenuId(null);
+                                              handleDownload(c);
+                                            }}
+                                            className="w-full px-3.5 py-2.5 text-left flex items-center gap-2.5 text-white/90 hover:bg-white/10 transition-colors font-bold"
+                                          >
+                                            <span className={`material-symbols-outlined text-base ${downloadingId === c.id ? 'animate-spin' : ''}`}>
+                                              {downloadingId === c.id ? 'sync' : 'download'}
+                                            </span>
+                                            <span>Download ID Photo</span>
+                                          </button>
+
+                                          <div className="my-1 border-t border-white/10"></div>
+
+                                          <button
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              setOpenMenuId(null);
+                                              handleDelete(c);
+                                            }}
+                                            className="w-full px-3.5 py-2.5 text-left flex items-center gap-2.5 text-red-400 hover:bg-red-500/20 transition-colors font-bold"
+                                          >
+                                            <span className="material-symbols-outlined text-base">delete</span>
+                                            <span>Delete Dossier</span>
+                                          </button>
+                                        </div>
+                                      )}
+                                    </div>
+                                  </div>
+                                </div>
+
+                                <div className="flex items-center justify-between gap-2 pt-1 border-t border-white/5 text-[10px]">
+                                  <span className="px-2 py-0.5 rounded bg-purple-500/15 text-purple-300 font-bold uppercase text-[9px] font-label-caps border border-purple-500/20 truncate max-w-[150px]">
+                                    {display.value}
+                                  </span>
+                                  <span className="text-white/50 truncate font-code-sm text-[10px]">
+                                    {c.email}
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </>
+                    ) : (
+                      /* 3D CARDS GRID VIEW FOR ADMIN */
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8 py-4">
+                        {visibleCandidates.map((c) => {
+                          const cardId = c.id || c.email;
+                          const isFlipped = !!flippedCardsMap[cardId];
+                          const displayInfo = getAdminDisplayRoleOrTeam(c.team, c.position);
+
+                          return (
+                            <div key={cardId} className="flex flex-col items-center gap-3">
+                              {/* 3D Flippable Card Element */}
+                              <div
+                                onClick={() => setFlippedCardsMap(prev => ({ ...prev, [cardId]: !prev[cardId] }))}
+                                className="relative w-full max-w-[290px] aspect-[2.2/3.4] cursor-pointer group [perspective:1000px]"
+                              >
+                                <div className={`relative w-full h-full duration-700 [transform-style:preserve-3d] ${isFlipped ? '[transform:rotateY(180deg)]' : ''}`}>
+
+                                  {/* FRONT OF THE ID CARD */}
+                                  <div className="absolute inset-0 w-full h-full [backface-visibility:hidden] select-none">
+                                    <div className="relative overflow-hidden w-full h-full rounded-3xl border border-[#a855f7]/35 bg-gradient-to-b from-[#12051e] via-[#05010a] to-[#0c0416] p-5 flex flex-col justify-between shadow-[0_0_35px_rgba(168,85,247,0.2)]">
+                                      <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.005)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.005)_1px,transparent_1px)] bg-[size:12px_12px] pointer-events-none opacity-40"></div>
+
+                                      <div className="absolute top-2.5 left-2.5 w-2.5 h-2.5 border-t-2 border-l-2 border-[#a855f7]/40 pointer-events-none"></div>
+                                      <div className="absolute top-2.5 right-2.5 w-2.5 h-2.5 border-t-2 border-r-2 border-[#a855f7]/40 pointer-events-none"></div>
+                                      <div className="absolute bottom-2.5 left-2.5 w-2.5 h-2.5 border-b-2 border-l-2 border-[#a855f7]/40 pointer-events-none"></div>
+                                      <div className="absolute bottom-2.5 right-2.5 w-2.5 h-2.5 border-b-2 border-r-2 border-[#a855f7]/40 pointer-events-none"></div>
+
+                                      <div className="flex justify-between items-start border-b border-[#a855f7]/25 pb-2 relative z-10">
+                                        <div className="text-left w-full">
+                                          <div className="flex items-center gap-1 justify-center">
+                                            <span className="material-symbols-outlined text-[12px] text-[#a855f7]">sports_esports</span>
+                                            <h4 className="font-display-lg text-xs text-white font-black tracking-widest leading-none">VRGC</h4>
+                                          </div>
+                                          <span className="text-[#a855f7]/80 text-[4.5px] font-code-sm tracking-wider uppercase block mt-0.5 font-bold text-center">VIRTUAL REALITY & GAMING CLUB</span>
+                                        </div>
+                                      </div>
+
+                                      <div className="flex flex-col items-center justify-center my-2 relative z-10">
+                                        <div className="w-28 h-28 rounded-xl border-2 border-[#a855f7]/30 p-1 bg-black/40 shadow-[0_0_20px_rgba(168,85,247,0.15)] relative overflow-hidden">
+                                          <img
+                                            src={c.photoUrl}
+                                            alt={c.name}
+                                            className="w-full h-full object-cover rounded-lg"
+                                            referrerPolicy="no-referrer"
+                                          />
+                                          <div className={`absolute bottom-1 right-1 text-white text-[5px] font-black px-1 py-0.5 rounded tracking-widest uppercase shadow-md pointer-events-none ${c.status === 'Approved' ? 'bg-green-500/80' : 'bg-yellow-500/80'
+                                            }`}>
+                                            {c.status === 'Approved' ? 'VERIFIED' : 'PENDING'}
+                                          </div>
+                                        </div>
+                                      </div>
+
+                                      <div className="bg-[#0b0512]/90 border border-[#a855f7]/25 p-2.5 rounded-xl relative z-10 space-y-1.5">
+                                        <div className="border-b border-white/5 pb-1 text-left">
+                                          <span className="font-code-sm text-[5px] text-[#a855f7] uppercase tracking-widest block mb-0.5 font-extrabold">NAME</span>
+                                          <h3 className="font-display-lg text-xs text-white font-extrabold tracking-wide uppercase truncate leading-none">
+                                            {c.name}
+                                          </h3>
+                                        </div>
+
+                                        <div className="grid grid-cols-2 gap-1.5 text-left">
+                                          <div>
+                                            <span className="font-code-sm text-[5px] text-[#a855f7] uppercase tracking-widest block mb-0.5 font-extrabold">REG NO.</span>
+                                            <span className="font-code-sm text-[9px] text-white font-bold tracking-wider block">
+                                              {c.registrationNumber}
+                                            </span>
+                                          </div>
+                                          <div>
+                                            <span className="font-code-sm text-[5px] text-[#a855f7] uppercase tracking-widest block mb-0.5 font-extrabold">
+                                              {displayInfo.label === 'TEAM / DIVISION' ? 'TEAM' : 'ROLE'}
+                                            </span>
+                                            <span className="font-code-sm text-[9px] text-white font-bold tracking-wider block uppercase truncate">
+                                              {displayInfo.value}
+                                            </span>
+                                          </div>
+                                        </div>
+
+                                        <div className="pt-1 border-t border-white/5 flex items-center gap-1 justify-start">
+                                          <span className="w-1.5 h-1.5 rounded-full bg-[#a855f7] shadow-[0_0_8px_#a855f7] animate-pulse"></span>
+                                          <span className="font-code-sm text-[7px] text-[#ddb7ff] font-extrabold uppercase tracking-widest leading-none truncate">
+                                            {displayInfo.isSpecial ? displayInfo.value : (c.position || 'MEMBER')}
+                                          </span>
+                                        </div>
+                                      </div>
+
+                                      <div className="absolute bottom-1 right-2 text-[5px] font-bold text-white/30 font-code-sm uppercase tracking-widest pointer-events-none">
+                                        TAP TO FLIP 🔄
+                                      </div>
+                                    </div>
+                                  </div>
+
+                                  {/* BACK OF THE ID CARD */}
+                                  <div className="absolute inset-0 w-full h-full [backface-visibility:hidden] [transform:rotateY(180deg)] select-none">
+                                    <div className="relative overflow-hidden w-full h-full rounded-3xl border border-[#a855f7]/35 bg-gradient-to-b from-[#12051e] via-[#05010a] to-[#0c0416] p-5 flex flex-col justify-between shadow-[0_0_35px_rgba(168,85,247,0.2)]">
+                                      {c.avatarUrl && (
+                                        <div className="absolute inset-0 z-0 overflow-hidden pointer-events-none rounded-3xl">
+                                          <img
+                                            src={c.avatarUrl}
+                                            alt="Avatar Watermark"
+                                            className="w-full h-full object-cover opacity-95 brightness-110 contrast-105"
+                                            referrerPolicy="no-referrer"
+                                          />
+                                          <div className="absolute inset-0 bg-[#05010a]/10 bg-gradient-to-b from-transparent via-[#05010a]/20 to-[#05010a]/50"></div>
+                                        </div>
+                                      )}
+
+                                      <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.005)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.005)_1px,transparent_1px)] bg-[size:12px_12px] pointer-events-none opacity-40"></div>
+
+                                      <div className="absolute top-2.5 left-2.5 w-2.5 h-2.5 border-t-2 border-l-2 border-[#a855f7]/40 pointer-events-none"></div>
+                                      <div className="absolute top-2.5 right-2.5 w-2.5 h-2.5 border-t-2 border-r-2 border-[#a855f7]/40 pointer-events-none"></div>
+                                      <div className="absolute bottom-2.5 left-2.5 w-2.5 h-2.5 border-b-2 border-l-2 border-[#a855f7]/40 pointer-events-none"></div>
+                                      <div className="absolute bottom-2.5 right-2.5 w-2.5 h-2.5 border-b-2 border-r-2 border-[#a855f7]/40 pointer-events-none"></div>
+
+                                      <div className="text-center relative z-10 border-b border-[#a855f7]/25 pb-1.5">
+                                        <h4 className="font-display-lg text-xs text-white font-black tracking-widest uppercase">VRGC</h4>
+                                        <span className="font-code-sm text-[4.5px] text-[#a855f7]/80 tracking-wider block mt-0.5">VIRTUAL REALITY & GAMING CLUB</span>
+                                      </div>
+
+                                      <div className="my-2 flex flex-col items-center justify-center relative z-10">
+                                        <div className="w-24 h-24 rounded-xl border border-white/10 bg-white p-1.5 shadow-[0_0_20px_rgba(168,85,247,0.2)]">
+                                          <img
+                                            src={`https://api.qrserver.com/v1/create-qr-code/?size=140x140&color=0-0-0&bgcolor=ffffff&data=${encodeURIComponent(`${typeof window !== 'undefined' ? window.location.origin : 'https://vrgc.club'}/card/${c.registrationNumber || ''}`)}`}
+                                            alt="Scan to Verify"
+                                            className="w-full h-full object-contain"
+                                          />
+                                        </div>
+                                        <span className="font-code-sm text-[5.5px] text-[#a855f7] font-black uppercase tracking-widest block mt-1.5">SCAN TO CONNECT</span>
+                                      </div>
+
+                                      <div className="space-y-1 border-t border-[#a855f7]/25 pt-2 relative z-10 text-[6.5px] font-code-sm text-white/70 text-left w-full pl-2">
+                                        <div className="flex items-center gap-1">
+                                          <span className="material-symbols-outlined text-[9px] text-[#a855f7]">alternate_email</span>
+                                          <span>@vrgc_official</span>
+                                        </div>
+                                        <div className="flex items-center gap-1">
+                                          <span className="material-symbols-outlined text-[9px] text-[#a855f7]">forum</span>
+                                          <span>discord.gg/vrgc</span>
+                                        </div>
+                                      </div>
+
+                                      <div className="text-center text-[6px] font-extrabold text-[#a855f7]/80 tracking-widest mt-1.5 uppercase relative z-10">
+                                        PLAY • CREATE • INNOVATE
+                                      </div>
+
+                                      <div className="absolute bottom-1 right-2 text-[5px] font-bold text-white/30 font-code-sm uppercase tracking-widest pointer-events-none">
+                                        TAP TO FLIP 🔄
+                                      </div>
+                                    </div>
+                                  </div>
+
+                                </div>
+                              </div>
+
+                              {/* Quick Admin Actions toolbar under 3D card */}
+                              <div className="flex items-center gap-2 bg-black/60 border border-white/10 p-1.5 rounded-xl">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setPreviewCandidate(c);
+                                    setPreviewModalTab('details');
+                                    setPreviewFlipped(false);
+                                  }}
+                                  className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-white text-[10px] font-bold font-label-caps flex items-center gap-1 border border-white/10"
+                                  title="View Full Dossier"
+                                >
+                                  <span className="material-symbols-outlined text-xs">folder_shared</span>
+                                  <span>DOSSIER</span>
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() => toggleStatus(c)}
+                                  className={`p-1.5 rounded-lg border transition-all ${c.status === 'Approved'
+                                    ? 'bg-yellow-500/10 border-yellow-500/30 text-yellow-400 hover:bg-yellow-500/20'
+                                    : 'bg-green-500/10 border-green-500/30 text-green-400 hover:bg-green-500/20'
+                                    }`}
+                                  title={c.status === 'Approved' ? 'Mark as Pending' : 'Approve Dossier'}
+                                >
+                                  <span className="material-symbols-outlined text-xs">
+                                    {c.status === 'Approved' ? 'history' : 'verified'}
+                                  </span>
+                                </button>
+
+                                <button
+                                  type="button"
+                                  disabled={downloadingId === c.id}
+                                  onClick={() => handleDownload(c)}
+                                  className="p-1.5 rounded-lg bg-white/5 border border-white/5 text-on-surface-variant hover:text-white transition-all"
+                                  title="Download ID Photo"
+                                >
+                                  <span className={`material-symbols-outlined text-xs ${downloadingId === c.id ? 'animate-spin' : ''}`}>
+                                    {downloadingId === c.id ? 'sync' : 'download'}
+                                  </span>
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() => handleDelete(c)}
+                                  className="p-1.5 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 hover:bg-red-500/20 transition-all"
+                                  title="Delete Dossier"
+                                >
+                                  <span className="material-symbols-outlined text-xs">delete</span>
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    {/* Load More Dossiers Button */}
+                    {visibleCandidates.length < filteredCandidates.length && (
+                      <div className="text-center pt-4 pb-2 relative z-20">
+                        <button
+                          type="button"
+                          onClick={() => setDossierPageLimit(prev => prev + 12)}
+                          className="px-6 py-2.5 rounded-xl bg-purple-500/10 border border-purple-500/30 text-purple-300 text-xs font-bold font-label-caps tracking-wider hover:bg-purple-500/20 hover:border-purple-500/50 transition-all duration-300 shadow-[0_0_15px_rgba(168,85,247,0.15)] active:scale-95 inline-flex items-center gap-2"
+                        >
+                          <span className="material-symbols-outlined text-sm">expand_more</span>
+                          <span>LOAD MORE DOSSIERS ({filteredCandidates.length - visibleCandidates.length} REMAINING)</span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* ACTIVITY LOGS SUB-TAB */}
+            {adminSectionTab === 'logs' && (
+              <div className="space-y-4">
+                {/* Search & Action Filter Controls */}
+                <div className="glass-panel p-3 sm:p-4 rounded-xl border border-white/5 bg-white/5 flex flex-col md:flex-row md:items-center gap-2.5 sm:gap-4">
+                  <div className="relative flex-1 w-full">
+                    <span className="material-symbols-outlined absolute left-3 top-2.5 text-outline text-sm">search</span>
+                    <input
+                      type="text"
+                      placeholder="Search logs, email, candidate..."
+                      value={logSearchQuery}
+                      onChange={(e) => setLogSearchQuery(e.target.value)}
+                      className="w-full bg-black/30 border border-outline-variant/30 rounded-lg pl-9 pr-4 py-2 text-xs text-white focus:outline-none focus:border-primary placeholder:text-white/30 transition-all duration-300"
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between md:justify-end gap-2 shrink-0 w-full md:w-auto">
+                    <label className="text-[10px] font-label-caps text-outline tracking-wider font-bold shrink-0">ACTION:</label>
+                    <select
+                      value={logActionFilter}
+                      onChange={(e) => setLogActionFilter(e.target.value)}
+                      className="bg-black/50 border border-outline-variant/30 text-white rounded-lg px-3 py-1.5 text-xs focus:ring-0 focus:border-primary cursor-pointer hover:bg-black/80 font-label-caps flex-1 md:flex-initial min-w-0"
+                    >
+                      <option value="All">All Actions</option>
+                      <option value="APPROVE_DOSSIER">Approvals</option>
+                      <option value="REVERT_PENDING_DOSSIER">Reversions</option>
+                      <option value="DELETE_DOSSIER">Deletions</option>
+                      <option value="FORCE_SHEETS_SYNC">Sheets Syncs</option>
+                    </select>
+                  </div>
+                </div>
+
+                {/* Audit Logs Table & Mobile Cards */}
+                {filteredLogs.length === 0 ? (
+                  <div className="glass-panel p-12 rounded-2xl border border-white/5 bg-white/5 text-center space-y-3">
+                    <span className="material-symbols-outlined text-4xl text-white/30">find_in_page</span>
+                    <div className="text-white font-bold text-sm">No Activity Logs Found</div>
+                    <p className="text-xs text-white/50 max-w-md mx-auto">
+                      {logSearchQuery || logActionFilter !== 'All'
+                        ? 'No logs match your current search query or action type filter.'
+                        : 'All administrative activities (approvals, reversions to pending, deletions, syncs) will automatically record here in real-time.'}
+                    </p>
+                  </div>
+                ) : (
+                  <div className="glass-panel rounded-2xl border border-white/5 bg-black/40 overflow-hidden shadow-2xl">
+                    {/* DESKTOP TABLE VIEW */}
+                    <div className="hidden md:block overflow-x-auto">
+                      <table className="w-full text-left border-collapse">
+                        <thead>
+                          <tr className="border-b border-white/10 bg-white/5 text-[10px] font-label-caps text-outline tracking-wider uppercase">
+                            <th className="py-3.5 px-4">Timestamp</th>
+                            <th className="py-3.5 px-4">Action</th>
+                            <th className="py-3.5 px-4">Admin Email</th>
+                            <th className="py-3.5 px-4">Target Candidate</th>
+                            <th className="py-3.5 px-4">Activity Details</th>
+                            {canDeleteLogs && <th className="py-3.5 px-4 text-right">Actions</th>}
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-white/5 text-xs">
+                          {visibleLogs.map(log => {
+                            const dateObj = new Date(log.timestamp);
+                            const formattedTime = isNaN(dateObj.getTime())
+                              ? log.timestamp
+                              : dateObj.toLocaleString('en-US', {
+                                month: 'short', day: 'numeric', year: 'numeric',
+                                hour: '2-digit', minute: '2-digit', second: '2-digit'
+                              });
+                            const adminMail = log.performedBy || log.adminEmail || 'Admin';
+
+                            let badgeStyle = 'bg-purple-500/20 text-purple-300 border-purple-500/30';
+                            let badgeLabel: string = log.action;
+                            let badgeIcon = 'info';
+
+                            if (log.action === 'APPROVE_DOSSIER' || log.action === 'VERIFY') {
+                              badgeStyle = 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40';
+                              badgeLabel = 'APPROVED';
+                              badgeIcon = 'verified';
+                            } else if (log.action === 'REVERT_PENDING_DOSSIER' || log.action === 'SET_PENDING') {
+                              badgeStyle = 'bg-amber-500/20 text-amber-300 border-amber-500/40';
+                              badgeLabel = 'REVERTED PENDING';
+                              badgeIcon = 'history';
+                            } else if (log.action === 'DELETE_DOSSIER' || log.action === 'DELETE') {
+                              badgeStyle = 'bg-red-500/20 text-red-300 border-red-500/40';
+                              badgeLabel = 'DELETED';
+                              badgeIcon = 'delete';
+                            } else if (log.action === 'FORCE_SHEETS_SYNC' || log.action === 'SYNC_SHEETS') {
+                              badgeStyle = 'bg-purple-500/20 text-purple-300 border-purple-500/40';
+                              badgeLabel = 'SHEETS SYNC';
+                              badgeIcon = 'cloud_upload';
+                            }
+
+                            return (
+                              <tr key={log.id || log.timestamp + Math.random()} className="hover:bg-white/5 transition-colors">
+                                <td className="py-3.5 px-4 font-code-sm text-[11px] whitespace-nowrap">
+                                  <span className="text-purple-300 font-mono font-bold inline-flex items-center gap-1.5">
+                                    <span className="material-symbols-outlined text-xs text-purple-400">schedule</span>
+                                    <span>{formattedTime}</span>
+                                  </span>
+                                </td>
+                                <td className="py-3.5 px-4 whitespace-nowrap">
+                                  <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[9px] font-bold font-label-caps tracking-wider ${badgeStyle}`}>
+                                    <span className="material-symbols-outlined text-xs">{badgeIcon}</span>
+                                    <span>{badgeLabel}</span>
+                                  </span>
+                                </td>
+                                <td className="py-3.5 px-4 font-bold text-white text-[11px] whitespace-nowrap">
+                                  {adminMail}
+                                </td>
+                                <td className="py-3.5 px-4 whitespace-nowrap">
+                                  {log.targetName && log.targetName !== 'N/A' ? (
+                                    <div>
+                                      <div className="font-bold text-white text-[11px]">{log.targetName}</div>
+                                      <div className="text-[10px] text-primary font-code-sm">{log.targetRegNo}</div>
+                                    </div>
+                                  ) : (
+                                    <span className="text-white/40 text-[11px]">N/A</span>
+                                  )}
+                                </td>
+                                <td className="py-3.5 px-4 text-white/80 text-[11px]">
+                                  {log.details}
+                                </td>
+                                {canDeleteLogs && (
+                                  <td className="py-3.5 px-4 text-right whitespace-nowrap">
+                                    <button
+                                      onClick={() => {
+                                        if (log.id && confirm('Are you sure you want to delete this activity log entry?')) {
+                                          handleDeleteLog(log.id);
+                                        }
+                                      }}
+                                      className="p-1.5 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 hover:bg-red-500/20 hover:border-red-500/40 transition-all shrink-0"
+                                      title="Delete Log Entry"
+                                    >
+                                      <span className="material-symbols-outlined text-xs">delete</span>
+                                    </button>
+                                  </td>
+                                )}
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    {/* MOBILE CLEAN LOG CARD VIEW */}
+                    <div className="flex md:hidden flex-col gap-2.5 p-1">
+                      {visibleLogs.map(log => {
+                        const dateObj = new Date(log.timestamp);
+                        const formattedTime = isNaN(dateObj.getTime())
+                          ? log.timestamp
+                          : dateObj.toLocaleString('en-US', {
+                            month: 'short', day: 'numeric', year: 'numeric',
+                            hour: '2-digit', minute: '2-digit', second: '2-digit'
+                          });
+                        const adminMail = log.performedBy || log.adminEmail || 'Admin';
+                        const logKey = log.id || log.timestamp;
+
+                        let badgeStyle = 'bg-purple-500/20 text-purple-300 border-purple-500/30';
+                        let badgeLabel: string = log.action;
+                        let badgeIcon = 'info';
+
+                        if (log.action === 'APPROVE_DOSSIER' || log.action === 'VERIFY') {
+                          badgeStyle = 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40';
+                          badgeLabel = 'APPROVED';
+                          badgeIcon = 'verified';
+                        } else if (log.action === 'REVERT_PENDING_DOSSIER' || log.action === 'SET_PENDING') {
+                          badgeStyle = 'bg-amber-500/20 text-amber-300 border-amber-500/40';
+                          badgeLabel = 'REVERTED';
+                          badgeIcon = 'history';
+                        } else if (log.action === 'DELETE_DOSSIER' || log.action === 'DELETE') {
+                          badgeStyle = 'bg-red-500/20 text-red-300 border-red-500/40';
+                          badgeLabel = 'DELETED';
+                          badgeIcon = 'delete';
+                        } else if (log.action === 'FORCE_SHEETS_SYNC' || log.action === 'SYNC_SHEETS') {
+                          badgeStyle = 'bg-purple-500/20 text-purple-300 border-purple-500/30';
+                          badgeLabel = 'SHEETS SYNC';
+                          badgeIcon = 'cloud_upload';
+                        }
+
+                        return (
+                          <div
+                            key={logKey + Math.random()}
+                            onClick={() => setSelectedLogForDetails(log)}
+                            className="rounded-xl border border-white/5 bg-white/5 hover:border-primary/30 hover:bg-white/10 transition-all duration-200 cursor-pointer p-3.5 space-y-3 overflow-visible"
+                          >
+                            {/* Top Header Row: Action Badge + Statically Highlighted Timestamp */}
+                            <div className="flex items-center justify-between gap-2">
+                              <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full border text-[9px] font-bold font-label-caps tracking-wider ${badgeStyle}`}>
+                                <span className="material-symbols-outlined text-xs">{badgeIcon}</span>
+                                <span>{badgeLabel}</span>
                               </span>
-                            </button>
 
-                            <button
-                              type="button"
-                              disabled={downloadingId === c.id}
-                              onClick={() => handleDownload(c)}
-                              className="p-1.5 rounded-lg bg-white/5 border border-white/5 text-on-surface-variant hover:text-white transition-all"
-                              title="Download ID Photo"
-                            >
-                              <span className={`material-symbols-outlined text-xs ${downloadingId === c.id ? 'animate-spin' : ''}`}>
-                                {downloadingId === c.id ? 'sync' : 'download'}
+                              <span className="text-purple-300 font-mono text-[9px] font-bold inline-flex items-center gap-1 shrink-0">
+                                <span className="material-symbols-outlined text-[10px] text-purple-400">schedule</span>
+                                <span>{formattedTime}</span>
                               </span>
-                            </button>
+                            </div>
 
-                            <button
-                              type="button"
-                              onClick={() => handleDelete(c)}
-                              className="p-1.5 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 hover:bg-red-500/20 transition-all"
-                              title="Delete Dossier"
-                            >
-                              <span className="material-symbols-outlined text-xs">delete</span>
-                            </button>
+                            {/* Content Body Row: Primary Candidate/Details on Left, 3-Dots Menu on Right */}
+                            <div className="flex items-center justify-between gap-3 pt-0.5 border-t border-white/5">
+                              <div className="min-w-0 flex-1">
+                                {log.targetName && log.targetName !== 'N/A' ? (
+                                  <div className="truncate">
+                                    <span className="font-bold text-white text-xs">{log.targetName}</span>
+                                    {log.targetRegNo && log.targetRegNo !== 'N/A' && (
+                                      <span className="text-primary font-code-sm text-[10px] ml-1.5 font-bold">({log.targetRegNo})</span>
+                                    )}
+                                  </div>
+                                ) : (
+                                  <div className="text-xs text-white/90 font-medium truncate">
+                                    {log.details || adminMail}
+                                  </div>
+                                )}
+                                <div className="text-[10px] text-white/40 truncate font-code-sm mt-0.5">
+                                  By: {adminMail}
+                                </div>
+                              </div>
+
+                              {/* 3-Dots Button (Directly opens log details modal) */}
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSelectedLogForDetails(log);
+                                }}
+                                className="p-1.5 rounded-lg bg-black/60 border border-white/10 text-white/80 hover:text-white hover:border-purple-500/50 transition-all active:scale-95 shrink-0"
+                                title="View Log Details"
+                              >
+                                <span className="material-symbols-outlined text-base">more_vert</span>
+                              </button>
+                            </div>
                           </div>
-                        </div>
-                      );
-                    })}
+                        );
+                      })}
+                    </div>
                   </div>
                 )}
               </div>
-            </div>
+            )}
+
           </div>
         )}
 
@@ -2318,6 +2777,125 @@ const IDCard: React.FC<IDCardProps> = ({
           >
             <span className="material-symbols-outlined text-sm">close</span>
           </button>
+        </div>
+      )}
+
+      {/* Log Details Modal */}
+      {selectedLogForDetails && (
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-[300] overflow-y-auto p-4 sm:p-6 flex min-h-full items-center justify-center animate-in fade-in duration-200">
+          <div className="glass-panel p-6 md:p-8 rounded-2xl max-w-lg w-full border border-purple-500/30 relative space-y-5 text-left my-auto shadow-[0_0_50px_rgba(168,85,247,0.2)]">
+            <div className="flex justify-between items-center border-b border-white/10 pb-4">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-xl bg-purple-500/20 border border-purple-500/40 flex items-center justify-center">
+                  <span className="material-symbols-outlined text-purple-400 text-base">history</span>
+                </div>
+                <div>
+                  <h3 className="font-headline-sm text-sm md:text-base text-white font-bold uppercase tracking-wider">Activity Log Details</h3>
+                  <p className="text-[10px] text-white/50 font-mono">ID: {selectedLogForDetails.id || 'N/A'}</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setSelectedLogForDetails(null)}
+                className="w-8 h-8 rounded-lg bg-white/5 hover:bg-white/10 flex items-center justify-center text-white/60 hover:text-white transition-colors"
+              >
+                <span className="material-symbols-outlined text-base">close</span>
+              </button>
+            </div>
+
+            {/* Log Meta Details */}
+            <div className="space-y-3.5 text-xs">
+              <div className="flex items-center justify-between gap-3 p-3 rounded-xl bg-white/5 border border-white/5">
+                <span className="text-[10px] font-label-caps text-outline uppercase font-bold">Action Type:</span>
+                {(() => {
+                  let badgeStyle = 'bg-purple-500/20 text-purple-300 border-purple-500/30';
+                  let badgeLabel: string = selectedLogForDetails.action;
+                  let badgeIcon = 'info';
+                  if (selectedLogForDetails.action === 'APPROVE_DOSSIER' || selectedLogForDetails.action === 'VERIFY') {
+                    badgeStyle = 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40';
+                    badgeLabel = 'APPROVED';
+                    badgeIcon = 'verified';
+                  } else if (selectedLogForDetails.action === 'REVERT_PENDING_DOSSIER' || selectedLogForDetails.action === 'SET_PENDING') {
+                    badgeStyle = 'bg-amber-500/20 text-amber-300 border-amber-500/40';
+                    badgeLabel = 'REVERTED PENDING';
+                    badgeIcon = 'history';
+                  } else if (selectedLogForDetails.action === 'DELETE_DOSSIER' || selectedLogForDetails.action === 'DELETE') {
+                    badgeStyle = 'bg-red-500/20 text-red-300 border-red-500/40';
+                    badgeLabel = 'DELETED';
+                    badgeIcon = 'delete';
+                  } else if (selectedLogForDetails.action === 'FORCE_SHEETS_SYNC' || selectedLogForDetails.action === 'SYNC_SHEETS') {
+                    badgeStyle = 'bg-purple-500/20 text-purple-300 border-purple-500/40';
+                    badgeLabel = 'SHEETS SYNC';
+                    badgeIcon = 'cloud_upload';
+                  }
+                  return (
+                    <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full border text-[10px] font-bold font-label-caps tracking-wider ${badgeStyle}`}>
+                      <span className="material-symbols-outlined text-xs">{badgeIcon}</span>
+                      <span>{badgeLabel}</span>
+                    </span>
+                  );
+                })()}
+              </div>
+
+              <div className="flex items-center justify-between gap-3 p-3 rounded-xl bg-white/5 border border-white/5">
+                <span className="text-[10px] font-label-caps text-outline uppercase font-bold">Timestamp:</span>
+                <span className="text-purple-300 font-mono text-[11px] font-bold inline-flex items-center gap-1.5">
+                  <span className="material-symbols-outlined text-xs text-purple-400">schedule</span>
+                  <span>{(() => {
+                    const d = new Date(selectedLogForDetails.timestamp);
+                    return isNaN(d.getTime()) ? selectedLogForDetails.timestamp : d.toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                  })()}</span>
+                </span>
+              </div>
+
+              <div className="flex items-center justify-between gap-3 p-3 rounded-xl bg-white/5 border border-white/5">
+                <span className="text-[10px] font-label-caps text-outline uppercase font-bold">Admin Email:</span>
+                <span className="font-bold text-white font-code-sm text-[11px] truncate">
+                  {selectedLogForDetails.performedBy || selectedLogForDetails.adminEmail || 'Admin'}
+                </span>
+              </div>
+
+              {selectedLogForDetails.targetName && selectedLogForDetails.targetName !== 'N/A' && (
+                <div className="p-3 rounded-xl bg-white/5 border border-white/5 space-y-1">
+                  <span className="text-[10px] font-label-caps text-outline uppercase font-bold block">Target Candidate:</span>
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-white text-xs">{selectedLogForDetails.targetName}</span>
+                    <span className="text-primary font-code-sm text-xs font-bold">{selectedLogForDetails.targetRegNo}</span>
+                  </div>
+                  {selectedLogForDetails.targetEmail && (
+                    <div className="text-[10px] font-code-sm text-white/50">{selectedLogForDetails.targetEmail}</div>
+                  )}
+                </div>
+              )}
+
+              <div className="p-3 rounded-xl bg-white/5 border border-white/5 space-y-1">
+                <span className="text-[10px] font-label-caps text-outline uppercase font-bold block">Activity Details:</span>
+                <p className="text-xs text-white/80 leading-relaxed font-sans">{selectedLogForDetails.details || 'No additional details provided.'}</p>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between pt-3 border-t border-white/10">
+              {(currentUser?.email || '').toLowerCase() === 'abhinav.25bcy10254@vitbhopal.ac.in' ? (
+                <button
+                  onClick={() => {
+                    if (selectedLogForDetails.id && confirm('Are you sure you want to delete this activity log entry?')) {
+                      handleDeleteLog(selectedLogForDetails.id);
+                      setSelectedLogForDetails(null);
+                    }
+                  }}
+                  className="px-4 py-2 rounded-xl bg-red-500/10 border border-red-500/30 text-red-400 hover:bg-red-500/20 text-xs font-bold font-label-caps flex items-center gap-1.5 transition-all"
+                >
+                  <span className="material-symbols-outlined text-sm">delete</span>
+                  <span>DELETE LOG</span>
+                </button>
+              ) : <div />}
+              <button
+                onClick={() => setSelectedLogForDetails(null)}
+                className="px-5 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold font-label-caps transition-all"
+              >
+                CLOSE
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
