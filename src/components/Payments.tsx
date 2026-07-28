@@ -108,8 +108,11 @@ const Payments: React.FC<PaymentsProps> = ({
 }) => {
   const currentUser = externalUser ?? null;
   const userEmail = externalUserEmail;
-  // Restrict Payment Admin control panel strictly to vrgc@vitbhopal.ac.in
-  const isAdminState = (userEmail || currentUser?.email || '').toLowerCase() === 'vrgc@vitbhopal.ac.in';
+
+  // Master VRGC Admin (vrgc@vitbhopal.ac.in) — ONLY account with Payment Admin access & creation rights
+  const isVrgcMasterAdmin = (userEmail || currentUser?.email || '').toLowerCase() === 'vrgc@vitbhopal.ac.in';
+  const isAdminState = isVrgcMasterAdmin;
+  const canInitiatePayments = isVrgcMasterAdmin;
   const [adminViewAll, setAdminViewAll] = useState<boolean>(true);
 
   // Members list parsed from public/members.csv
@@ -134,7 +137,18 @@ const Payments: React.FC<PaymentsProps> = ({
   const [receiptModalPayment, setReceiptModalPayment] = useState<PaymentItem | null>(null);
   const [showCreateModal, setShowCreateModal] = useState<boolean>(false);
   const [showAssignAllModal, setShowAssignAllModal] = useState<boolean>(false);
+  const [showMultiMemberModal, setShowMultiMemberModal] = useState<boolean>(false);
   const [copiedText, setCopiedText] = useState<string | null>(null);
+
+  // Multi-Member Specific Persons Due Form state
+  const [multiTitle, setMultiTitle] = useState<string>('');
+  const [multiAmount, setMultiAmount] = useState<string>('');
+  const [multiCategory, setMultiCategory] = useState<string>('Club Fee');
+  const [multiDescription, setMultiDescription] = useState<string>('');
+  const [multiDueDate, setMultiDueDate] = useState<string>('');
+  const [selectedMultiMemberEmails, setSelectedMultiMemberEmails] = useState<string[]>([]);
+  const [multiSearch, setMultiSearch] = useState<string>('');
+  const [assigningMulti, setAssigningMulti] = useState<boolean>(false);
 
   // Transaction Logs (admin only)
   const [transactionLogs, setTransactionLogs] = useState<TransactionLog[]>([]);
@@ -415,6 +429,52 @@ const Payments: React.FC<PaymentsProps> = ({
       showToast(err.message || 'Failed to assign dues to all members.', 'error');
     } finally {
       setAssigningAll(false);
+    }
+  };
+
+  // Assign Due to Specific Persons (Multi-Member Selection)
+  const handleAssignMultiMembers = async (e: React.FormEvent) => {
+    e.preventDefault();
+
+    if (!multiTitle.trim() || !multiAmount || Number(multiAmount) <= 0) {
+      showToast('Please enter a valid title and amount.', 'error');
+      return;
+    }
+
+    if (selectedMultiMemberEmails.length === 0) {
+      showToast('Please select at least one member.', 'error');
+      return;
+    }
+
+    setAssigningMulti(true);
+    try {
+      let createdCount = 0;
+      for (const email of selectedMultiMemberEmails) {
+        const created = await createPaymentInFirestore({
+          user_email: email.toLowerCase(),
+          title: multiTitle.trim(),
+          description: multiDescription.trim() || 'VRGC Member Payment Due',
+          category: multiCategory,
+          amount: Number(multiAmount),
+          currency: 'INR',
+          status: 'Pending' as PaymentStatus,
+          due_date: multiDueDate ? new Date(multiDueDate).toISOString() : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+        });
+        if (created) createdCount++;
+      }
+
+      showToast(`Successfully assigned ₹${multiAmount} due to ${createdCount} selected member(s)! 🎉`, 'success');
+      setShowMultiMemberModal(false);
+      setMultiTitle('');
+      setMultiAmount('');
+      setMultiDescription('');
+      setMultiDueDate('');
+      setSelectedMultiMemberEmails([]);
+      setMultiSearch('');
+    } catch (err: any) {
+      showToast(err.message || 'Failed to assign dues to selected members.', 'error');
+    } finally {
+      setAssigningMulti(false);
     }
   };
 
@@ -900,81 +960,95 @@ const Payments: React.FC<PaymentsProps> = ({
                   <FileSpreadsheet className="w-3.5 h-3.5" />
                   Export CSV
                 </button>
-                <button
-                  onClick={() => setShowAssignAllModal(true)}
-                  className="px-3 py-2 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/30 text-xs font-bold transition-all flex items-center gap-1.5"
-                >
-                  <Megaphone className="w-3.5 h-3.5" />
-                  All Members
-                </button>
-                <button
-                  onClick={() => setShowCreateModal(true)}
-                  className="px-3 py-2 rounded-lg bg-purple-600/80 hover:bg-purple-500 text-white text-xs font-bold transition-all flex items-center gap-1.5 shadow-[0_0_15px_rgba(168,85,247,0.3)]"
-                >
-                  <PlusCircle className="w-3.5 h-3.5" />
-                  Assign Due
-                </button>
+                {/* Initiate Payment Controls — STRICTLY FOR vrgc@vitbhopal.ac.in */}
+                {canInitiatePayments && (
+                  <>
+                    <button
+                      onClick={() => setShowMultiMemberModal(true)}
+                      className="px-3 py-2 rounded-lg bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/40 text-xs font-bold transition-all flex items-center gap-1.5 shadow-[0_0_15px_rgba(99,102,241,0.2)]"
+                    >
+                      <Users className="w-3.5 h-3.5" />
+                      Specific Persons
+                    </button>
+                    <button
+                      onClick={() => setShowAssignAllModal(true)}
+                      className="px-3 py-2 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/30 text-xs font-bold transition-all flex items-center gap-1.5"
+                    >
+                      <Megaphone className="w-3.5 h-3.5" />
+                      All Members
+                    </button>
+                    <button
+                      onClick={() => setShowCreateModal(true)}
+                      className="px-3 py-2 rounded-lg bg-purple-600/80 hover:bg-purple-500 text-white text-xs font-bold transition-all flex items-center gap-1.5 shadow-[0_0_15px_rgba(168,85,247,0.3)]"
+                    >
+                      <PlusCircle className="w-3.5 h-3.5" />
+                      Assign Due
+                    </button>
+                  </>
+                )}
               </>
             )}
           </div>
         </div>
       </div>
 
-      {/* Summary Statistics */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <div className="p-5 rounded-2xl bg-[#0e0518]/90 border border-purple-500/20 backdrop-blur-md shadow-lg flex flex-col justify-between space-y-2">
-          <div className="flex items-center justify-between text-slate-400 text-xs font-semibold">
-            <span>PENDING DUES</span>
-            <Clock className="w-4 h-4 text-amber-400" />
+      {/* Summary Statistics — STRICTLY FOR vrgc@vitbhopal.ac.in */}
+      {canInitiatePayments && (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="p-5 rounded-2xl bg-[#0e0518]/90 border border-purple-500/20 backdrop-blur-md shadow-lg flex flex-col justify-between space-y-2">
+            <div className="flex items-center justify-between text-slate-400 text-xs font-semibold">
+              <span>PENDING DUES</span>
+              <Clock className="w-4 h-4 text-amber-400" />
+            </div>
+            <div className="text-2xl md:text-3xl font-black text-amber-300">
+              ₹{stats.totalPending.toLocaleString('en-IN')}
+            </div>
+            <div className="text-[11px] text-amber-400/80 font-medium">
+              {stats.pendingCount} payment{stats.pendingCount !== 1 ? 's' : ''} awaiting completion
+            </div>
           </div>
-          <div className="text-2xl md:text-3xl font-black text-amber-300">
-            ₹{stats.totalPending.toLocaleString('en-IN')}
-          </div>
-          <div className="text-[11px] text-amber-400/80 font-medium">
-            {stats.pendingCount} payment{stats.pendingCount !== 1 ? 's' : ''} awaiting completion
-          </div>
-        </div>
 
-        <div className="p-5 rounded-2xl bg-[#0e0518]/90 border border-emerald-500/20 backdrop-blur-md shadow-lg flex flex-col justify-between space-y-2">
-          <div className="flex items-center justify-between text-slate-400 text-xs font-semibold">
-            <span>TOTAL COLLECTED</span>
-            <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+          <div className="p-5 rounded-2xl bg-[#0e0518]/90 border border-emerald-500/20 backdrop-blur-md shadow-lg flex flex-col justify-between space-y-2">
+            <div className="flex items-center justify-between text-slate-400 text-xs font-semibold">
+              <span>TOTAL COLLECTED</span>
+              <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+            </div>
+            <div className="text-2xl md:text-3xl font-black text-emerald-300">
+              ₹{stats.totalPaid.toLocaleString('en-IN')}
+            </div>
+            <div className="text-[11px] text-emerald-400/80 font-medium">
+              {stats.paidCount} confirmed transaction{stats.paidCount !== 1 ? 's' : ''}
+            </div>
           </div>
-          <div className="text-2xl md:text-3xl font-black text-emerald-300">
-            ₹{stats.totalPaid.toLocaleString('en-IN')}
-          </div>
-          <div className="text-[11px] text-emerald-400/80 font-medium">
-            {stats.paidCount} confirmed transaction{stats.paidCount !== 1 ? 's' : ''}
-          </div>
-        </div>
 
-        <div className="p-5 rounded-2xl bg-[#0e0518]/90 border border-purple-500/20 backdrop-blur-md shadow-lg flex flex-col justify-between space-y-2">
-          <div className="flex items-center justify-between text-slate-400 text-xs font-semibold">
-            <span>REGISTERED CREW</span>
-            <Users className="w-4 h-4 text-purple-400" />
+          <div className="p-5 rounded-2xl bg-[#0e0518]/90 border border-purple-500/20 backdrop-blur-md shadow-lg flex flex-col justify-between space-y-2">
+            <div className="flex items-center justify-between text-slate-400 text-xs font-semibold">
+              <span>REGISTERED CREW</span>
+              <Users className="w-4 h-4 text-purple-400" />
+            </div>
+            <div className="text-2xl md:text-3xl font-black text-purple-300">
+              {membersList.length} Members
+            </div>
+            <div className="text-[11px] text-slate-400 font-medium">
+              Active club directory
+            </div>
           </div>
-          <div className="text-2xl md:text-3xl font-black text-purple-300">
-            {membersList.length} Members
-          </div>
-          <div className="text-[11px] text-slate-400 font-medium">
-            Active club directory
-          </div>
-        </div>
 
-        <div className="p-5 rounded-2xl bg-[#0e0518]/90 border border-purple-500/20 backdrop-blur-md shadow-lg flex flex-col justify-between space-y-2">
-          <div className="flex items-center justify-between text-slate-400 text-xs font-semibold">
-            <span>GATEWAY STATUS</span>
-            <ShieldCheck className="w-4 h-4 text-emerald-400" />
-          </div>
-          <div className="text-xl font-bold text-emerald-400 flex items-center gap-2">
-            <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
-            Razorpay Live
-          </div>
-          <div className="text-[11px] text-emerald-400/70 font-semibold">
-            Payments Secured
+          <div className="p-5 rounded-2xl bg-[#0e0518]/90 border border-purple-500/20 backdrop-blur-md shadow-lg flex flex-col justify-between space-y-2">
+            <div className="flex items-center justify-between text-slate-400 text-xs font-semibold">
+              <span>GATEWAY STATUS</span>
+              <ShieldCheck className="w-4 h-4 text-emerald-400" />
+            </div>
+            <div className="text-xl font-bold text-emerald-400 flex items-center gap-2">
+              <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
+              Razorpay Live
+            </div>
+            <div className="text-[11px] text-emerald-400/70 font-semibold">
+              Payments Secured
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
       {/* Transaction Logs Panel (Admin Only) */}
       {isAdminState && showLogsPanel && (
@@ -1687,7 +1761,7 @@ const Payments: React.FC<PaymentsProps> = ({
       </AnimatePresence>
 
       {/* Admin Assign Due to Single Member Modal */}
-      {showCreateModal && isAdminState && (
+      {showCreateModal && canInitiatePayments && (
         <div className="fixed inset-0 z-[120] bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200">
           <form
             onSubmit={handleCreatePayment}
@@ -1826,7 +1900,7 @@ const Payments: React.FC<PaymentsProps> = ({
       )}
 
       {/* Admin Assign Due to ALL Registered Members Modal */}
-      {showAssignAllModal && isAdminState && (
+      {showAssignAllModal && canInitiatePayments && (
         <div className="fixed inset-0 z-[120] bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200">
           <form
             onSubmit={handleAssignToAllMembers}
@@ -1929,6 +2003,209 @@ const Payments: React.FC<PaymentsProps> = ({
                 className="flex-1 py-3 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-white font-bold text-xs shadow-[0_0_20px_rgba(245,158,11,0.4)] transition-all flex items-center justify-center gap-2"
               >
                 {assigningAll ? `Assigning to ${membersList.length}...` : `Assign to ALL (${membersList.length})`}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* Admin Assign Due to Specific Persons (Multi-Member Selection) Modal */}
+      {showMultiMemberModal && canInitiatePayments && (
+        <div className="fixed inset-0 z-[120] bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <form
+            onSubmit={handleAssignMultiMembers}
+            className="bg-[#0e0518] border border-indigo-500/50 rounded-3xl max-w-lg w-full p-6 md:p-8 space-y-5 shadow-[0_0_60px_rgba(99,102,241,0.3)] relative max-h-[90vh] overflow-y-auto custom-scrollbar"
+          >
+            <button
+              type="button"
+              onClick={() => setShowMultiMemberModal(false)}
+              className="absolute top-4 right-4 p-2 text-slate-400 hover:text-white rounded-full bg-white/5 hover:bg-white/10 transition-all"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <div className="space-y-1">
+              <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded text-[10px] font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/40">
+                <Users className="w-3.5 h-3.5 text-indigo-400" /> MULTI-MEMBER SPECIFIC DUE
+              </div>
+              <h3 className="text-xl font-bold text-white">Assign Payment Due to Specific Persons</h3>
+              <p className="text-xs text-slate-400">
+                Select one or multiple crew members from the list below to assign this due.
+              </p>
+            </div>
+
+            <div className="space-y-4 text-xs">
+              <div>
+                <label className="block text-slate-300 font-semibold mb-1">Payment Title *</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. VRGC Specific Event Pass"
+                  value={multiTitle}
+                  onChange={(e) => setMultiTitle(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-surface-container-lowest border border-white/10 text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-slate-300 font-semibold mb-1">Amount (₹ INR per person) *</label>
+                  <input
+                    type="number"
+                    min="1"
+                    required
+                    placeholder="500"
+                    value={multiAmount}
+                    onChange={(e) => setMultiAmount(e.target.value)}
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-surface-container-lowest border border-white/10 text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-slate-300 font-semibold mb-1">Category</label>
+                  <select
+                    value={multiCategory}
+                    onChange={(e) => setMultiCategory(e.target.value)}
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-[#0a0315] border border-white/10 text-white focus:outline-none focus:border-indigo-500 [&>option]:bg-[#130828] [&>option]:text-white"
+                  >
+                    <option value="Club Fee" className="bg-[#130828]">Club Fee</option>
+                    <option value="Event Registration" className="bg-[#130828]">Event Registration</option>
+                    <option value="Merchandise" className="bg-[#130828]">Merchandise</option>
+                    <option value="Fine" className="bg-[#130828]">Fine</option>
+                    <option value="Other" className="bg-[#130828]">Other</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-slate-300 font-semibold mb-1">Due Date</label>
+                <input
+                  type="date"
+                  value={multiDueDate}
+                  onChange={(e) => setMultiDueDate(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-surface-container-lowest border border-white/10 text-white focus:outline-none focus:border-indigo-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-slate-300 font-semibold mb-1">Description</label>
+                <textarea
+                  rows={2}
+                  placeholder="Details for this specific group payment due..."
+                  value={multiDescription}
+                  onChange={(e) => setMultiDescription(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-surface-container-lowest border border-white/10 text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 resize-none"
+                />
+              </div>
+
+              {/* Specific Member Selection List */}
+              <div className="space-y-2 pt-1 border-t border-white/10">
+                <div className="flex items-center justify-between">
+                  <label className="block text-slate-200 font-bold">
+                    Select Specific Persons ({selectedMultiMemberEmails.length} selected)
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const filteredEmails = membersList
+                          .filter((m) => {
+                            if (!multiSearch.trim()) return true;
+                            const q = multiSearch.toLowerCase();
+                            return m.name.toLowerCase().includes(q) || m.regNo.toLowerCase().includes(q) || m.email.toLowerCase().includes(q) || m.team.toLowerCase().includes(q);
+                          })
+                          .map((m) => m.email);
+                        setSelectedMultiMemberEmails(Array.from(new Set([...selectedMultiMemberEmails, ...filteredEmails])));
+                      }}
+                      className="text-[10px] text-indigo-400 hover:text-indigo-300 underline font-semibold"
+                    >
+                      Select All Filtered
+                    </button>
+                    <span className="text-slate-600">|</span>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedMultiMemberEmails([])}
+                      className="text-[10px] text-rose-400 hover:text-rose-300 underline font-semibold"
+                    >
+                      Deselect All
+                    </button>
+                  </div>
+                </div>
+
+                {/* Filter Search inside modal */}
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
+                  <input
+                    type="text"
+                    placeholder="Search crew members by name, regNo, team..."
+                    value={multiSearch}
+                    onChange={(e) => setMultiSearch(e.target.value)}
+                    className="w-full pl-9 pr-3 py-1.5 rounded-lg bg-[#0a0315] border border-white/10 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+
+                {/* Scrollable Members Checkbox List */}
+                <div className="max-h-48 overflow-y-auto custom-scrollbar border border-white/10 rounded-xl bg-black/40 p-2 space-y-1">
+                  {membersList
+                    .filter((m) => {
+                      if (!multiSearch.trim()) return true;
+                      const q = multiSearch.toLowerCase();
+                      return m.name.toLowerCase().includes(q) || m.regNo.toLowerCase().includes(q) || m.email.toLowerCase().includes(q) || m.team.toLowerCase().includes(q);
+                    })
+                    .map((m) => {
+                      const isSelected = selectedMultiMemberEmails.includes(m.email);
+                      return (
+                        <div
+                          key={m.email}
+                          onClick={() => {
+                            if (isSelected) {
+                              setSelectedMultiMemberEmails((prev) => prev.filter((e) => e !== m.email));
+                            } else {
+                              setSelectedMultiMemberEmails((prev) => [...prev, m.email]);
+                            }
+                          }}
+                          className={`flex items-center justify-between p-2 rounded-lg cursor-pointer transition-all ${
+                            isSelected
+                              ? 'bg-indigo-600/20 border border-indigo-500/40 text-white'
+                              : 'hover:bg-white/5 border border-transparent text-slate-300'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={() => {}}
+                              className="w-4 h-4 rounded accent-indigo-500 cursor-pointer"
+                            />
+                            <div className="min-w-0 text-left">
+                              <div className="font-bold text-xs truncate text-white">{m.name} <span className="text-[10px] text-indigo-300 font-normal">({m.regNo})</span></div>
+                              <div className="text-[10px] text-slate-400 truncate">{m.email}</div>
+                            </div>
+                          </div>
+                          <span className="text-[9px] font-bold px-2 py-0.5 rounded bg-white/5 text-purple-300 border border-white/10 shrink-0">
+                            {m.team || 'Member'}
+                          </span>
+                        </div>
+                      );
+                    })}
+                </div>
+              </div>
+            </div>
+
+            <div className="pt-2 flex gap-3">
+              <button
+                type="button"
+                onClick={() => setShowMultiMemberModal(false)}
+                className="flex-1 py-3 rounded-xl bg-white/10 hover:bg-white/20 text-white font-bold text-xs transition-all"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={assigningMulti || selectedMultiMemberEmails.length === 0}
+                className="flex-1 py-3 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-bold text-xs shadow-[0_0_20px_rgba(99,102,241,0.4)] transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+              >
+                {assigningMulti ? `Assigning...` : `Assign to ${selectedMultiMemberEmails.length} Member(s)`}
               </button>
             </div>
           </form>

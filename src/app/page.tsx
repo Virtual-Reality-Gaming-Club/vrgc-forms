@@ -10,6 +10,7 @@ import Tickets from '@/components/Tickets';
 import Payments from '@/components/Payments';
 import Lobby25MemberEntry from '@/components/Lobby25MemberEntry';
 import Lobby24MemberEntry from '@/components/Lobby24MemberEntry';
+import Footer from '@/components/Footer';
 import { useAuth } from '@/lib/auth-context';
 import { signInWithPopup, GoogleAuthProvider } from 'firebase/auth';
 import { auth } from '@/lib/firebase';
@@ -206,6 +207,7 @@ function AppContent() {
           <span className="text-xs font-bold">{toast}</span>
         </div>
       )}
+      <Footer />
     </div>
   );
 }

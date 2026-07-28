@@ -7,6 +7,8 @@ import Payments from '@/components/Payments';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
 
+import Footer from '@/components/Footer';
+
 export default function PaymentsPage() {
   const router = useRouter();
   const { user, userEmail, isAdmin, isAuthorized, authLoading, handleLogout } = useAuth();
@@ -59,6 +61,7 @@ export default function PaymentsPage() {
           />
         </main>
       </div>
+      <Footer />
     </div>
   );
 }
