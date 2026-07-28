@@ -11,6 +11,7 @@ export const CONFIG = {
 
   // ID Card Form Whitelisted Admins
   ADMIN_EMAILS: [
+    "vrgc@vitbhopal.ac.in",
     "aayush.23mim10104@vitbhopal.ac.in",
     "abhinav.25bcy10254@vitbhopal.ac.in",
     "admin@vrgc.club",

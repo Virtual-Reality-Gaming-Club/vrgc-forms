@@ -139,107 +139,37 @@ const IDCard: React.FC<IDCardProps> = ({
     return () => clearInterval(timer);
   }, [sheetsCooldown]);
 
-  // Fetch CSV files & monitor Auth State on mount
+  // Synchronize Auth & Member state from AuthContext props
   useEffect(() => {
-    const fetchCSVData = async () => {
-      setAuthLoading(true);
-      try {
-        const adminRes = await fetch('/admins.csv');
-        let adminEmailsList: string[] = [];
-        if (adminRes.ok) {
-          const adminText = await adminRes.text();
-          adminEmailsList = adminText.split('\n')
-            .map(line => line.trim())
-            .filter(line => line && !line.startsWith('Email'))
-            .map(email => email.toLowerCase());
-        }
+    const userToUse = externalUser ?? currentUser;
+    if (userToUse && userToUse.email) {
+      const lowerEmail = userToUse.email.toLowerCase();
+      setCurrentUser(userToUse);
 
-        const memberRes = await fetch('/members.csv');
-        let membersList: MemberData[] = [];
-        if (memberRes.ok) {
-          const memberText = await memberRes.text();
-          const lines = memberText.split('\n');
-          const headers = lines[0].split(',').map(h => h.trim());
-          const emailIdx = headers.findIndex(h => h.toLowerCase() === 'email');
-          const nameIdx = headers.findIndex(h => h.toLowerCase() === 'name');
-          const regIdx = headers.findIndex(h => h.toLowerCase() === 'registration number');
-          const phoneIdx = headers.findIndex(h => h.toLowerCase() === 'phone');
-          const teamIdx = headers.findIndex(h => h.toLowerCase() === 'team');
-          const posIdx = headers.findIndex(h => h.toLowerCase() === 'position');
+      const isVrgc = lowerEmail === 'vrgc@vitbhopal.ac.in';
+      const configAdmins = CONFIG.ADMIN_EMAILS.map(e => e.toLowerCase());
+      const adminStatus = isVrgc || configAdmins.includes(lowerEmail) || (externalIsAdmin ?? false);
+      setIsAdmin(adminStatus);
 
-          for (let i = 1; i < lines.length; i++) {
-            if (!lines[i].trim()) continue;
-            const currentLine = lines[i].split(',');
-            membersList.push({
-              name: currentLine[nameIdx] ? currentLine[nameIdx].trim() : '',
-              registrationNumber: currentLine[regIdx] ? currentLine[regIdx].trim() : '',
-              phone: currentLine[phoneIdx] ? currentLine[phoneIdx].trim() : '',
-              email: currentLine[emailIdx] ? currentLine[emailIdx].trim().toLowerCase() : '',
-              team: currentLine[teamIdx] ? currentLine[teamIdx].trim() : '',
-              position: currentLine[posIdx] ? currentLine[posIdx].trim() : 'Member'
-            });
-          }
-        }
-
-        const unsubscribe = onAuthStateChanged(auth, async (user) => {
-          if (user) {
-            setCurrentUser(user);
-            const lowerEmail = user.email ? user.email.toLowerCase() : '';
-            const matchedAdmin = adminEmailsList.includes(lowerEmail);
-            setIsAdmin(matchedAdmin);
-
-            const matchedMember = membersList.find(m => m.email === lowerEmail);
-            if (matchedMember) {
-              setMemberData(matchedMember);
-              setIsAuthorized(true);
-              await checkExistingSubmission(user.email || '');
-            } else if (matchedAdmin) {
-              setMemberData({
-                name: user.displayName || 'Administrator',
-                registrationNumber: 'ADMIN',
-                phone: '',
-                email: user.email || '',
-                team: 'Management',
-                position: 'Lead'
-              });
-              setIsAuthorized(true);
-              await checkExistingSubmission(user.email || '');
-            } else {
-              setIsAuthorized(false);
-              setAuthError('Access Denied: You are not authorized. Only registered members can access this portal.');
-              await signOut(auth);
-            }
-          } else {
-            setCurrentUser(null);
-            setIsAuthorized(false);
-            setMemberData(null);
-            setExistingSubmission(null);
-            setIsAdmin(false);
-          }
-          setAuthLoading(false);
-        });
-
-        return () => unsubscribe();
-      } catch (err) {
-        console.error("Error loading CSV auth data: ", err);
-        setAuthLoading(false);
+      if (externalIsAuthorized !== undefined) {
+        setIsAuthorized(externalIsAuthorized);
+      } else {
+        setIsAuthorized(true);
       }
-    };
 
-    fetchCSVData();
-  }, []);
+      if (externalMemberData) {
+        setMemberData(externalMemberData);
+      }
 
-  useEffect(() => {
-    if (externalUser !== undefined) {
-      setCurrentUser(externalUser);
+      checkExistingSubmission(lowerEmail);
+    } else {
+      setCurrentUser(null);
+      setIsAuthorized(externalIsAuthorized ?? false);
+      setIsAdmin(externalIsAdmin ?? false);
+      if (externalMemberData) setMemberData(externalMemberData);
     }
-    if (externalIsAuthorized !== undefined) {
-      setIsAuthorized(externalIsAuthorized);
-    }
-    if (externalIsAdmin !== undefined) {
-      setIsAdmin(externalIsAdmin);
-    }
-  }, [externalUser, externalIsAuthorized, externalIsAdmin]);
+    setAuthLoading(false);
+  }, [externalUser, externalMemberData, externalIsAdmin, externalIsAuthorized]);
 
   // Subscribe to real-time updates from 'id_cards' Firestore collection (Admins only)
   useEffect(() => {
@@ -446,6 +376,18 @@ const IDCard: React.FC<IDCardProps> = ({
 
       await setDoc(doc(db, 'id_cards', (currentUser.email || '').toLowerCase()), submissionData);
 
+      // Trigger Google Sheets sync upon submission including photoUrl, avatarUrl, qrCode, cardUrl
+      if (CONFIG.GOOGLE_SCRIPT_ID_CARD_URL) {
+        const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=140x140&color=0-0-0&bgcolor=ffffff&data=${encodeURIComponent(`https://vrgc.club/card/${submissionData.registrationNumber}`)}`;
+        const cardUrl = `https://vrgc.club/card/${submissionData.registrationNumber}`;
+
+        const sheetSyncUrl = `${CONFIG.GOOGLE_SCRIPT_ID_CARD_URL}?action=sync_idcard&email=${encodeURIComponent(submissionData.email)}&name=${encodeURIComponent(submissionData.name)}&regNo=${encodeURIComponent(submissionData.registrationNumber)}&registrationNumber=${encodeURIComponent(submissionData.registrationNumber)}&phone=${encodeURIComponent(submissionData.phone || '')}&team=${encodeURIComponent(submissionData.team || '')}&position=${encodeURIComponent(submissionData.position || 'Member')}&photoUrl=${encodeURIComponent(submissionData.photoUrl || '')}&avatarUrl=${encodeURIComponent(submissionData.avatarUrl || '')}&avatar=${encodeURIComponent(submissionData.avatarUrl || '')}&qrCode=${encodeURIComponent(qrCodeUrl)}&qrUrl=${encodeURIComponent(qrCodeUrl)}&cardUrl=${encodeURIComponent(cardUrl)}&submittedAt=${encodeURIComponent(submissionData.submittedAt || '')}&status=${encodeURIComponent(submissionData.status || 'Pending')}`;
+
+        fetch(sheetSyncUrl, { mode: 'no-cors' })
+          .then(() => console.log("Google Sheets submission sync succeeded for:", submissionData.email))
+          .catch(err => console.error("Google Sheets submission sync failed:", err));
+      }
+
       setSubmitSuccess(true);
       setExistingSubmission(submissionData);
     } catch (err: any) {
@@ -510,7 +452,10 @@ const IDCard: React.FC<IDCardProps> = ({
       setCandidates(sortedCandidates);
 
       const syncPromises = sortedCandidates.map(c => {
-        const sheetSyncUrl = `${CONFIG.GOOGLE_SCRIPT_ID_CARD_URL}?action=sync_idcard&email=${encodeURIComponent(c.email)}&name=${encodeURIComponent(c.name)}&regNo=${encodeURIComponent(c.registrationNumber)}&phone=${encodeURIComponent(c.phone || '')}&team=${encodeURIComponent(c.team || '')}&position=${encodeURIComponent(c.position || 'Member')}&photoUrl=${encodeURIComponent(c.photoUrl || '')}&submittedAt=${encodeURIComponent(c.submittedAt || '')}&status=${encodeURIComponent(c.status || 'Pending')}`;
+        const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=140x140&color=0-0-0&bgcolor=ffffff&data=${encodeURIComponent(`https://vrgc.club/card/${c.registrationNumber}`)}`;
+        const cardUrl = `https://vrgc.club/card/${c.registrationNumber}`;
+
+        const sheetSyncUrl = `${CONFIG.GOOGLE_SCRIPT_ID_CARD_URL}?action=sync_idcard&email=${encodeURIComponent(c.email)}&name=${encodeURIComponent(c.name)}&regNo=${encodeURIComponent(c.registrationNumber)}&registrationNumber=${encodeURIComponent(c.registrationNumber)}&phone=${encodeURIComponent(c.phone || '')}&team=${encodeURIComponent(c.team || '')}&position=${encodeURIComponent(c.position || 'Member')}&photoUrl=${encodeURIComponent(c.photoUrl || '')}&avatarUrl=${encodeURIComponent(c.avatarUrl || '')}&avatar=${encodeURIComponent(c.avatarUrl || '')}&qrCode=${encodeURIComponent(qrCodeUrl)}&qrUrl=${encodeURIComponent(qrCodeUrl)}&cardUrl=${encodeURIComponent(cardUrl)}&submittedAt=${encodeURIComponent(c.submittedAt || '')}&status=${encodeURIComponent(c.status || 'Pending')}`;
         return fetch(sheetSyncUrl, { mode: 'no-cors' })
           .then(() => true)
           .catch(err => {
@@ -640,7 +585,10 @@ const IDCard: React.FC<IDCardProps> = ({
 
       // Trigger status update in Google Sheets
       if (CONFIG.GOOGLE_SCRIPT_ID_CARD_URL) {
-        const statusSyncUrl = `${CONFIG.GOOGLE_SCRIPT_ID_CARD_URL}?action=sync_idcard&email=${encodeURIComponent(candidate.email)}&name=${encodeURIComponent(candidate.name)}&regNo=${encodeURIComponent(candidate.registrationNumber)}&phone=${encodeURIComponent(candidate.phone || '')}&team=${encodeURIComponent(candidate.team || '')}&position=${encodeURIComponent(candidate.position || 'Member')}&photoUrl=${encodeURIComponent(candidate.photoUrl || '')}&submittedAt=${encodeURIComponent(candidate.submittedAt || '')}&status=${encodeURIComponent(newStatus)}`;
+        const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=140x140&color=0-0-0&bgcolor=ffffff&data=${encodeURIComponent(`https://vrgc.club/card/${candidate.registrationNumber}`)}`;
+        const cardUrl = `https://vrgc.club/card/${candidate.registrationNumber}`;
+
+        const statusSyncUrl = `${CONFIG.GOOGLE_SCRIPT_ID_CARD_URL}?action=sync_idcard&email=${encodeURIComponent(candidate.email)}&name=${encodeURIComponent(candidate.name)}&regNo=${encodeURIComponent(candidate.registrationNumber)}&registrationNumber=${encodeURIComponent(candidate.registrationNumber)}&phone=${encodeURIComponent(candidate.phone || '')}&team=${encodeURIComponent(candidate.team || '')}&position=${encodeURIComponent(candidate.position || 'Member')}&photoUrl=${encodeURIComponent(candidate.photoUrl || '')}&avatarUrl=${encodeURIComponent(candidate.avatarUrl || '')}&avatar=${encodeURIComponent(candidate.avatarUrl || '')}&qrCode=${encodeURIComponent(qrCodeUrl)}&qrUrl=${encodeURIComponent(qrCodeUrl)}&cardUrl=${encodeURIComponent(cardUrl)}&submittedAt=${encodeURIComponent(candidate.submittedAt || '')}&status=${encodeURIComponent(newStatus)}`;
         fetch(statusSyncUrl, { mode: 'no-cors' }).catch(err => console.error("Sheets status sync error:", err));
       }
 
@@ -790,7 +738,7 @@ const IDCard: React.FC<IDCardProps> = ({
             </button>
             <button
               onClick={() => setActiveSubTab('admin')}
-              className={`px-6 py-3 font-label-caps tracking-wider text-xs md:text-sm font-bold border-b-2 transition-all duration-300 flex items-center gap-1.5 ${
+              className={`px-6 py-3 font-label-caps tracking-wider text-xs md:text-sm font-bold border-b-2 transition-all duration-300 flex items-center gap-2 ${
                 activeSubTab === 'admin'
                   ? 'border-red-500 text-red-400 shadow-[0_4px_12px_rgba(239,68,68,0.25)]'
                   : 'border-transparent text-red-400/80 hover:text-red-400'
@@ -798,6 +746,9 @@ const IDCard: React.FC<IDCardProps> = ({
             >
               <span className="material-symbols-outlined text-sm text-red-400">admin_panel_settings</span>
               <span>ADMIN DASHBOARD</span>
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-red-500/20 text-red-300 border border-red-500/30">
+                {candidates.length} LOGS
+              </span>
             </button>
           </div>
         )}

@@ -10,6 +10,7 @@ import {
   User,
 } from 'firebase/auth';
 import { loadCsv } from '@/lib/loadCsv';
+import { CONFIG } from '@/lib/config';
 
 // ✅ Designated payment admin email
 export const PAYMENT_ADMIN_EMAIL = 'vrgc@vitbhopal.ac.in';
@@ -133,7 +134,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUser(firebaseUser);
     setUserEmail(em);
 
-    const admin = adminEmailsSetRef.current.has(em) || em === PAYMENT_ADMIN_EMAIL;
+    const configAdmins = CONFIG.ADMIN_EMAILS.map(e => e.toLowerCase());
+    const admin = adminEmailsSetRef.current.has(em) || em === PAYMENT_ADMIN_EMAIL || configAdmins.includes(em);
     const paymentAdmin = em === PAYMENT_ADMIN_EMAIL;
     setIsAdmin(admin);
     setIsPaymentAdmin(paymentAdmin);
