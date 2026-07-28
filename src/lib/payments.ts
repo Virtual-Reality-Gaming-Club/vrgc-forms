@@ -239,7 +239,7 @@ export async function saveTransactionToFirestore(tx: {
   payment_title: string;
   amount: number;
   currency?: string;
-  status: 'Paid' | 'Failed' | 'Pending' | 'Processing';
+  status: 'Paid' | 'Failed' | 'Pending' | 'Processing' | 'Cancelled';
   razorpay_payment_id?: string;
   razorpay_order_id?: string;
   razorpay_signature?: string;
@@ -248,15 +248,14 @@ export async function saveTransactionToFirestore(tx: {
   paid_at?: string;
 }): Promise<string | null> {
   try {
-    // Instead of creating a new log in 'invoices', we only update the main payment document.
-    // This ensures there is only 1 row per payment that gets updated automatically.
     if (tx.payment_id) {
       await updatePaymentStatusInFirestore(tx.payment_id, {
         status: tx.status as PaymentStatus,
         razorpay_order_id: tx.razorpay_order_id || '',
         razorpay_payment_id: tx.razorpay_payment_id || '',
         razorpay_signature: tx.razorpay_signature || '',
-        paid_at: tx.paid_at || new Date().toISOString(),
+        paid_at: tx.paid_at || (tx.status === 'Paid' ? new Date().toISOString() : ''),
+        ...(tx.error_description ? { error_description: tx.error_description } : {}),
       });
       return tx.payment_id;
     }

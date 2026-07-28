@@ -622,6 +622,7 @@ const Payments: React.FC<PaymentsProps> = ({
         description: payment.title,
         order_id: orderData.order_id,
         image: '/icon.svg',
+        timeout: 300, // 5-minute timeout window for candidate payment (300 seconds)
         prefill: {
           name: currentUser?.displayName || 'VRGC Crew Member',
           email: userEmail || 'member@vrgc.club',
@@ -633,9 +634,20 @@ const Payments: React.FC<PaymentsProps> = ({
           ondismiss: () => {
             setProcessingId(null);
             setPayments((prev) =>
-              prev.map((item) => (item.id === payment.id ? { ...item, status: 'Pending' } : item))
+              prev.map((item) => (item.id === payment.id ? { ...item, status: 'Failed' } : item))
             );
-            showToast('Payment Cancelled', 'info');
+            // Log payment cancellation to Firestore as a Failed attempt with reattempt opportunity
+            saveTransactionToFirestore({
+              payment_id: payment.id,
+              user_email: userEmail || payment.user_email || '',
+              payment_title: payment.title,
+              amount: payment.amount,
+              currency: payment.currency || 'INR',
+              status: 'Failed',
+              razorpay_order_id: orderData.order_id,
+              error_description: 'Payment gateway closed / cancelled by candidate (5min window ended or manual cancel)',
+            });
+            showToast('Payment window closed or cancelled. You can re-attempt payment anytime.', 'info');
           },
         },
         handler: async (response: {
@@ -706,7 +718,7 @@ const Payments: React.FC<PaymentsProps> = ({
                 status: 'Failed',
                 error_description: verifyData.error || 'Verification failed',
               });
-              showToast(verifyData.error || 'Payment verification failed.', 'error');
+              showToast(verifyData.error || 'Payment verification failed. You can re-attempt.', 'error');
             }
           } catch (err: any) {
             console.error('Verification error:', err);
@@ -722,7 +734,7 @@ const Payments: React.FC<PaymentsProps> = ({
               status: 'Failed',
               error_description: err?.message || 'Exception during verification',
             });
-            showToast('Verification failed. Please contact support.', 'error');
+            showToast('Verification failed. You can re-attempt payment.', 'error');
           } finally {
             setProcessingId(null);
           }
@@ -746,9 +758,9 @@ const Payments: React.FC<PaymentsProps> = ({
           status: 'Failed',
           razorpay_order_id: resp.error?.metadata?.order_id,
           razorpay_payment_id: resp.error?.metadata?.payment_id,
-          error_description: resp.error?.description || 'Transaction declined',
+          error_description: resp.error?.description || 'Transaction declined or failed',
         });
-        showToast(`Payment Failed: ${resp.error.description || 'Transaction declined'}`, 'error');
+        showToast(`Payment Failed: ${resp.error?.description || 'Transaction declined'}. Click "Re-attempt Payment" to try again.`, 'error');
       });
 
       razorpayInstance.open();
@@ -756,9 +768,18 @@ const Payments: React.FC<PaymentsProps> = ({
       console.error('Payment initialization error:', error);
       setProcessingId(null);
       setPayments((prev) =>
-        prev.map((item) => (item.id === payment.id ? { ...item, status: 'Pending' } : item))
+        prev.map((item) => (item.id === payment.id ? { ...item, status: 'Failed' } : item))
       );
-      showToast(error.message || 'Payment Failed. Please try again or contact support.', 'error');
+      saveTransactionToFirestore({
+        payment_id: payment.id,
+        user_email: userEmail || payment.user_email || '',
+        payment_title: payment.title,
+        amount: payment.amount,
+        currency: payment.currency || 'INR',
+        status: 'Failed',
+        error_description: error.message || 'Payment initialization error',
+      });
+      showToast(error.message || 'Payment Failed. You can re-attempt.', 'error');
     }
   };
 
@@ -1459,6 +1480,11 @@ const Payments: React.FC<PaymentsProps> = ({
                               <>
                                 <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
                                 <span>Processing...</span>
+                              </>
+                            ) : isFailed ? (
+                              <>
+                                <RotateCcw className="w-4 h-4 text-rose-300" />
+                                <span>Re-attempt Payment (₹{Number(payment.amount).toLocaleString('en-IN')})</span>
                               </>
                             ) : (
                               <>
