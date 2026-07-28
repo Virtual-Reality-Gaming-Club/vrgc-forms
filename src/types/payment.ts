@@ -6,6 +6,9 @@ export interface PaymentItem {
   id: string;
   user_id?: string;
   user_email?: string;
+  candidate_name?: string;
+  registration_number?: string;
+  team?: string;
   title: string;
   description?: string;
   category: PaymentCategory | string;
@@ -17,6 +20,7 @@ export interface PaymentItem {
   razorpay_payment_id?: string;
   razorpay_signature?: string;
   payment_method?: string;
+  error_description?: string;
   paid_at?: string;
   created_at: string;
   updated_at?: string;

@@ -10,6 +10,7 @@ import {
   saveInvoiceToFirestore,
   saveTransactionToFirestore,
   fetchInvoicesFromFirestore,
+  fetchPaymentAttemptsFromFirestore,
   seedDemoPayments,
   TransactionLog,
   PAYMENTS_COLLECTION,
@@ -150,10 +151,27 @@ const Payments: React.FC<PaymentsProps> = ({
   const [multiSearch, setMultiSearch] = useState<string>('');
   const [assigningMulti, setAssigningMulti] = useState<boolean>(false);
 
-  // Transaction Logs (admin only)
+  // Transaction Logs & Audit Modal (admin only)
   const [transactionLogs, setTransactionLogs] = useState<TransactionLog[]>([]);
   const [logsLoading, setLogsLoading] = useState<boolean>(false);
   const [showLogsPanel, setShowLogsPanel] = useState<boolean>(false);
+
+  const [auditModalPayment, setAuditModalPayment] = useState<PaymentItem | null>(null);
+  const [auditAttempts, setAuditAttempts] = useState<TransactionLog[]>([]);
+  const [loadingAudit, setLoadingAudit] = useState<boolean>(false);
+
+  const handleOpenAuditModal = async (payment: PaymentItem) => {
+    setAuditModalPayment(payment);
+    setLoadingAudit(true);
+    try {
+      const logs = await fetchPaymentAttemptsFromFirestore(payment.id);
+      setAuditAttempts(logs);
+    } catch (err) {
+      console.error('Failed to load audit logs:', err);
+    } finally {
+      setLoadingAudit(false);
+    }
+  };
 
   // Single Member Due Form state
   const [selectedMemberEmail, setSelectedMemberEmail] = useState<string>('');
@@ -355,8 +373,12 @@ const Payments: React.FC<PaymentsProps> = ({
 
     setCreating(true);
     try {
+      const targetMember = membersMap.get(finalTargetEmail);
       const created = await createPaymentInFirestore({
         user_email: finalTargetEmail,
+        candidate_name: targetMember?.name || '',
+        registration_number: targetMember?.regNo || '',
+        team: targetMember?.team || '',
         title: newTitle,
         description: newDescription || 'Assigned VRGC Payment Due',
         category: newCategory,
@@ -408,6 +430,9 @@ const Payments: React.FC<PaymentsProps> = ({
       for (const m of membersList) {
         const created = await createPaymentInFirestore({
           user_email: m.email.toLowerCase(),
+          candidate_name: m.name,
+          registration_number: m.regNo,
+          team: m.team,
           title: allTitle,
           description: allDescription || 'Mandatory VRGC Member Due',
           category: allCategory,
@@ -450,8 +475,12 @@ const Payments: React.FC<PaymentsProps> = ({
     try {
       let createdCount = 0;
       for (const email of selectedMultiMemberEmails) {
+        const m = membersMap.get(email.toLowerCase());
         const created = await createPaymentInFirestore({
           user_email: email.toLowerCase(),
+          candidate_name: m?.name || '',
+          registration_number: m?.regNo || '',
+          team: m?.team || '',
           title: multiTitle.trim(),
           description: multiDescription.trim() || 'VRGC Member Payment Due',
           category: multiCategory,
@@ -614,6 +643,11 @@ const Payments: React.FC<PaymentsProps> = ({
         }
       }
 
+      const targetMember = membersMap.get((payment.user_email || userEmail || '').toLowerCase());
+      const candidateName = payment.candidate_name || targetMember?.name || currentUser?.displayName || '';
+      const regNo = payment.registration_number || targetMember?.regNo || '';
+      const candidateTeam = payment.team || targetMember?.team || '';
+
       const options = {
         key: razorpayKey,
         amount: orderData.amount,
@@ -622,10 +656,9 @@ const Payments: React.FC<PaymentsProps> = ({
         description: payment.title,
         order_id: orderData.order_id,
         image: '/icon.svg',
-        timeout: 300, // 5-minute timeout window for candidate payment (300 seconds)
         prefill: {
-          name: currentUser?.displayName || 'VRGC Crew Member',
-          email: userEmail || 'member@vrgc.club',
+          name: candidateName || 'VRGC Crew Member',
+          email: userEmail || payment.user_email || 'member@vrgc.club',
         },
         theme: {
           color: '#a855f7',
@@ -640,14 +673,17 @@ const Payments: React.FC<PaymentsProps> = ({
             saveTransactionToFirestore({
               payment_id: payment.id,
               user_email: userEmail || payment.user_email || '',
+              candidate_name: candidateName,
+              registration_number: regNo,
+              team: candidateTeam,
               payment_title: payment.title,
               amount: payment.amount,
               currency: payment.currency || 'INR',
               status: 'Failed',
               razorpay_order_id: orderData.order_id,
-              error_description: 'Payment gateway closed / cancelled by candidate (5min window ended or manual cancel)',
+              error_description: 'Payment gateway closed / cancelled by candidate (click Re-attempt to try again)',
             });
-            showToast('Payment window closed or cancelled. You can re-attempt payment anytime.', 'info');
+            showToast('Payment window closed or cancelled. Click "Re-attempt Payment" to try again.', 'info');
           },
         },
         handler: async (response: {
@@ -692,6 +728,9 @@ const Payments: React.FC<PaymentsProps> = ({
               saveTransactionToFirestore({
                 payment_id: payment.id,
                 user_email: payment.user_email || userEmail,
+                candidate_name: candidateName,
+                registration_number: regNo,
+                team: candidateTeam,
                 payment_title: payment.title,
                 amount: payment.amount,
                 currency: payment.currency || 'INR',
@@ -712,6 +751,9 @@ const Payments: React.FC<PaymentsProps> = ({
               saveTransactionToFirestore({
                 payment_id: payment.id,
                 user_email: userEmail || payment.user_email || '',
+                candidate_name: candidateName,
+                registration_number: regNo,
+                team: candidateTeam,
                 payment_title: payment.title,
                 amount: payment.amount,
                 currency: payment.currency || 'INR',
@@ -728,6 +770,9 @@ const Payments: React.FC<PaymentsProps> = ({
             saveTransactionToFirestore({
               payment_id: payment.id,
               user_email: userEmail || payment.user_email || '',
+              candidate_name: candidateName,
+              registration_number: regNo,
+              team: candidateTeam,
               payment_title: payment.title,
               amount: payment.amount,
               currency: payment.currency || 'INR',
@@ -752,6 +797,9 @@ const Payments: React.FC<PaymentsProps> = ({
         saveTransactionToFirestore({
           payment_id: payment.id,
           user_email: userEmail || payment.user_email || '',
+          candidate_name: candidateName,
+          registration_number: regNo,
+          team: candidateTeam,
           payment_title: payment.title,
           amount: payment.amount,
           currency: payment.currency || 'INR',
@@ -1625,13 +1673,23 @@ const Payments: React.FC<PaymentsProps> = ({
                             )}
                           </td>
                           <td className="p-3.5 text-center">
-                            <button
-                              onClick={() => handleDeletePayment(item.id)}
-                              title="Delete record"
-                              className="p-1.5 text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition-all"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
+                            <div className="flex items-center justify-center gap-1">
+                              <button
+                                onClick={() => handleOpenAuditModal(item)}
+                                title="View Audit & Attempt Logs"
+                                className="p-1.5 text-amber-400 hover:text-amber-300 hover:bg-amber-500/10 rounded-lg transition-all flex items-center gap-1 text-[10px] font-bold"
+                              >
+                                <FileText className="w-3.5 h-3.5" />
+                                <span>Audit Logs</span>
+                              </button>
+                              <button
+                                onClick={() => handleDeletePayment(item.id)}
+                                title="Delete record"
+                                className="p-1.5 text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition-all"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       );
@@ -2235,6 +2293,133 @@ const Payments: React.FC<PaymentsProps> = ({
               </button>
             </div>
           </form>
+        </div>
+      )}
+      {/* Admin Individual Payment Audit Log Modal */}
+      {auditModalPayment && (
+        <div className="fixed inset-0 z-[130] bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-[#0e0518] border border-amber-500/40 rounded-3xl max-w-xl w-full p-6 md:p-8 space-y-5 shadow-[0_0_60px_rgba(245,158,11,0.25)] relative max-h-[90vh] overflow-y-auto custom-scrollbar">
+            <button
+              onClick={() => {
+                setAuditModalPayment(null);
+                setAuditAttempts([]);
+              }}
+              className="absolute top-4 right-4 p-2 text-slate-400 hover:text-white rounded-full bg-white/5 hover:bg-white/10 transition-all"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <div className="space-y-1">
+              <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                <FileText className="w-3.5 h-3.5 text-amber-400" /> PAYMENT AUDIT & ATTEMPTS LOG
+              </div>
+              <h3 className="text-xl font-bold text-white">{auditModalPayment.title}</h3>
+              <p className="text-xs text-slate-400">
+                Detailed transaction audit trail and candidate attempt history for invoice <span className="text-amber-300 font-mono">#{auditModalPayment.id.slice(0, 8)}</span>.
+              </p>
+            </div>
+
+            {/* Candidate Target Overview Card */}
+            <div className="bg-black/50 border border-white/10 rounded-2xl p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h4 className="text-sm font-bold text-white">
+                    {auditModalPayment.candidate_name || membersMap.get(auditModalPayment.user_email?.toLowerCase() || '')?.name || 'Candidate Member'}
+                  </h4>
+                  <p className="text-xs text-slate-400 font-mono">
+                    {auditModalPayment.user_email}
+                  </p>
+                </div>
+                {renderStatusBadge(auditModalPayment.status)}
+              </div>
+              <div className="grid grid-cols-3 gap-2 pt-2 border-t border-white/5 text-[11px]">
+                <div>
+                  <span className="text-slate-500 block text-[9px] uppercase font-bold">Regn No</span>
+                  <span className="text-purple-300 font-mono font-semibold">
+                    {auditModalPayment.registration_number || membersMap.get(auditModalPayment.user_email?.toLowerCase() || '')?.regNo || 'N/A'}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-slate-500 block text-[9px] uppercase font-bold">Team</span>
+                  <span className="text-slate-300 font-medium">
+                    {auditModalPayment.team || membersMap.get(auditModalPayment.user_email?.toLowerCase() || '')?.team || 'N/A'}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-slate-500 block text-[9px] uppercase font-bold">Amount Due</span>
+                  <span className="text-amber-400 font-bold">₹{auditModalPayment.amount}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Audit History Timeline */}
+            <div className="space-y-3">
+              <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center justify-between">
+                <span>Attempt History ({auditAttempts.length})</span>
+                {loadingAudit && <span className="text-[10px] text-amber-400 animate-pulse">Loading attempts...</span>}
+              </h4>
+
+              {loadingAudit ? (
+                <div className="p-6 text-center text-slate-400 text-xs animate-pulse">Loading payment attempt logs...</div>
+              ) : auditAttempts.length === 0 ? (
+                <div className="p-4 rounded-xl bg-white/5 border border-white/10 text-center text-xs text-slate-400">
+                  {auditModalPayment.error_description ? (
+                    <div className="text-left space-y-1">
+                      <div className="text-amber-300 font-bold">Latest Payment Log:</div>
+                      <div className="text-slate-300">{auditModalPayment.error_description}</div>
+                    </div>
+                  ) : (
+                    "No previous failed or completed payment attempts logged yet."
+                  )}
+                </div>
+              ) : (
+                <div className="space-y-2.5 max-h-60 overflow-y-auto custom-scrollbar pr-1">
+                  {auditAttempts.map((attempt, idx) => (
+                    <div
+                      key={attempt.id || idx}
+                      className="p-3 rounded-xl bg-black/40 border border-white/10 text-xs space-y-1.5"
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                          attempt.status === 'Paid' ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                          : attempt.status === 'Failed' || attempt.status === 'Cancelled' ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+                          : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                        }`}>
+                          {attempt.status}
+                        </span>
+                        <span className="text-[10px] text-slate-400 font-mono">
+                          {attempt.created_at ? new Date(attempt.created_at).toLocaleString('en-IN') : ''}
+                        </span>
+                      </div>
+
+                      {attempt.error_description && (
+                        <p className="text-slate-300 text-[11px] leading-relaxed">
+                          <strong className="text-rose-300 font-bold">Reason / Gateway Output:</strong> {attempt.error_description}
+                        </p>
+                      )}
+
+                      <div className="flex items-center justify-between text-[10px] text-slate-500 font-mono pt-1 border-t border-white/5">
+                        <span>Order: {attempt.razorpay_order_id || 'N/A'}</span>
+                        <span>Payment: {attempt.razorpay_payment_id || 'N/A'}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="pt-2 flex justify-end">
+              <button
+                onClick={() => {
+                  setAuditModalPayment(null);
+                  setAuditAttempts([]);
+                }}
+                className="px-5 py-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-white font-bold text-xs transition-all"
+              >
+                Close Audit View
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

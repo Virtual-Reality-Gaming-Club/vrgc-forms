@@ -24,6 +24,9 @@ export interface TransactionLog {
   id: string;
   payment_id?: string;
   user_email: string;
+  candidate_name?: string;
+  registration_number?: string;
+  team?: string;
   payment_title: string;
   amount: number;
   currency: string;
@@ -106,6 +109,9 @@ export async function fetchPaymentsFromFirestore(
       items.push({
         id: docSnap.id,
         user_email: data.user_email || '',
+        candidate_name: data.candidate_name || data.user_name || '',
+        registration_number: data.registration_number || data.regNo || '',
+        team: data.team || '',
         title: data.title || '',
         description: data.description || '',
         category: data.category || 'Club Fee',
@@ -116,6 +122,7 @@ export async function fetchPaymentsFromFirestore(
         razorpay_order_id: data.razorpay_order_id || '',
         razorpay_payment_id: data.razorpay_payment_id || '',
         razorpay_signature: data.razorpay_signature || '',
+        error_description: data.error_description || '',
         paid_at: data.paid_at || '',
         created_at: data.created_at?.toDate ? data.created_at.toDate().toISOString() : data.created_at || new Date().toISOString(),
         updated_at: data.updated_at?.toDate ? data.updated_at.toDate().toISOString() : data.updated_at || new Date().toISOString(),
@@ -135,13 +142,22 @@ export async function fetchPaymentsFromFirestore(
  * Also mirrors an initial record to Firestore `invoices` collection.
  */
 export async function createPaymentInFirestore(
-  paymentData: Omit<PaymentItem, 'id' | 'created_at'> & { created_at?: string }
+  paymentData: Omit<PaymentItem, 'id' | 'created_at'> & {
+    created_at?: string;
+    candidate_name?: string;
+    registration_number?: string;
+    team?: string;
+  }
 ): Promise<PaymentItem | null> {
   try {
     const now = new Date().toISOString();
+    const cleanEmail = paymentData.user_email ? paymentData.user_email.toLowerCase() : '';
     const docRef = await addDoc(collection(db, PAYMENTS_COLLECTION), {
       ...paymentData,
-      user_email: paymentData.user_email.toLowerCase(),
+      user_email: cleanEmail,
+      candidate_name: paymentData.candidate_name || '',
+      registration_number: paymentData.registration_number || '',
+      team: paymentData.team || '',
       created_at: serverTimestamp(),
       updated_at: serverTimestamp(),
       source: 'vrgc-forms',
@@ -150,22 +166,27 @@ export async function createPaymentInFirestore(
     const newPayment: PaymentItem = {
       ...paymentData,
       id: docRef.id,
+      user_email: cleanEmail,
+      candidate_name: paymentData.candidate_name || '',
+      registration_number: paymentData.registration_number || '',
+      team: paymentData.team || '',
       category: paymentData.category as any,
       created_at: paymentData.created_at || now,
       updated_at: now,
     };
 
-    // Mirror to `invoices` collection
-    saveInvoiceToFirestore({
+    // Save initial creation attempt log in subcollection & invoices
+    saveTransactionToFirestore({
       payment_id: docRef.id,
-      user_email: paymentData.user_email.toLowerCase(),
-      title: paymentData.title,
-      description: paymentData.description,
-      category: paymentData.category,
+      user_email: cleanEmail,
+      candidate_name: paymentData.candidate_name || '',
+      registration_number: paymentData.registration_number || '',
+      team: paymentData.team || '',
+      payment_title: paymentData.title,
       amount: paymentData.amount,
       currency: paymentData.currency || 'INR',
-      status: paymentData.status,
-      due_date: paymentData.due_date,
+      status: paymentData.status as any,
+      error_description: 'Payment invoice issued',
     });
 
     return newPayment;
@@ -212,11 +233,13 @@ export async function deletePaymentFromFirestore(paymentId: string): Promise<boo
 
 /**
  * Save a payment invoice record to Firestore `invoices` collection.
- * Non-destructive — only adds new doc.
  */
 export async function saveInvoiceToFirestore(invoice: {
   payment_id?: string;
   user_email: string;
+  candidate_name?: string;
+  registration_number?: string;
+  team?: string;
   title: string;
   description?: string;
   category: string;
@@ -225,17 +248,19 @@ export async function saveInvoiceToFirestore(invoice: {
   status: PaymentStatus;
   due_date?: string;
 }): Promise<string | null> {
-  // We no longer mirror to a separate invoices collection.
-  // The 'payments' collection is the single source of truth.
   return invoice.payment_id || null;
 }
 
 /**
- * Save a completed or failed payment transaction to Firestore `invoices` collection.
+ * Save a completed, failed, or cancelled payment transaction log to Firestore `invoices` collection
+ * AND subcollection `attempts` on the payment document.
  */
 export async function saveTransactionToFirestore(tx: {
   payment_id?: string;
   user_email: string;
+  candidate_name?: string;
+  registration_number?: string;
+  team?: string;
   payment_title: string;
   amount: number;
   currency?: string;
@@ -248,7 +273,9 @@ export async function saveTransactionToFirestore(tx: {
   paid_at?: string;
 }): Promise<string | null> {
   try {
+    const cleanEmail = tx.user_email ? tx.user_email.toLowerCase() : '';
     if (tx.payment_id) {
+      // 1. Update primary payment status in main `payments` doc
       await updatePaymentStatusInFirestore(tx.payment_id, {
         status: tx.status as PaymentStatus,
         razorpay_order_id: tx.razorpay_order_id || '',
@@ -257,12 +284,89 @@ export async function saveTransactionToFirestore(tx: {
         paid_at: tx.paid_at || (tx.status === 'Paid' ? new Date().toISOString() : ''),
         ...(tx.error_description ? { error_description: tx.error_description } : {}),
       });
+
+      // 2. Log payment attempt entry to subcollection `payments/{payment_id}/attempts`
+      const attemptsColRef = collection(db, PAYMENTS_COLLECTION, tx.payment_id, 'attempts');
+      await addDoc(attemptsColRef, {
+        payment_id: tx.payment_id,
+        user_email: cleanEmail,
+        candidate_name: tx.candidate_name || '',
+        registration_number: tx.registration_number || '',
+        team: tx.team || '',
+        payment_title: tx.payment_title,
+        amount: tx.amount,
+        currency: tx.currency || 'INR',
+        status: tx.status,
+        razorpay_order_id: tx.razorpay_order_id || '',
+        razorpay_payment_id: tx.razorpay_payment_id || '',
+        error_description: tx.error_description || '',
+        paid_at: tx.paid_at || '',
+        timestamp: serverTimestamp(),
+        created_at: new Date().toISOString(),
+      });
+
+      // 3. Mirror into global `invoices` collection for unified tracking
+      const invoicesColRef = collection(db, INVOICES_COLLECTION);
+      await addDoc(invoicesColRef, {
+        payment_id: tx.payment_id,
+        user_email: cleanEmail,
+        candidate_name: tx.candidate_name || '',
+        registration_number: tx.registration_number || '',
+        team: tx.team || '',
+        payment_title: tx.payment_title,
+        amount: tx.amount,
+        currency: tx.currency || 'INR',
+        status: tx.status,
+        razorpay_order_id: tx.razorpay_order_id || '',
+        razorpay_payment_id: tx.razorpay_payment_id || '',
+        error_description: tx.error_description || '',
+        paid_at: tx.paid_at || '',
+        created_at: serverTimestamp(),
+      });
+
       return tx.payment_id;
     }
     return null;
   } catch (err) {
     console.warn('Firestore transaction update failed:', err);
     return null;
+  }
+}
+
+/**
+ * Fetch all attempt logs for a specific payment ID from Firestore.
+ */
+export async function fetchPaymentAttemptsFromFirestore(paymentId: string): Promise<TransactionLog[]> {
+  try {
+    const attemptsColRef = collection(db, PAYMENTS_COLLECTION, paymentId, 'attempts');
+    const snapshot = await getDocs(attemptsColRef);
+    const logs: TransactionLog[] = [];
+
+    snapshot.forEach((docSnap) => {
+      const data = docSnap.data();
+      logs.push({
+        id: docSnap.id,
+        payment_id: paymentId,
+        user_email: data.user_email || '',
+        candidate_name: data.candidate_name || '',
+        registration_number: data.registration_number || '',
+        team: data.team || '',
+        payment_title: data.payment_title || data.title || '',
+        amount: Number(data.amount) || 0,
+        currency: data.currency || 'INR',
+        status: (data.status as any) || 'Pending',
+        razorpay_payment_id: data.razorpay_payment_id || '',
+        razorpay_order_id: data.razorpay_order_id || '',
+        error_description: data.error_description || '',
+        paid_at: data.paid_at || '',
+        created_at: data.timestamp?.toDate ? data.timestamp.toDate().toISOString() : data.created_at || new Date().toISOString(),
+      });
+    });
+
+    return logs.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+  } catch (err) {
+    console.error('Failed to fetch payment attempt logs:', err);
+    return [];
   }
 }
 
