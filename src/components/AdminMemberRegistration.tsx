@@ -869,14 +869,16 @@ const AdminMemberRegistration: React.FC<AdminMemberPortalProps> = ({ onRedirect,
   };
 
   // REMOVE MEMBER HANDLERS
-  const handleSearchRemoveDossier = async (regToSearch?: string) => {
+  const handleSearchRemoveDossier = async (inputSearch?: string) => {
     setErrorMessage('');
     setSuccessMessage('');
-    const targetReg = (regToSearch || removeRegNoInput).trim().toUpperCase();
+    const targetQuery = (inputSearch !== undefined ? inputSearch : removeRegNoInput).trim();
+    const targetUpper = targetQuery.toUpperCase();
+    const targetLower = targetQuery.toLowerCase();
 
-    if (!targetReg) {
+    if (!targetQuery) {
       setRemoveDossier(null);
-      return setErrorMessage('Please enter a Registration Number.');
+      return setErrorMessage('Please enter Member Name or Registration Number.');
     }
 
     setIsSearchingRemove(true);
@@ -884,19 +886,21 @@ const AdminMemberRegistration: React.FC<AdminMemberPortalProps> = ({ onRedirect,
     try {
       let foundRecord: MemberRecord | null = null;
 
-      // Search in allLoadedMembers first
+      // 1. Search in preloaded allMembers list by Registration Number, Name (exact or contains), or Email
       const localMatch = allMembers.find(
         (m) =>
-          m.registrationNumber.toUpperCase() === targetReg ||
-          m.id.toUpperCase() === targetReg ||
-          m.email.toUpperCase() === targetReg
+          m.registrationNumber.toUpperCase() === targetUpper ||
+          m.name.toLowerCase() === targetLower ||
+          m.name.toLowerCase().includes(targetLower) ||
+          m.email.toLowerCase() === targetLower ||
+          m.id.toUpperCase() === targetUpper
       );
 
       if (localMatch) {
         foundRecord = { ...localMatch };
       } else {
-        // Query Firestore 'members' by regNo / registrationNumber
-        const membersQ = query(collection(db, 'members'), where('registrationNumber', '==', targetReg));
+        // 2. Query Firestore 'members' by registrationNumber
+        const membersQ = query(collection(db, 'members'), where('registrationNumber', '==', targetUpper));
         const membersSnap = await getDocs(membersQ);
 
         if (!membersSnap.empty) {
@@ -905,7 +909,7 @@ const AdminMemberRegistration: React.FC<AdminMemberPortalProps> = ({ onRedirect,
           foundRecord = {
             id: membersSnap.docs[0].id,
             name: d.name || 'Member',
-            registrationNumber: targetReg,
+            registrationNumber: d.registrationNumber || targetUpper,
             email: em,
             team: d.team || 'Technical',
             position: d.position || DEFAULT_POSITIONS[0],
@@ -913,22 +917,59 @@ const AdminMemberRegistration: React.FC<AdminMemberPortalProps> = ({ onRedirect,
             avatarUrl: d.avatarUrl || d.avatar,
           };
         } else {
-          // Query Firestore 'id_cards'
-          const idCardsQ = query(collection(db, 'id_cards'), where('registrationNumber', '==', targetReg));
-          const idCardsSnap = await getDocs(idCardsQ);
+          // 3. Query Firestore 'members' by name
+          const nameQ = query(collection(db, 'members'), where('name', '==', targetQuery));
+          const nameSnap = await getDocs(nameQ);
 
-          if (!idCardsSnap.empty) {
-            const d = idCardsSnap.docs[0].data();
+          if (!nameSnap.empty) {
+            const d = nameSnap.docs[0].data();
+            const em = (d.email || nameSnap.docs[0].id).toLowerCase();
             foundRecord = {
-              id: idCardsSnap.docs[0].id,
-              name: d.fullName || d.name || 'Member',
-              registrationNumber: targetReg,
-              email: (d.email || idCardsSnap.docs[0].id).toLowerCase(),
+              id: nameSnap.docs[0].id,
+              name: d.name || targetQuery,
+              registrationNumber: (d.registrationNumber || d.regNo || '').toUpperCase(),
+              email: em,
               team: d.team || 'Technical',
               position: d.position || DEFAULT_POSITIONS[0],
               photoUrl: d.photoUrl || d.photo || d.imageUrl,
               avatarUrl: d.avatarUrl || d.avatar,
             };
+          } else {
+            // 4. Query Firestore 'id_cards' by registrationNumber
+            const idCardsQ = query(collection(db, 'id_cards'), where('registrationNumber', '==', targetUpper));
+            const idCardsSnap = await getDocs(idCardsQ);
+
+            if (!idCardsSnap.empty) {
+              const d = idCardsSnap.docs[0].data();
+              foundRecord = {
+                id: idCardsSnap.docs[0].id,
+                name: d.fullName || d.name || 'Member',
+                registrationNumber: targetUpper,
+                email: (d.email || idCardsSnap.docs[0].id).toLowerCase(),
+                team: d.team || 'Technical',
+                position: d.position || DEFAULT_POSITIONS[0],
+                photoUrl: d.photoUrl || d.photo || d.imageUrl,
+                avatarUrl: d.avatarUrl || d.avatar,
+              };
+            } else {
+              // 5. Query Firestore 'id_cards' by fullName / name
+              const idNameQ = query(collection(db, 'id_cards'), where('fullName', '==', targetQuery));
+              const idNameSnap = await getDocs(idNameQ);
+
+              if (!idNameSnap.empty) {
+                const d = idNameSnap.docs[0].data();
+                foundRecord = {
+                  id: idNameSnap.docs[0].id,
+                  name: d.fullName || d.name || targetQuery,
+                  registrationNumber: (d.registrationNumber || d.regNo || '').toUpperCase(),
+                  email: (d.email || idNameSnap.docs[0].id).toLowerCase(),
+                  team: d.team || 'Technical',
+                  position: d.position || DEFAULT_POSITIONS[0],
+                  photoUrl: d.photoUrl || d.photo || d.imageUrl,
+                  avatarUrl: d.avatarUrl || d.avatar,
+                };
+              }
+            }
           }
         }
       }
@@ -952,7 +993,7 @@ const AdminMemberRegistration: React.FC<AdminMemberPortalProps> = ({ onRedirect,
         setRemoveDossier(foundRecord);
       } else {
         setRemoveDossier(null);
-        setErrorMessage(`No member record found for Registration Number: "${targetReg}".`);
+        setErrorMessage(`No member record found for Name or Registration Number: "${targetQuery}".`);
       }
     } catch (err: any) {
       console.error('Error finding member dossier:', err);
@@ -1696,22 +1737,27 @@ const AdminMemberRegistration: React.FC<AdminMemberPortalProps> = ({ onRedirect,
 
             <div className="space-y-3 sm:space-y-4 mb-6 sm:mb-8">
               <label className="block font-label-caps text-[10px] sm:text-xs text-red-300 font-bold tracking-widest uppercase">
-                ENTER REGISTRATION NUMBER TO PREVIEW DOSSIER *
+                ENTER MEMBER NAME OR REGISTRATION NUMBER TO PREVIEW DOSSIER *
               </label>
               <div className="flex flex-col sm:flex-row gap-3">
                 <input
                   type="text"
                   value={removeRegNoInput}
                   onChange={(e) => {
-                    const val = e.target.value.toUpperCase();
+                    const val = e.target.value;
                     setRemoveRegNoInput(val);
-                    if (val) handleSearchRemoveDossier(val);
+                    if (val.trim()) {
+                      handleSearchRemoveDossier(val);
+                    } else {
+                      setRemoveDossier(null);
+                      setErrorMessage('');
+                    }
                   }}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') handleSearchRemoveDossier();
                   }}
-                  placeholder="e.g. 24BCE10263"
-                  className="flex-1 bg-[#130924]/80 border border-red-900/50 rounded-xl px-3.5 py-3 text-white font-code-sm uppercase placeholder-slate-500 focus:border-red-700 focus:outline-none transition-all text-base sm:text-sm min-h-[44px]"
+                  placeholder="e.g. Alex Morgan or 24BCE10263"
+                  className="flex-1 bg-[#130924]/80 border border-red-900/50 rounded-xl px-3.5 py-3 text-white placeholder-slate-500 focus:border-red-700 focus:outline-none transition-all text-base sm:text-sm min-h-[44px]"
                 />
                 <button
                   type="button"
