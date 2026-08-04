@@ -1,12 +1,16 @@
 "use client";
 
 import React, { useRef, useState, useEffect } from 'react';
+import { isMemberAdminUser } from '@/lib/adminAuth';
 
 interface DashboardProps {
   onPageChange: (page: string) => void;
+  userEmail?: string;
+  isAdmin?: boolean;
 }
 
-const Dashboard: React.FC<DashboardProps> = ({ onPageChange }) => {
+const Dashboard: React.FC<DashboardProps> = ({ onPageChange, userEmail, isAdmin }) => {
+  const isMemberAdmin = isMemberAdminUser(userEmail);
   const cardRef = useRef<HTMLDivElement | null>(null);
   const [transformStyle, setTransformStyle] = useState<React.CSSProperties>({});
 
@@ -97,7 +101,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onPageChange }) => {
           {/* Referral Program Card */}
           <button
             onClick={() => onPageChange('referrals')}
-            className="group relative flex flex-col items-start p-8 bg-[#1A1A1A] border border-[#333333] hover:border-purple-500 rounded-2xl glow-hover transition-all duration-300 text-left overflow-hidden h-[300px] w-full"
+            className="group relative flex flex-col items-start p-6 sm:p-7 bg-[#1A1A1A] border border-[#333333] hover:border-purple-500 rounded-2xl glow-hover transition-all duration-300 text-left overflow-hidden min-h-[320px] h-auto w-full"
           >
             <div className="absolute -right-4 -top-4 opacity-10 group-hover:opacity-20 transition-opacity">
               <span className="material-symbols-outlined text-[150px] text-purple-400">share</span>
@@ -113,7 +117,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onPageChange }) => {
                 Expand the VRGC network. Track affiliate status and manage reward milestones.
               </p>
             </div>
-            <div className="mt-4 w-full flex items-center justify-between z-10">
+            <div className="mt-6 w-full flex items-center justify-between z-10 pt-2">
               <span className="font-label-caps text-xs text-purple-400 font-bold group-hover:translate-x-2 transition-transform duration-300">
                 OPEN PROGRAM
               </span>
@@ -124,7 +128,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onPageChange }) => {
           {/* Payments & Dues Portal Card */}
           <button
             onClick={() => onPageChange('payments')}
-            className="group relative flex flex-col items-start p-8 bg-[#1A1A1A] border border-[#333333] hover:border-purple-500 rounded-2xl glow-hover transition-all duration-300 text-left overflow-hidden h-[300px] w-full"
+            className="group relative flex flex-col items-start p-6 sm:p-7 bg-[#1A1A1A] border border-[#333333] hover:border-purple-500 rounded-2xl glow-hover transition-all duration-300 text-left overflow-hidden min-h-[320px] h-auto w-full"
           >
             <div className="absolute -right-4 -top-4 opacity-10 group-hover:opacity-20 transition-opacity">
               <span className="material-symbols-outlined text-[150px] text-purple-400">payments</span>
@@ -140,7 +144,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onPageChange }) => {
                 Manage club membership fees, payment receipts, active dues, and payment logs.
               </p>
             </div>
-            <div className="mt-4 w-full flex items-center justify-between z-10">
+            <div className="mt-6 w-full flex items-center justify-between z-10 pt-2">
               <span className="font-label-caps text-xs text-purple-400 font-bold group-hover:translate-x-2 transition-transform duration-300">
                 PAY DUES
               </span>
@@ -151,7 +155,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onPageChange }) => {
           {/* ID Card Portal Card */}
           <button
             onClick={() => onPageChange('idcard')}
-            className="group relative flex flex-col items-start p-8 bg-[#1A1A1A] border border-[#333333] hover:border-purple-500 rounded-2xl glow-hover transition-all duration-300 text-left overflow-hidden h-[300px] w-full"
+            className="group relative flex flex-col items-start p-6 sm:p-7 bg-[#1A1A1A] border border-[#333333] hover:border-purple-500 rounded-2xl glow-hover transition-all duration-300 text-left overflow-hidden min-h-[320px] h-auto w-full"
           >
             <div className="absolute -right-4 -top-4 opacity-10 group-hover:opacity-20 transition-opacity">
               <span className="material-symbols-outlined text-[150px] text-purple-400">badge</span>
@@ -167,7 +171,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onPageChange }) => {
                 Claim your VRGC Digital ID credentials. Submit profile photo and download generated pass.
               </p>
             </div>
-            <div className="mt-4 w-full flex items-center justify-between z-10">
+            <div className="mt-6 w-full flex items-center justify-between z-10 pt-2">
               <span className="font-label-caps text-xs text-purple-400 font-bold group-hover:translate-x-2 transition-transform duration-300">
                 GENERATE CARD
               </span>
@@ -178,7 +182,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onPageChange }) => {
           {/* Support Tickets Card */}
           <button
             onClick={() => onPageChange('tickets')}
-            className="group relative flex flex-col items-start p-8 bg-[#1A1A1A] border border-[#333333] hover:border-purple-500 rounded-2xl glow-hover transition-all duration-300 text-left overflow-hidden h-[300px] w-full"
+            className="group relative flex flex-col items-start p-6 sm:p-7 bg-[#1A1A1A] border border-[#333333] hover:border-purple-500 rounded-2xl glow-hover transition-all duration-300 text-left overflow-hidden min-h-[320px] h-auto w-full"
           >
             <div className="absolute -right-4 -top-4 opacity-10 group-hover:opacity-20 transition-opacity">
               <span className="material-symbols-outlined text-[150px] text-purple-400">confirmation_number</span>
@@ -194,13 +198,42 @@ const Dashboard: React.FC<DashboardProps> = ({ onPageChange }) => {
                 Priority support for hardware issues, server calibration, and account operations.
               </p>
             </div>
-            <div className="mt-4 w-full flex items-center justify-between z-10">
+            <div className="mt-6 w-full flex items-center justify-between z-10 pt-2">
               <span className="font-label-caps text-xs text-purple-400 font-bold group-hover:translate-x-2 transition-transform duration-300">
                 LOCKED
               </span>
               <span className="material-symbols-outlined text-white">lock</span>
             </div>
           </button>
+
+          {/* Admin Member Portal Card (Admin Only) */}
+          {isMemberAdmin && (
+            <button
+              onClick={() => onPageChange('admin-register')}
+              className="group relative flex flex-col items-start p-6 sm:p-7 bg-gradient-to-br from-[#1c0c2d] to-[#0e0518] border border-amber-500/40 hover:border-amber-400 rounded-2xl glow-hover transition-all duration-300 text-left overflow-hidden min-h-[320px] h-auto w-full shadow-[0_0_30px_rgba(245,158,11,0.15)]"
+            >
+              <div className="absolute -right-4 -top-4 opacity-10 group-hover:opacity-25 transition-opacity">
+                <span className="material-symbols-outlined text-[150px] text-amber-400">manage_accounts</span>
+              </div>
+              <div className="mb-auto z-10">
+                <div className="w-14 h-14 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center mb-6">
+                  <span className="material-symbols-outlined text-amber-400 text-3xl">admin_panel_settings</span>
+                </div>
+                <h3 className="font-display-lg text-xl text-white font-bold mb-2">
+                  Admin Member Portal
+                </h3>
+                <p className="text-slate-400 text-sm leading-relaxed">
+                  Add new members, update existing member details, or delete member dossiers from database.
+                </p>
+              </div>
+              <div className="mt-6 w-full flex items-center justify-between z-10 pt-2">
+                <span className="font-label-caps text-xs text-amber-400 font-bold group-hover:translate-x-2 transition-transform duration-300">
+                  OPEN MEMBER PORTAL
+                </span>
+                <span className="material-symbols-outlined text-amber-400">arrow_forward</span>
+              </div>
+            </button>
+          )}
         </div>
       </div>
     </div>

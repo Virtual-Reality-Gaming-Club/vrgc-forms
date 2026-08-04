@@ -6,8 +6,8 @@ export const CONFIG = {
   GOOGLE_SCRIPT_ID_CARD_URL: process.env.NEXT_PUBLIC_GOOGLE_SCRIPT_ID_CARD_URL || "",
   
   // Supabase Configuration
-  SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL || "",
-  SUPABASE_ANON_KEY: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "",
+  SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL || "https://fopyejijjeoumimsdgiz.supabase.co",
+  SUPABASE_ANON_KEY: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.unconfigured_dev_key",
 
   // Whitelisted Admins (managed dynamically via Firestore / admins collection or env variable)
   ADMIN_EMAILS: (process.env.NEXT_PUBLIC_ADMIN_EMAILS || '')

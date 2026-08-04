@@ -2,6 +2,7 @@
 
 import React from 'react';
 import Link from 'next/link';
+import { isMemberAdminUser } from '@/lib/adminAuth';
 
 interface NavbarProps {
   pageTitle?: string;
@@ -9,9 +10,11 @@ interface NavbarProps {
   isAdmin?: boolean;
   onLogout?: () => Promise<void> | void;
   onLogin?: () => Promise<void> | void;
+  onNavigateAdmin?: () => void;
 }
 
-const Navbar: React.FC<NavbarProps> = ({ pageTitle = 'Dashboard', userEmail, isAdmin, onLogout, onLogin }) => {
+const Navbar: React.FC<NavbarProps> = ({ pageTitle = 'Dashboard', userEmail, isAdmin, onLogout, onLogin, onNavigateAdmin }) => {
+  const isMemberAdmin = isMemberAdminUser(userEmail);
   const extractRegNo = (emailAddress?: string | null) => {
     if (!emailAddress) return null;
     const match = emailAddress.match(/\b\d{2}[a-zA-Z]{3}\d{5}\b/);
@@ -47,12 +50,16 @@ const Navbar: React.FC<NavbarProps> = ({ pageTitle = 'Dashboard', userEmail, isA
 
       {/* Right side: user info + status + auth buttons */}
       <div className="flex items-center gap-2 sm:gap-3 relative z-10 shrink-0">
-        {/* Admin Badge */}
-        {isAdmin && (
-          <span className="hidden sm:inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[9px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-[0_0_10px_rgba(245,158,11,0.2)]">
-            <span className="material-symbols-outlined text-[11px]">shield</span>
-            ADMIN
-          </span>
+        {/* Admin Badge & Portal Shortcut */}
+        {isMemberAdmin && (
+          <button
+            onClick={() => onNavigateAdmin && onNavigateAdmin()}
+            title="Open Admin Member Registration Portal"
+            className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-bold bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 shadow-[0_0_12px_rgba(245,158,11,0.25)] transition-all cursor-pointer"
+          >
+            <span className="material-symbols-outlined text-[13px]">shield</span>
+            <span>ADMIN</span>
+          </button>
         )}
 
         {/* User Email & Registration Number Pill */}

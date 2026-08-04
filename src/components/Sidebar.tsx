@@ -1,20 +1,25 @@
 "use client";
 
 import React from 'react';
+import { isMemberAdminUser } from '@/lib/adminAuth';
 
 interface SidebarProps {
   activePage: string;
   onPageChange: (pageId: string) => void;
   isAdmin?: boolean;
+  userEmail?: string;
 }
 
-const Sidebar: React.FC<SidebarProps> = ({ activePage, onPageChange }) => {
+const Sidebar: React.FC<SidebarProps> = ({ activePage, onPageChange, isAdmin, userEmail }) => {
+  const isMemberAdmin = isMemberAdminUser(userEmail);
+
   const menuItems = [
     { id: 'dashboard', label: 'Dashboard', icon: 'dashboard' },
     { id: 'referrals', label: 'Referrals', icon: 'share' },
     { id: 'idcard', label: 'ID Card Form', icon: 'badge' },
     { id: 'payments', label: 'Payments & Dues', icon: 'payments' },
     { id: 'tickets', label: 'Tickets', icon: 'confirmation_number' },
+    ...(isMemberAdmin ? [{ id: 'admin-register', label: 'Admin Member Portal', icon: 'manage_accounts' }] : []),
   ];
 
   return (
@@ -43,3 +48,4 @@ const Sidebar: React.FC<SidebarProps> = ({ activePage, onPageChange }) => {
 };
 
 export default Sidebar;
+

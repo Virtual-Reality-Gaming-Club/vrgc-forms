@@ -154,7 +154,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setIsAuthorized(false);
         setMemberData(null);
         setAuthError('Access Denied: You are not a registered VRGC member. Please contact admin.');
-        signOut(auth).catch(console.error);
+        if (auth) signOut(auth).catch(console.error);
       }
     } catch (err: any) {
       console.error('AuthProvider resolution error:', err);
@@ -165,6 +165,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
+    if (!auth) {
+      setAuthLoading(false);
+      return;
+    }
     const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
       setAuthLoading(true);
       resolveUser(firebaseUser);
@@ -175,6 +179,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const handleLogin = useCallback(async () => {
     setAuthError('');
+    if (!auth) {
+      setAuthError('Firebase Auth is not configured. Please set NEXT_PUBLIC_FIREBASE_API_KEY in your .env.local file.');
+      return;
+    }
     try {
       await signInWithPopup(auth, googleProvider);
     } catch (err: any) {
@@ -192,6 +200,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const handleLogout = useCallback(async () => {
+    if (!auth) return;
     try {
       await signOut(auth);
     } catch (err) {

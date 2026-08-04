@@ -10,8 +10,10 @@ import Tickets from '@/components/Tickets';
 import Payments from '@/components/Payments';
 import Lobby25MemberEntry from '@/components/Lobby25MemberEntry';
 import Lobby24MemberEntry from '@/components/Lobby24MemberEntry';
+import AdminMemberRegistration from '@/components/AdminMemberRegistration';
 import Footer from '@/components/Footer';
 import { useAuth } from '@/lib/auth-context';
+import { isMemberAdminUser } from '@/lib/adminAuth';
 import { signInWithPopup, GoogleAuthProvider } from 'firebase/auth';
 import { auth } from '@/lib/firebase';
 
@@ -23,6 +25,7 @@ function AppContent() {
   const [activePage, setActivePage] = useState<string>('dashboard');
   const [toast, setToast] = useState<string | null>(null);
   const [toastKey, setToastKey] = useState<number>(0);
+  const isMemberAdmin = isMemberAdminUser(userEmail);
 
   const showToast = (message: string) => {
     setToast(message);
@@ -30,16 +33,16 @@ function AppContent() {
     setTimeout(() => setToast(null), 3000);
   };
 
-  // Parse initial tab from clean URL path (e.g. /referrals, /idcard, /payments)
+  // Parse initial tab from clean URL path (e.g. /referrals, /idcard, /payments, /admin-register)
   React.useEffect(() => {
     if (typeof window !== 'undefined') {
       const path = window.location.pathname.replace(/^\//, '');
       const params = new URLSearchParams(window.location.search);
       const tabParam = params.get('tab');
       
-      if (path && ['referrals', 'idcard', 'payments', 'dashboard', 'batch24', 'batch25'].includes(path)) {
+      if (path && ['referrals', 'idcard', 'payments', 'dashboard', 'batch24', 'batch25', 'admin-register'].includes(path)) {
         setActivePage(path);
-      } else if (tabParam && ['dashboard', 'referrals', 'idcard', 'payments', 'batch24', 'batch25'].includes(tabParam)) {
+      } else if (tabParam && ['dashboard', 'referrals', 'idcard', 'payments', 'batch24', 'batch25', 'admin-register'].includes(tabParam)) {
         setActivePage(tabParam);
       }
     }
@@ -67,6 +70,7 @@ function AppContent() {
       case 'idcard': return 'ID Card Portal';
       case 'payments': return 'Payments & Dues Portal';
       case 'tickets': return 'Tickets';
+      case 'admin-register': return 'Admin Member Portal';
       default: return 'Command Center';
     }
   };
@@ -143,13 +147,20 @@ function AppContent() {
   // ── Main app shell (Dashboard is public, sub-pages require sign-in) ───────
   return (
     <div className="min-h-screen bg-[#05010a] text-[#e2e8f0] flex flex-col custom-scrollbar">
-      <Navbar pageTitle={getPageTitle()} userEmail={userEmail} isAdmin={isAdmin} onLogout={handleLogout} onLogin={handleLogin} />
+      <Navbar
+        pageTitle={getPageTitle()}
+        userEmail={userEmail}
+        isAdmin={isAdmin}
+        onLogout={handleLogout}
+        onLogin={handleLogin}
+        onNavigateAdmin={() => handlePageChange('admin-register')}
+      />
 
       <div className="flex flex-1">
-        <Sidebar activePage={activePage} onPageChange={handlePageChange} isAdmin={isAdmin} />
+        <Sidebar activePage={activePage} onPageChange={handlePageChange} isAdmin={isAdmin} userEmail={userEmail} />
 
         <main className="flex-grow min-w-0 pb-24 md:pb-12 min-h-[calc(100vh-76px)] flex flex-col">
-          {activePage === 'dashboard' && <Dashboard onPageChange={handlePageChange} />}
+          {activePage === 'dashboard' && <Dashboard onPageChange={handlePageChange} userEmail={userEmail} isAdmin={isAdmin} />}
           {activePage === 'batch25' && (
             user ? <Lobby25MemberEntry onRedirect={() => handlePageChange('dashboard')} /> : renderRestrictedSignIn('Lobby 25')
           )}
@@ -190,6 +201,13 @@ function AppContent() {
             ) : renderRestrictedSignIn('Payments & Dues')
           )}
           {activePage === 'tickets' && <Tickets onRedirect={() => handlePageChange('dashboard')} />}
+          {activePage === 'admin-register' && (
+            user && isMemberAdmin ? (
+              <AdminMemberRegistration onRedirect={() => handlePageChange('dashboard')} currentUserEmail={userEmail} />
+            ) : (
+              renderRestrictedSignIn('Admin Member Registration')
+            )
+          )}
         </main>
       </div>
 
@@ -211,10 +229,12 @@ function AppContent() {
           <span className="material-symbols-outlined text-xl">payments</span>
           <span className="font-label-caps text-[9px]">PAYMENTS</span>
         </button>
-        <button onClick={() => handlePageChange('tickets')} className={`flex flex-col items-center gap-1 ${activePage === 'tickets' ? 'text-purple-400 font-bold' : 'text-slate-400'}`}>
-          <span className="material-symbols-outlined text-xl">confirmation_number</span>
-          <span className="font-label-caps text-[9px]">TICKETS</span>
-        </button>
+        {isMemberAdmin && (
+          <button onClick={() => handlePageChange('admin-register')} className={`flex flex-col items-center gap-1 ${activePage === 'admin-register' ? 'text-amber-400 font-bold' : 'text-amber-400/70'}`}>
+            <span className="material-symbols-outlined text-xl">person_add</span>
+            <span className="font-label-caps text-[9px]">ADMIN</span>
+          </button>
+        )}
       </nav>
 
       {/* Toast */}
