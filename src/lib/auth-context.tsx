@@ -12,13 +12,22 @@ import {
 import { collection, query, where, getDocs, getDoc, doc } from 'firebase/firestore';
 import { CONFIG } from '@/lib/config';
 
-// Designated payment admin emails loaded from environment variables
-export const PAYMENT_ADMIN_EMAILS = (process.env.NEXT_PUBLIC_PAYMENT_ADMIN_EMAILS || '')
+// Designated payment admin emails (Restricted only to vrgc@vitbhopal.ac.in & developer)
+const DEFAULT_PAYMENT_ADMIN_EMAILS = [
+  'vrgc@vitbhopal.ac.in',
+  'vrgcdev@gmail.com',
+];
+
+const envPaymentAdmins = (process.env.NEXT_PUBLIC_PAYMENT_ADMIN_EMAILS || '')
   .split(',')
   .map((e) => e.trim().toLowerCase())
   .filter(Boolean);
-export const PAYMENT_ADMIN_EMAIL = PAYMENT_ADMIN_EMAILS[0] || '';
-export const ADMIN_EMAIL = PAYMENT_ADMIN_EMAILS[0] || '';
+
+export const PAYMENT_ADMIN_EMAILS = Array.from(
+  new Set([...DEFAULT_PAYMENT_ADMIN_EMAILS, ...envPaymentAdmins])
+);
+export const PAYMENT_ADMIN_EMAIL = 'vrgc@vitbhopal.ac.in';
+export const ADMIN_EMAIL = 'vrgc@vitbhopal.ac.in';
 
 const googleProvider = new GoogleAuthProvider();
 

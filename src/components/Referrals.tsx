@@ -21,6 +21,8 @@ interface MemberData {
   Phone?: string;
   Team?: string;
   Position?: string;
+  PhotoUrl?: string;
+  AvatarUrl?: string;
   [key: string]: any;
 }
 
@@ -172,30 +174,72 @@ const Referrals: React.FC<ReferralsProps> = ({
           console.warn('Error fetching admins from Firestore:', aErr);
         }
 
-        // Fetch members from Firestore 'id_cards' collection
+        // Fetch members from Firestore 'members' and 'id_cards' collections
+        const parsedMembersMap = new Map<string, MemberData>();
+
+        // 1. Query 'members' collection
         try {
-          const memberCol = collection(db, 'id_cards');
-          const memberSnap = await getDocs(memberCol);
-          const parsedMembers: MemberData[] = [];
-          memberSnap.forEach((docSnap) => {
+          const membersCol = collection(db, 'members');
+          const membersSnap = await getDocs(membersCol);
+          membersSnap.forEach((docSnap) => {
             const data = docSnap.data();
             const email = (data.email || docSnap.id || '').toLowerCase().trim();
+            const photoUrl = data.photoUrl || data.photo || data.imageUrl || data.publicUrl || '';
+            const avatarUrl = data.avatarUrl || data.avatar || '';
+
             if (email && email.includes('@')) {
-              parsedMembers.push({
-                Name: data.fullName || data.name || 'Member',
-                'Registration Number': data.regNo || data.registrationNumber || '',
+              parsedMembersMap.set(email, {
+                Name: data.name || data.fullName || 'Member',
+                'Registration Number': (data.registrationNumber || data.regNo || '').toUpperCase(),
                 Email: email,
                 Phone: data.phone || '',
-                Team: data.team || data.domain || 'Member',
+                Team: data.team || 'Member',
                 Position: data.position || 'Member',
+                PhotoUrl: photoUrl,
+                AvatarUrl: avatarUrl,
               });
             }
           });
-          if (parsedMembers.length > 0) {
-            setMembers(parsedMembers);
-          }
         } catch (mErr) {
-          console.warn('Error fetching members from Firestore:', mErr);
+          console.warn('Error fetching members collection:', mErr);
+        }
+
+        // 2. Query 'id_cards' collection and merge photo/avatar links
+        try {
+          const idCol = collection(db, 'id_cards');
+          const idSnap = await getDocs(idCol);
+          idSnap.forEach((docSnap) => {
+            const data = docSnap.data();
+            const email = (data.email || docSnap.id || '').toLowerCase().trim();
+            const photoUrl = data.photoUrl || data.photo || data.imageUrl || data.publicUrl || '';
+            const avatarUrl = data.avatarUrl || data.avatar || '';
+
+            if (email && email.includes('@')) {
+              const existing = parsedMembersMap.get(email);
+              if (existing) {
+                if (photoUrl) existing.PhotoUrl = photoUrl;
+                if (avatarUrl) existing.AvatarUrl = avatarUrl;
+                if (!existing['Registration Number']) existing['Registration Number'] = (data.regNo || data.registrationNumber || '').toUpperCase();
+              } else {
+                parsedMembersMap.set(email, {
+                  Name: data.fullName || data.name || 'Member',
+                  'Registration Number': (data.regNo || data.registrationNumber || '').toUpperCase(),
+                  Email: email,
+                  Phone: data.phone || '',
+                  Team: data.team || 'Member',
+                  Position: data.position || 'Member',
+                  PhotoUrl: photoUrl,
+                  AvatarUrl: avatarUrl,
+                });
+              }
+            }
+          });
+        } catch (idErr) {
+          console.warn('Error fetching id_cards collection:', idErr);
+        }
+
+        if (parsedMembersMap.size > 0) {
+          setMembers(Array.from(parsedMembersMap.values()));
         }
       } catch (err) {
         console.error('Error loading Firestore referral data:', err);
@@ -355,6 +399,14 @@ const Referrals: React.FC<ReferralsProps> = ({
       return;
     }
 
+    const userPhoto =
+      referrerInfo?.PhotoUrl ||
+      referrerInfo?.AvatarUrl ||
+      externalMemberData?.photoUrl ||
+      externalMemberData?.avatarUrl ||
+      currentUser?.photoURL ||
+      null;
+
     setIsSubmitting(true);
     const candidateData: ReferralRecord = {
       timestamp: new Date().toISOString(),
@@ -366,7 +418,7 @@ const Referrals: React.FC<ReferralsProps> = ({
       referrerName: referrerInfo?.Name || currentUser?.displayName || 'VRGC Member',
       referrerRegNo: referrerInfo?.['Registration Number'] || extractRegNo(currentUser?.email),
       referrerEmail: currentUser?.email || '',
-      referrerPhotoURL: currentUser?.photoURL || null,
+      referrerPhotoURL: userPhoto,
       status: 'Pending'
     };
 
@@ -449,49 +501,45 @@ const Referrals: React.FC<ReferralsProps> = ({
     const referrerStats: Record<string, any> = {};
 
     referrals.forEach(ref => {
-      const reg = getRefVal(ref, 'Referrer Registration Number') || getRefVal(ref, 'referrerRegNo') || "UNKNOWN";
-      const name = getRefVal(ref, 'Referrer Name') || getRefVal(ref, 'referrerName') || "VRGC Recruiter";
-      const status = (getRefVal(ref, 'Status') || getRefVal(ref, 'status') || "Pending").toString().toLowerCase();
-      const photoURL = getRefVal(ref, 'Referrer Photo URL') || getRefVal(ref, 'referrerPhotoURL') || null;
+      const regNo = (getRefVal(ref, 'Referrer Registration Number') || getRefVal(ref, 'referrerRegNo') || 'UNKNOWN').toString().toUpperCase().trim();
+      const name = getRefVal(ref, 'Referrer Name') || getRefVal(ref, 'referrerName') || 'VRGC Recruiter';
+      const status = (getRefVal(ref, 'Status') || getRefVal(ref, 'status') || 'Pending').toString().toLowerCase();
 
-      let xpAwarded = 10;
-      if (status === 'admitted') xpAwarded = 100;
-      else if (status.includes('interview')) xpAwarded = 50;
-      else if (status.includes('process')) xpAwarded = 20;
-
-      if (!referrerStats[reg]) {
-        referrerStats[reg] = {
+      if (!referrerStats[regNo]) {
+        referrerStats[regNo] = {
           name,
-          registrationNumber: reg,
-          totalReferrals: 0,
+          registrationNumber: regNo,
           totalXP: 0,
-          admittedCount: 0,
-          photoURL
+          pending: 0,
+          inProcess: 0,
+          admitted: 0,
+          rejected: 0,
         };
       }
 
-      referrerStats[reg].totalReferrals += 1;
-      referrerStats[reg].totalXP += xpAwarded;
-      if (status === 'admitted') referrerStats[reg].admittedCount += 1;
+      if (status === 'admitted') {
+        referrerStats[regNo].totalXP += 100;
+        referrerStats[regNo].admitted += 1;
+      } else if (status.includes('interview') || status.includes('process')) {
+        referrerStats[regNo].totalXP += 25;
+        referrerStats[regNo].inProcess += 1;
+      } else {
+        referrerStats[regNo].totalXP += 10;
+        referrerStats[regNo].pending += 1;
+      }
     });
 
     const sorted = Object.values(referrerStats).sort((a, b) => b.totalXP - a.totalXP);
-
-    let currentRank = 1;
-    let prevXP: number | null = null;
-    return sorted.map((rank, index) => {
-      if (index > 0 && rank.totalXP !== prevXP) {
-        currentRank = currentRank + 1;
-      }
-      prevXP = rank.totalXP;
-      return { ...rank, rankNumber: currentRank };
-    });
+    return sorted.map((item, index) => ({
+      ...item,
+      rankNumber: index + 1,
+    }));
   };
 
   const renderValorantRankBadge = (rankNum: number) => {
     if (rankNum === 1) {
       return (
-        <div className="w-10 h-10 bg-gradient-to-tr from-yellow-600 via-amber-400 to-yellow-200 rounded-xl border-2 border-yellow-300 flex flex-col items-center justify-center shadow-[0_0_15px_rgba(234,179,8,0.4)]">
+        <div className="w-10 h-10 bg-gradient-to-tr from-yellow-600 via-amber-400 to-yellow-200 rounded-xl border-2 border-yellow-300 flex flex-col items-center justify-center shadow-[0_0_20px_rgba(234,179,8,0.5)]">
           <span className="material-symbols-outlined text-black font-black text-base">military_tech</span>
           <span className="text-[7px] font-black text-black uppercase">RADIANT</span>
         </div>
@@ -822,53 +870,77 @@ const Referrals: React.FC<ReferralsProps> = ({
         </div>
 
         {/* Referrer Profile Badge */}
-        <div className="glass-panel p-6 rounded-2xl border border-purple-500/30 relative overflow-hidden bg-purple-950/20 flex flex-col md:flex-row items-center justify-between gap-6 shadow-[0_0_35px_rgba(207,92,255,0.1)]">
-          <div className="flex flex-col md:flex-row items-center gap-4 relative z-10 w-full md:w-auto text-center md:text-left">
-            <div className="relative mx-auto md:mx-0 shrink-0">
-              <img 
-                src={currentUser.photoURL || 'https://www.gravatar.com/avatar/?d=mp'} 
-                alt="User Profile" 
-                className="w-14 h-14 rounded-full border-2 border-purple-500 shadow-[0_0_15px_rgba(207,92,255,0.4)]"
-              />
-              <div className="absolute -bottom-1 -right-1 w-4 h-4 bg-green-500 rounded-full border-2 border-black flex items-center justify-center">
-                <div className="w-1.5 h-1.5 bg-green-300 rounded-full animate-ping"></div>
-              </div>
-            </div>
-            
-            <div className="space-y-1 w-full">
-              <div className="text-[9px] text-purple-400 font-bold tracking-[0.2em] font-label-caps uppercase flex items-center justify-center md:justify-start gap-1.5">
-                <span className="w-1.5 h-1.5 rounded-full bg-purple-400 animate-pulse"></span>
-                VERIFIED REFERRER IDENTITY
-              </div>
-              <div className="font-display-lg text-lg text-white font-extrabold tracking-wide">
-                {referrerInfo ? referrerInfo.Name : currentUser.displayName || 'VRGC Operator'}
-              </div>
-              <div className="font-code-sm text-xs text-slate-400 tracking-wider flex flex-wrap justify-center md:justify-start gap-x-3 gap-y-1">
-                <span>ID: <span className="text-purple-400 font-bold">{referrerInfo ? referrerInfo['Registration Number'] : extractRegNo(currentUser.email)}</span></span>
-                <span>|</span>
-                <span>RANK: <span className="text-yellow-400 font-bold">{userRank}</span></span>
-                <span>|</span>
-                <span>SCORE: <span className="text-purple-400 font-bold">{userXP} XP</span></span>
-              </div>
-            </div>
-          </div>
+        {(() => {
+          const userMemberPhoto =
+            referrerInfo?.PhotoUrl ||
+            referrerInfo?.AvatarUrl ||
+            externalMemberData?.photoUrl ||
+            externalMemberData?.avatarUrl ||
+            externalMemberData?.photo ||
+            externalMemberData?.avatar ||
+            currentUser?.photoURL ||
+            `https://api.dicebear.com/9.x/bottts/svg?seed=${encodeURIComponent(referrerInfo?.Name || currentUser?.displayName || 'Member')}`;
 
-          <div className="flex items-center gap-4 w-full md:w-auto justify-between md:justify-end">
-            <div className="text-center px-4 py-2 rounded-xl bg-white/5 border border-white/5">
-              <div className="text-[9px] text-slate-400 font-label-caps tracking-widest">DAILY SUBMISSIONS</div>
-              <div className="font-code-sm text-lg font-bold text-white">
-                <span className={dailyCount >= 5 ? 'text-red-500' : 'text-purple-400'}>{dailyCount}</span> / 5
+          return (
+            <div className="glass-panel p-6 rounded-2xl border border-purple-500/30 relative overflow-hidden bg-purple-950/20 flex flex-col md:flex-row items-center justify-between gap-6 shadow-[0_0_35px_rgba(207,92,255,0.1)]">
+              <div className="flex flex-col md:flex-row items-center gap-4 relative z-10 w-full md:w-auto text-center md:text-left">
+                <div className="relative mx-auto md:mx-0 shrink-0">
+                  <img 
+                    src={userMemberPhoto} 
+                    alt="User Profile" 
+                    className="w-14 h-14 rounded-full border-2 border-purple-500 shadow-[0_0_15px_rgba(207,92,255,0.4)] object-cover bg-purple-950/80"
+                    onError={(e) => {
+                      const target = e.target as HTMLImageElement;
+                      if (referrerInfo?.AvatarUrl && target.src !== referrerInfo.AvatarUrl) {
+                        target.src = referrerInfo.AvatarUrl;
+                      } else if (currentUser?.photoURL && target.src !== currentUser.photoURL) {
+                        target.src = currentUser.photoURL;
+                      } else {
+                        target.src = `https://api.dicebear.com/9.x/bottts/svg?seed=${encodeURIComponent(referrerInfo?.Name || currentUser?.displayName || 'Member')}`;
+                      }
+                    }}
+                  />
+                  <div className="absolute -bottom-1 -right-1 w-4 h-4 bg-green-500 rounded-full border-2 border-black flex items-center justify-center">
+                    <div className="w-1.5 h-1.5 bg-green-300 rounded-full animate-ping"></div>
+                  </div>
+                </div>
+                
+                <div className="space-y-1 w-full">
+                  <div className="text-[9px] text-purple-400 font-bold tracking-[0.2em] font-label-caps uppercase flex items-center justify-center md:justify-start gap-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-purple-400 animate-pulse"></span>
+                    VERIFIED REFERRER IDENTITY
+                  </div>
+                  <div className="font-display-lg text-lg text-white font-extrabold tracking-wide">
+                    {referrerInfo ? referrerInfo.Name : currentUser.displayName || 'VRGC Operator'}
+                  </div>
+                  <div className="font-code-sm text-xs text-slate-400 tracking-wider flex flex-wrap justify-center md:justify-start gap-x-3 gap-y-1">
+                    <span>ID: <span className="text-purple-400 font-bold">{referrerInfo ? referrerInfo['Registration Number'] : extractRegNo(currentUser.email)}</span></span>
+                    <span>|</span>
+                    <span>RANK: <span className="text-yellow-400 font-bold">{userRank}</span></span>
+                    <span>|</span>
+                    <span>SCORE: <span className="text-purple-400 font-bold">{userXP} XP</span></span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-4 w-full md:w-auto justify-between md:justify-end">
+                <div className="text-center px-4 py-2 rounded-xl bg-white/5 border border-white/5">
+                  <div className="text-[9px] text-slate-400 font-label-caps tracking-widest">DAILY SUBMISSIONS</div>
+                  <div className="font-code-sm text-lg font-bold text-white">
+                    <span className={dailyCount >= 5 ? 'text-red-500' : 'text-purple-400'}>{dailyCount}</span> / 5
+                  </div>
+                </div>
+                <button 
+                  onClick={handleSignOut}
+                  className="flex items-center justify-center gap-2 text-xs text-red-400 hover:text-red-300 font-label-caps font-bold border border-red-500/30 hover:border-red-500/60 px-5 py-3 rounded-xl hover:bg-red-500/10 transition-all duration-300"
+                >
+                  <span className="material-symbols-outlined text-base">logout</span>
+                  <span>LOGOUT</span>
+                </button>
               </div>
             </div>
-            <button 
-              onClick={handleSignOut}
-              className="flex items-center justify-center gap-2 text-xs text-red-400 hover:text-red-300 font-label-caps font-bold border border-red-500/30 hover:border-red-500/60 px-5 py-3 rounded-xl hover:bg-red-500/10 transition-all duration-300"
-            >
-              <span className="material-symbols-outlined text-base">logout</span>
-              <span>LOGOUT</span>
-            </button>
-          </div>
-        </div>
+          );
+        })()}
 
         {/* TAB 1: FORM */}
         {activeTab === 'form' && (

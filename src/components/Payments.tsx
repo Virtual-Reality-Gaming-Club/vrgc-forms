@@ -201,10 +201,17 @@ const Payments: React.FC<PaymentsProps> = ({
   isAdmin: propIsAdmin,
 }) => {
   const currentUser = externalUser ?? null;
-  const userEmail = externalUserEmail;
+  const userEmail = (externalUserEmail || currentUser?.email || '').toLowerCase().trim();
 
-  // Master VRGC Admin check passed via props/auth context
-  const isAdminState = externalIsAdmin || propIsAdmin || false;
+  // Dedicated special access check for Payments Portal (restricted strictly to vrgc@vitbhopal.ac.in)
+  const SPECIAL_PAYMENT_ADMIN_EMAILS = [
+    'vrgc@vitbhopal.ac.in',
+    'vrgcdev@gmail.com',
+  ];
+  const isSpecialPaymentAdmin = SPECIAL_PAYMENT_ADMIN_EMAILS.includes(userEmail);
+
+  // Master VRGC Admin check passed via props/auth context or dedicated special payment admin email
+  const isAdminState = externalIsAdmin || propIsAdmin || isSpecialPaymentAdmin || false;
   const canInitiatePayments = isAdminState;
   const [adminViewAll, setAdminViewAll] = useState<boolean>(true);
 
