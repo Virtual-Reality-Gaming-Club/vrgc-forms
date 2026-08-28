@@ -8,6 +8,10 @@ import {
   createPaymentInFirestore,
   updatePaymentStatusInFirestore,
   deletePaymentFromFirestore,
+  batchDeleteCampaignFromFirestore,
+  updateInvoiceDetailsInFirestore,
+  batchUpdateCampaignInFirestore,
+  toggleCampaignFacultyVisibility,
   saveInvoiceToFirestore,
   saveTransactionToFirestore,
   fetchInvoicesFromFirestore,
@@ -19,6 +23,7 @@ import {
   getLogEventTimestamp,
   parseTimestampMs,
   TransactionLog,
+  togglePaymentFacultyVisibility,
   PAYMENTS_COLLECTION,
   INVOICES_COLLECTION,
 } from '@/lib/payments';
@@ -54,8 +59,11 @@ import {
   Check,
   FileSpreadsheet,
   Eye,
+  EyeOff,
   Layers,
-  ArrowUpRight
+  ArrowUpRight,
+  Pencil,
+  Lock,
 } from 'lucide-react';
 
 interface PaymentsProps {
@@ -64,6 +72,7 @@ interface PaymentsProps {
   externalUser?: User | null;
   externalUserEmail?: string;
   externalIsAdmin?: boolean;
+  externalIsFaculty?: boolean;
   // Legacy prop kept for backwards compat
   isAdmin?: boolean;
 }
@@ -121,10 +130,13 @@ export function getInvoiceTimeDetails(payment: PaymentItem) {
   });
 
   const dueDateFormatted = payment.due_date
-    ? new Date(payment.due_date).toLocaleDateString('en-IN', {
+    ? new Date(payment.due_date).toLocaleString('en-IN', {
       day: 'numeric',
       month: 'short',
       year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true,
     })
     : 'No Due Date';
 
@@ -140,17 +152,41 @@ export function getPresetDateStr(daysAhead: number): string {
   return d.toISOString().split('T')[0];
 }
 
-export function formatDueDateToEodIst(dateStr?: string): string {
+export function formatDueDateTimeToIso(dateStr?: string, timeStr?: string): string {
   if (!dateStr || !dateStr.trim()) {
     return new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
   }
-  if (dateStr.includes('T') || dateStr.includes(':')) {
+  const time = (timeStr && timeStr.trim()) ? timeStr.trim() : '23:59';
+  const timeFormatted = time.length === 5 ? `${time}:00` : time;
+  if (dateStr.includes('T')) {
     return new Date(dateStr).toISOString();
   }
-  const eodDate = new Date(`${dateStr.trim()}T23:59:59+05:30`);
-  return !isNaN(eodDate.getTime())
-    ? eodDate.toISOString()
-    : new Date(dateStr).toISOString();
+  const combined = `${dateStr.trim()}T${timeFormatted}+05:30`;
+  const parsed = new Date(combined);
+  return !isNaN(parsed.getTime()) ? parsed.toISOString() : new Date(dateStr).toISOString();
+}
+
+export function splitDueDateTime(isoString?: string) {
+  if (!isoString) return { date: getPresetDateStr(7), time: '23:59' };
+  try {
+    const d = new Date(isoString);
+    if (isNaN(d.getTime())) return { date: getPresetDateStr(7), time: '23:59' };
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    const hours = String(d.getHours()).padStart(2, '0');
+    const minutes = String(d.getMinutes()).padStart(2, '0');
+    return {
+      date: `${year}-${month}-${day}`,
+      time: `${hours}:${minutes}`,
+    };
+  } catch {
+    return { date: getPresetDateStr(7), time: '23:59' };
+  }
+}
+
+export function formatDueDateToEodIst(dateStr?: string): string {
+  return formatDueDateTimeToIso(dateStr, '23:59');
 }
 
 export function renderDescriptionBox(description: string) {
@@ -174,9 +210,9 @@ export function renderDescriptionBox(description: string) {
       .trim();
 
     return (
-      <div className="mt-2.5 p-3 rounded-xl bg-gradient-to-r from-amber-500/15 via-purple-900/25 to-amber-500/10 border border-amber-500/35 shadow-[0_0_20px_rgba(245,158,11,0.12)] relative overflow-hidden group">
-        <div className="flex items-center gap-1.5 text-[10px] font-extrabold tracking-wider text-amber-300 uppercase mb-1">
-          <AlertCircle className="w-3.5 h-3.5 text-amber-400 flex-shrink-0 animate-pulse" />
+      <div className="mt-2.5 p-3 rounded-xl bg-[#120726]/90 border border-purple-500/35 shadow-[0_0_20px_rgba(168,85,247,0.12)] relative overflow-hidden group">
+        <div className="flex items-center gap-1.5 text-[10px] font-extrabold tracking-wider text-purple-300 uppercase mb-1">
+          <AlertCircle className="w-3.5 h-3.5 text-purple-400 flex-shrink-0 animate-pulse" />
           <span>Important Notice</span>
         </div>
         <p className="text-[11px] text-slate-200 leading-relaxed font-medium whitespace-pre-line">
@@ -198,13 +234,15 @@ const Payments: React.FC<PaymentsProps> = ({
   externalUser,
   externalUserEmail = '',
   externalIsAdmin = false,
+  externalIsFaculty = false,
   isAdmin: propIsAdmin,
 }) => {
   const currentUser = externalUser ?? null;
   const userEmail = externalUserEmail;
 
-  // Master VRGC Admin check passed via props/auth context
+  // Role checks
   const isAdminState = externalIsAdmin || propIsAdmin || false;
+  const isFacultyState = externalIsFaculty || false;
   const canInitiatePayments = isAdminState;
   const [adminViewAll, setAdminViewAll] = useState<boolean>(true);
 
@@ -239,9 +277,37 @@ const Payments: React.FC<PaymentsProps> = ({
   const [multiCategory, setMultiCategory] = useState<string>('Club Fee');
   const [multiDescription, setMultiDescription] = useState<string>('');
   const [multiDueDate, setMultiDueDate] = useState<string>('');
+  const [multiDueTime, setMultiDueTime] = useState<string>('23:59');
   const [selectedMultiMemberEmails, setSelectedMultiMemberEmails] = useState<string[]>([]);
   const [multiSearch, setMultiSearch] = useState<string>('');
   const [assigningMulti, setAssigningMulti] = useState<boolean>(false);
+
+  // Edit Campaign (Batch Invoice) Modal State
+  const [editCampaignGroup, setEditCampaignGroup] = useState<CampaignGroup | null>(null);
+  const [editTitle, setEditTitle] = useState<string>('');
+  const [editDescription, setEditDescription] = useState<string>('');
+  const [editDueDate, setEditDueDate] = useState<string>('');
+  const [editDueTime, setEditDueTime] = useState<string>('23:59');
+  const [editVisibleToFaculty, setEditVisibleToFaculty] = useState<boolean>(true);
+  const [savingEdit, setSavingEdit] = useState<boolean>(false);
+
+  // Edit Single Payment Modal State
+  const [editSinglePayment, setEditSinglePayment] = useState<PaymentItem | null>(null);
+  const [editSingleTitle, setEditSingleTitle] = useState<string>('');
+  const [editSingleDescription, setEditSingleDescription] = useState<string>('');
+  const [editSingleDueDate, setEditSingleDueDate] = useState<string>('');
+  const [editSingleDueTime, setEditSingleDueTime] = useState<string>('23:59');
+  const [savingSingleEdit, setSavingSingleEdit] = useState<boolean>(false);
+
+  // Non-blocking Custom Delete Modal State
+  const [deleteTarget, setDeleteTarget] = useState<{
+    type: 'campaign' | 'single';
+    title: string;
+    itemIds: string[];
+    memberName?: string;
+    totalAssigned?: number;
+  } | null>(null);
+  const [deletingInProgress, setDeletingInProgress] = useState<boolean>(false);
 
   // Transaction Logs & Audit Modal (admin only)
   const [transactionLogs, setTransactionLogs] = useState<TransactionLog[]>([]);
@@ -277,6 +343,52 @@ const Payments: React.FC<PaymentsProps> = ({
     }
   };
 
+  // Visibility states for faculty
+  const [newVisibleToFaculty, setNewVisibleToFaculty] = useState<boolean>(true);
+  const [allVisibleToFaculty, setAllVisibleToFaculty] = useState<boolean>(true);
+  const [multiVisibleToFaculty, setMultiVisibleToFaculty] = useState<boolean>(true);
+
+  const handleToggleFacultyVisibility = async (payment: PaymentItem) => {
+    const currentVis = payment.visible_to_faculty !== false;
+    const newVis = !currentVis;
+    const ok = await togglePaymentFacultyVisibility(payment.id, newVis);
+    if (ok) {
+      setPayments((prev) =>
+        prev.map((p) => (p.id === payment.id ? { ...p, visible_to_faculty: newVis } : p))
+      );
+      showToast(newVis ? 'Payment marked visible to faculty.' : 'Payment hidden from faculty.', 'info');
+    } else {
+      showToast('Failed to update faculty visibility in database.', 'error');
+    }
+  };
+
+  const handleToggleCampaignFacultyVisibility = async (group: CampaignGroup) => {
+    const isCurrentlyVisible = group.items.some((i) => i.visible_to_faculty !== false);
+    const newVis = !isCurrentlyVisible;
+    const itemIds = group.items.map((i) => i.id);
+    const itemIdsSet = new Set(itemIds);
+
+    const ok = await toggleCampaignFacultyVisibility(itemIds, newVis);
+    if (ok) {
+      setPayments((prev) =>
+        prev.map((p) => (itemIdsSet.has(p.id) ? { ...p, visible_to_faculty: newVis } : p))
+      );
+      logAdminAction({
+        adminEmail: userEmail || 'admin',
+        action: 'EDIT_INVOICE_CAMPAIGN',
+        details: `${newVis ? 'Enabled' : 'Disabled'} faculty visibility for campaign "${group.title}" (${itemIds.length} records)`,
+      });
+      showToast(
+        newVis
+          ? `Campaign "${group.title}" is now VISIBLE to Faculty Desk! 👁️`
+          : `Campaign "${group.title}" is now HIDDEN from Faculty Desk! 🙈`,
+        'info'
+      );
+    } else {
+      showToast('Failed to update faculty visibility in database.', 'error');
+    }
+  };
+
   // Single Member Due Form state
   const [selectedMemberEmail, setSelectedMemberEmail] = useState<string>('');
   const [singleMemberSearch, setSingleMemberSearch] = useState<string>('');
@@ -287,6 +399,7 @@ const Payments: React.FC<PaymentsProps> = ({
   const [newCategory, setNewCategory] = useState<string>('Club Fee');
   const [newDescription, setNewDescription] = useState<string>('');
   const [newDueDate, setNewDueDate] = useState<string>('');
+  const [newDueTime, setNewDueTime] = useState<string>('23:59');
   const [creating, setCreating] = useState<boolean>(false);
 
   // All Members Due Form state
@@ -295,6 +408,7 @@ const Payments: React.FC<PaymentsProps> = ({
   const [allCategory, setAllCategory] = useState<string>('Club Fee');
   const [allDescription, setAllDescription] = useState<string>('');
   const [allDueDate, setAllDueDate] = useState<string>('');
+  const [allDueTime, setAllDueTime] = useState<string>('23:59');
   const [assigningAll, setAssigningAll] = useState<boolean>(false);
 
   // Load registered crew members from Firestore ('members' and 'id_cards' collections)
@@ -358,7 +472,10 @@ const Payments: React.FC<PaymentsProps> = ({
   const loadPayments = useCallback(async (email: string, adminStatus: boolean) => {
     setLoading(true);
     try {
-      const data = await fetchPaymentsFromFirestore(email, adminStatus);
+      let data = await fetchPaymentsFromFirestore(email, adminStatus);
+      if (isFacultyState) {
+        data = data.filter((p) => p.visible_to_faculty !== false);
+      }
       setPayments(data);
     } catch (err) {
       console.error('Error loading payments:', err);
@@ -366,7 +483,7 @@ const Payments: React.FC<PaymentsProps> = ({
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [isFacultyState]);
 
   // Filter pending personal dues for the logged-in user (including payment admins)
   const personalPendingDues = useMemo(() => {
@@ -377,29 +494,32 @@ const Payments: React.FC<PaymentsProps> = ({
   }, [payments, userEmail]);
 
   useEffect(() => {
-    if (userEmail) {
-      loadPayments(userEmail, isAdminState && adminViewAll);
+    if (userEmail || isFacultyState) {
+      loadPayments(userEmail, (isAdminState && adminViewAll) || isFacultyState);
     } else {
       setLoading(false);
     }
-  }, [userEmail, isAdminState, adminViewAll, loadPayments]);
+  }, [userEmail, isAdminState, adminViewAll, isFacultyState, loadPayments]);
 
   // Firestore realtime listener for payments collection
   useEffect(() => {
-    if (!userEmail) return;
+    if (!userEmail && !isFacultyState) return;
 
     const colRef = collection(db, PAYMENTS_COLLECTION);
-    const q = isAdminState && adminViewAll
+    const q = (isAdminState && adminViewAll) || isFacultyState
       ? query(colRef)
       : query(colRef, where('user_email', '==', userEmail.toLowerCase()));
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      const items: PaymentItem[] = [];
+      let items: PaymentItem[] = [];
       snapshot.forEach((docSnap) => {
         const data = docSnap.data();
         const rawItem: PaymentItem = {
           id: docSnap.id,
           user_email: data.user_email || '',
+          candidate_name: data.candidate_name || data.user_name || '',
+          registration_number: data.registration_number || data.regNo || '',
+          team: data.team || '',
           title: data.title || '',
           description: data.description || '',
           category: data.category || 'Club Fee',
@@ -411,11 +531,18 @@ const Payments: React.FC<PaymentsProps> = ({
           razorpay_payment_id: data.razorpay_payment_id || '',
           razorpay_signature: data.razorpay_signature || '',
           paid_at: data.paid_at || '',
+          visible_to_faculty: data.visible_to_faculty !== undefined ? !!data.visible_to_faculty : true,
           created_at: data.created_at?.toDate ? data.created_at.toDate().toISOString() : data.created_at || new Date().toISOString(),
           updated_at: data.updated_at?.toDate ? data.updated_at.toDate().toISOString() : data.updated_at || new Date().toISOString(),
         };
         items.push(checkProcessingTimeout(rawItem));
       });
+
+      // If viewing as faculty, filter to only payments visible to faculty
+      if (isFacultyState) {
+        items = items.filter((p) => p.visible_to_faculty !== false);
+      }
+
       items.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
       setPayments(items);
       setLoading(false);
@@ -424,7 +551,7 @@ const Payments: React.FC<PaymentsProps> = ({
     });
 
     return () => unsubscribe();
-  }, [userEmail, isAdminState, adminViewAll]);
+  }, [userEmail, isAdminState, adminViewAll, isFacultyState]);
 
   // Periodically check and auto-expire stale "Processing" sessions (> 12 minutes)
   useEffect(() => {
@@ -559,7 +686,8 @@ const Payments: React.FC<PaymentsProps> = ({
         amount: Number(newAmount),
         currency: 'INR',
         status: 'Pending' as PaymentStatus,
-        due_date: formatDueDateToEodIst(newDueDate),
+        due_date: formatDueDateTimeToIso(newDueDate, newDueTime),
+        visible_to_faculty: newVisibleToFaculty,
       });
 
       if (created) {
@@ -585,6 +713,8 @@ const Payments: React.FC<PaymentsProps> = ({
       setSingleMemberSearch('');
       setShowSingleDropdown(false);
       setNewDueDate('');
+      setNewDueTime('23:59');
+      setNewVisibleToFaculty(true);
     } catch (err: any) {
       showToast(err.message || 'Failed to create payment due', 'error');
     } finally {
@@ -622,7 +752,8 @@ const Payments: React.FC<PaymentsProps> = ({
           amount: Number(allAmount),
           currency: 'INR',
           status: 'Pending' as PaymentStatus,
-          due_date: formatDueDateToEodIst(allDueDate),
+          due_date: formatDueDateTimeToIso(allDueDate, allDueTime),
+          visible_to_faculty: allVisibleToFaculty,
         });
         if (created) createdCount++;
       }
@@ -640,6 +771,8 @@ const Payments: React.FC<PaymentsProps> = ({
       setAllAmount('');
       setAllDescription('');
       setAllDueDate('');
+      setAllDueTime('23:59');
+      setAllVisibleToFaculty(true);
     } catch (err: any) {
       showToast(err.message || 'Failed to assign dues to all members.', 'error');
     } finally {
@@ -677,7 +810,8 @@ const Payments: React.FC<PaymentsProps> = ({
           amount: Number(multiAmount),
           currency: 'INR',
           status: 'Pending' as PaymentStatus,
-          due_date: formatDueDateToEodIst(multiDueDate),
+          due_date: formatDueDateTimeToIso(multiDueDate, multiDueTime),
+          visible_to_faculty: multiVisibleToFaculty,
         });
         if (created) createdCount++;
       }
@@ -695,37 +829,206 @@ const Payments: React.FC<PaymentsProps> = ({
       setMultiAmount('');
       setMultiDescription('');
       setMultiDueDate('');
+      setMultiDueTime('23:59');
       setSelectedMultiMemberEmails([]);
       setMultiSearch('');
+      setMultiVisibleToFaculty(true);
     } catch (err: any) {
-      showToast(err.message || 'Failed to assign dues to selected members.', 'error');
+      showToast(err.message || 'Failed to assign dues to members.', 'error');
     } finally {
       setAssigningMulti(false);
     }
   };
 
-  // Delete payment (Admin function)
-  const handleDeletePayment = async (paymentId: string) => {
-    if (!isAdminState) return;
-    if (!confirm('Are you sure you want to delete this payment record?')) return;
+  // Open Edit Campaign Modal
+  const handleOpenEditCampaign = (group: CampaignGroup) => {
+    const first = group.items[0];
+    const { date, time } = splitDueDateTime(group.due_date || first?.due_date);
+    setEditCampaignGroup(group);
+    setEditTitle(group.title);
+    setEditDescription(first?.description || '');
+    setEditDueDate(date);
+    setEditDueTime(time);
+    setEditVisibleToFaculty(first?.visible_to_faculty !== false);
+  };
 
-    const ok = await deletePaymentFromFirestore(paymentId);
-    logAdminAction({
-      adminEmail: userEmail || 'admin',
-      action: 'DELETE',
-      details: `Deleted payment due record #${paymentId.slice(0, 8)}`,
-    });
-    if (ok) {
-      setPayments((prev) => prev.filter((p) => p.id !== paymentId));
-      if (activeRosterCampaign) {
-        setActiveRosterCampaign((prev) =>
-          prev ? { ...prev, items: prev.items.filter((item) => item.id !== paymentId) } : null
+  // Save Edit Campaign (Batch)
+  const handleSaveEditCampaign = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editCampaignGroup || !isAdminState) return;
+
+    if (!editTitle.trim()) {
+      showToast('Please enter a valid invoice title.', 'error');
+      return;
+    }
+
+    setSavingEdit(true);
+    try {
+      const finalIsoDueDate = formatDueDateTimeToIso(editDueDate, editDueTime);
+      const itemIds = editCampaignGroup.items.map((i) => i.id);
+      const itemIdsSet = new Set(itemIds);
+      const cleanTitle = editTitle.trim();
+      const cleanDesc = editDescription.trim();
+
+      const ok = await batchUpdateCampaignInFirestore(itemIds, {
+        title: cleanTitle,
+        description: cleanDesc,
+        due_date: finalIsoDueDate,
+        visible_to_faculty: editVisibleToFaculty,
+      });
+
+      if (ok) {
+        setPayments((prev) =>
+          prev.map((p) =>
+            itemIdsSet.has(p.id)
+              ? {
+                  ...p,
+                  title: cleanTitle,
+                  description: cleanDesc,
+                  due_date: finalIsoDueDate,
+                  visible_to_faculty: editVisibleToFaculty,
+                }
+              : p
+          )
+        );
+        logAdminAction({
+          adminEmail: userEmail || 'admin',
+          action: 'EDIT_INVOICE_CAMPAIGN',
+          details: `Updated campaign "${cleanTitle}" across ${itemIds.length} members (Due: ${finalIsoDueDate}, FacultyVis: ${editVisibleToFaculty})`,
+        });
+        showToast(`Invoice updated across all ${itemIds.length} members! ✏️`, 'success');
+        setEditCampaignGroup(null);
+      } else {
+        showToast('Failed to update campaign invoices.', 'error');
+      }
+    } catch (err: any) {
+      showToast(err.message || 'Error updating campaign', 'error');
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+
+  // Open Edit Single Payment Modal
+  const handleOpenEditSingle = (payment: PaymentItem) => {
+    const { date, time } = splitDueDateTime(payment.due_date);
+    setEditSinglePayment(payment);
+    setEditSingleTitle(payment.title);
+    setEditSingleDescription(payment.description || '');
+    setEditSingleDueDate(date);
+    setEditSingleDueTime(time);
+  };
+
+  // Save Edit Single Payment
+  const handleSaveEditSingle = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editSinglePayment || !isAdminState) return;
+
+    if (!editSingleTitle.trim()) {
+      showToast('Please enter a valid payment title.', 'error');
+      return;
+    }
+
+    setSavingSingleEdit(true);
+    try {
+      const finalIsoDueDate = formatDueDateTimeToIso(editSingleDueDate, editSingleDueTime);
+      const cleanTitle = editSingleTitle.trim();
+      const cleanDesc = editSingleDescription.trim();
+
+      const ok = await updateInvoiceDetailsInFirestore(editSinglePayment.id, {
+        title: cleanTitle,
+        description: cleanDesc,
+        due_date: finalIsoDueDate,
+      });
+
+      if (ok) {
+        setPayments((prev) =>
+          prev.map((p) =>
+            p.id === editSinglePayment.id
+              ? {
+                  ...p,
+                  title: cleanTitle,
+                  description: cleanDesc,
+                  due_date: finalIsoDueDate,
+                }
+              : p
+          )
+        );
+        logAdminAction({
+          adminEmail: userEmail || 'admin',
+          action: 'EDIT_INVOICE_SINGLE',
+          targetEmail: editSinglePayment.user_email,
+          details: `Updated invoice "${cleanTitle}" for ${editSinglePayment.user_email}`,
+        });
+        showToast('Member invoice updated successfully! ✏️', 'success');
+        setEditSinglePayment(null);
+      } else {
+        showToast('Failed to update invoice.', 'error');
+      }
+    } catch (err: any) {
+      showToast(err.message || 'Error updating invoice', 'error');
+    } finally {
+      setSavingSingleEdit(false);
+    }
+  };
+
+  // Delete payment or entire campaign (Admin function - Non-blocking)
+  const handleConfirmDelete = async () => {
+    if (!deleteTarget || !isAdminState) return;
+
+    setDeletingInProgress(true);
+    try {
+      if (deleteTarget.type === 'campaign') {
+        const itemIds = deleteTarget.itemIds;
+        // 1. Optimistically update local state immediately
+        setPayments((prev) =>
+          prev.filter((p) => !itemIds.includes(p.id) && p.title.trim() !== deleteTarget.title.trim())
+        );
+        if (activeRosterCampaign && activeRosterCampaign.title.trim() === deleteTarget.title.trim()) {
+          setActiveRosterCampaign(null);
+        }
+
+        // 2. Perform fast Firestore batch delete
+        const ok = await batchDeleteCampaignFromFirestore(itemIds);
+        logAdminAction({
+          adminEmail: userEmail || 'admin',
+          action: 'DELETE',
+          details: `Deleted campaign "${deleteTarget.title}" (${itemIds.length} records)`,
+        });
+        showToast(
+          ok
+            ? `Campaign "${deleteTarget.title}" deleted from database! 🗑️`
+            : `Campaign removed from current view.`,
+          'info'
+        );
+      } else {
+        // Single payment record deletion
+        const paymentId = deleteTarget.itemIds[0];
+        setPayments((prev) => prev.filter((p) => p.id !== paymentId));
+        if (activeRosterCampaign) {
+          setActiveRosterCampaign((prev) =>
+            prev ? { ...prev, items: prev.items.filter((item) => item.id !== paymentId) } : null
+          );
+        }
+
+        const ok = await deletePaymentFromFirestore(paymentId);
+        logAdminAction({
+          adminEmail: userEmail || 'admin',
+          action: 'DELETE',
+          details: `Deleted payment due record #${paymentId.slice(0, 8)}`,
+        });
+        showToast(
+          ok
+            ? 'Payment record deleted from database successfully.'
+            : 'Payment removed from current view.',
+          'info'
         );
       }
-      showToast('Payment record deleted from Firestore successfully.', 'info');
-    } else {
-      setPayments((prev) => prev.filter((p) => p.id !== paymentId));
-      showToast('Payment removed locally.', 'info');
+    } catch (err: any) {
+      console.error('Delete operation error:', err);
+      showToast(err.message || 'Error deleting invoice', 'error');
+    } finally {
+      setDeletingInProgress(false);
+      setDeleteTarget(null);
     }
   };
 
@@ -1046,9 +1349,9 @@ const Payments: React.FC<PaymentsProps> = ({
     }
   };
 
-  // Group Payments by Campaign Title for Admin View
+  // Group Payments by Campaign Title for Admin & Faculty View
   const campaignGroups = useMemo<CampaignGroup[]>(() => {
-    if (!isAdminState || !adminViewAll) return [];
+    if ((!isAdminState || !adminViewAll) && !isFacultyState) return [];
 
     const map = new Map<string, PaymentItem[]>();
 
@@ -1115,7 +1418,7 @@ const Payments: React.FC<PaymentsProps> = ({
     });
 
     return groups.sort((a, b) => b.totalAssigned - a.totalAssigned);
-  }, [payments, isAdminState, adminViewAll, selectedCategory, selectedStatus, searchQuery]);
+  }, [payments, isAdminState, adminViewAll, isFacultyState, selectedCategory, selectedStatus, searchQuery]);
 
   // Statistics calculation
   const stats = useMemo(() => {
@@ -1219,9 +1522,14 @@ const Payments: React.FC<PaymentsProps> = ({
                     <ShieldAlert className="w-3 h-3" /> ADMIN
                   </span>
                 )}
+                {isFacultyState && (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+                    <span className="material-symbols-outlined text-[12px]">school</span> FACULTY VIEW (READ-ONLY)
+                  </span>
+                )}
               </div>
               <p className="text-[11px] text-slate-500 mt-0.5 truncate">
-                {userEmail || 'Guest'} •{' '}
+                {isFacultyState ? 'Official Club Financial Ledger' : (userEmail || 'Guest')} •{' '}
                 <span className="text-emerald-400 font-semibold">Razorpay Secured</span>
               </p>
             </div>
@@ -1236,6 +1544,26 @@ const Payments: React.FC<PaymentsProps> = ({
               >
                 ← Dashboard
               </button>
+            )}
+            {isFacultyState && (
+              <>
+                <button
+                  onClick={() => handleExportCSV(undefined, true)}
+                  className="px-2.5 py-2 rounded-lg bg-emerald-600/15 hover:bg-emerald-600/25 text-emerald-300 border border-emerald-500/30 text-[11px] sm:text-xs font-bold transition-all flex items-center justify-center gap-1 whitespace-nowrap"
+                  title="Export Paid Records CSV"
+                >
+                  <FileSpreadsheet className="w-3.5 h-3.5 shrink-0" />
+                  <span>Paid CSV</span>
+                </button>
+                <button
+                  onClick={() => handleExportCSV(undefined, false)}
+                  className="px-2.5 py-2 rounded-lg bg-purple-600/15 hover:bg-purple-600/25 text-purple-300 border border-purple-500/30 text-[11px] sm:text-xs font-bold transition-all flex items-center justify-center gap-1 whitespace-nowrap"
+                  title="Export Full Ledger CSV"
+                >
+                  <Download className="w-3.5 h-3.5 shrink-0" />
+                  <span>Full Ledger CSV</span>
+                </button>
+              </>
             )}
             {isAdminState && (
               <>
@@ -1315,8 +1643,8 @@ const Payments: React.FC<PaymentsProps> = ({
         </div>
       </div>
 
-      {/* Summary Statistics — STRICTLY FOR Payment Admins */}
-      {canInitiatePayments && (
+      {/* Summary Statistics — Visible to Payment Admins & Faculty */}
+      {(canInitiatePayments || isFacultyState) && (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
           <div className="p-4 sm:p-5 rounded-2xl bg-[#0e0518]/90 border border-purple-500/20 backdrop-blur-md shadow-lg flex flex-col justify-between space-y-2">
             <div className="flex items-center justify-between text-slate-400 text-xs font-semibold">
@@ -1346,14 +1674,14 @@ const Payments: React.FC<PaymentsProps> = ({
 
           <div className="p-4 sm:p-5 rounded-2xl bg-[#0e0518]/90 border border-purple-500/20 backdrop-blur-md shadow-lg flex flex-col justify-between space-y-2">
             <div className="flex items-center justify-between text-slate-400 text-xs font-semibold">
-              <span>REGISTERED CREW</span>
+              <span>{isFacultyState ? 'AUTHORIZED INVOICES' : 'REGISTERED CREW'}</span>
               <Users className="w-4 h-4 text-purple-400" />
             </div>
             <div className="text-xl sm:text-2xl md:text-3xl font-black text-purple-300">
-              {membersList.length} Members
+              {isFacultyState ? `${campaignGroups.length} Campaign${campaignGroups.length !== 1 ? 's' : ''}` : `${membersList.length} Members`}
             </div>
             <div className="text-[11px] text-slate-400 font-medium">
-              Active club directory
+              {isFacultyState ? `${payments.length} Assigned records visible` : 'Active club directory'}
             </div>
           </div>
 
@@ -1568,8 +1896,8 @@ const Payments: React.FC<PaymentsProps> = ({
             </div>
           ))}
         </div>
-      ) : isAdminState && adminViewAll ? (
-        /* ADMIN VIEW: Unified Payment Due Campaign Cards */
+      ) : (isAdminState && adminViewAll) || isFacultyState ? (
+        /* ADMIN & FACULTY VIEW: Unified Payment Due Campaign Cards */
         campaignGroups.length === 0 ? (
           <div className="p-12 rounded-3xl bg-[#0e0518]/60 border border-purple-500/20 text-center space-y-4">
             <div className="w-16 h-16 rounded-full bg-purple-500/10 border border-purple-500/30 flex items-center justify-center mx-auto text-purple-400">
@@ -1577,17 +1905,21 @@ const Payments: React.FC<PaymentsProps> = ({
             </div>
             <h3 className="text-xl font-bold text-white">No Payment Campaigns Found</h3>
             <p className="text-sm text-slate-400 max-w-md mx-auto">
-              No active payment campaigns exist. Click below to assign a payment due to all crew members.
+              {isFacultyState
+                ? 'No faculty-authorized payment campaigns currently found in the system.'
+                : 'No active payment campaigns exist. Click below to assign a payment due to all crew members.'}
             </p>
-            <div className="pt-2 flex justify-center gap-3">
-              <button
-                onClick={() => setShowAssignAllModal(true)}
-                className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 text-xs font-bold text-white shadow-[0_0_20px_rgba(245,158,11,0.4)] transition-all flex items-center gap-2"
-              >
-                <Megaphone className="w-4 h-4" />
-                <span>Assign Due to ALL Members</span>
-              </button>
-            </div>
+            {isAdminState && (
+              <div className="pt-2 flex justify-center gap-3">
+                <button
+                  onClick={() => setShowAssignAllModal(true)}
+                  className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 text-xs font-bold text-white shadow-[0_0_20px_rgba(245,158,11,0.4)] transition-all flex items-center gap-2"
+                >
+                  <Megaphone className="w-4 h-4" />
+                  <span>Assign Due to ALL Members</span>
+                </button>
+              </div>
+            )}
           </div>
         ) : (
           <div className="space-y-6">
@@ -1597,7 +1929,7 @@ const Payments: React.FC<PaymentsProps> = ({
                 <span>Active Payment Campaigns ({campaignGroups.length})</span>
               </h2>
               <span className="text-[11px] sm:text-xs text-slate-400 block sm:inline">
-                Click any campaign to inspect assigned members and payment statuses.
+                Click Inspect Roster to view assigned members, paid status, and timestamps.
               </span>
             </div>
 
@@ -1621,28 +1953,70 @@ const Payments: React.FC<PaymentsProps> = ({
                     {/* Card Header */}
                     <div className="flex items-start justify-between gap-3">
                       <div className="flex-1 min-w-0">
-                        <span className="text-[9px] font-bold tracking-widest text-purple-400/80 uppercase">{group.category}</span>
+                        <div className="flex items-center gap-1.5 flex-wrap mb-1">
+                          <span className="text-[9px] font-bold tracking-widest text-purple-400/80 uppercase">{group.category}</span>
+                          {isAdminState && (
+                            group.items.some((i) => i.visible_to_faculty !== false) ? (
+                              <span className="text-[8px] font-bold text-emerald-300 bg-emerald-500/15 border border-emerald-500/30 px-1.5 py-0.5 rounded flex items-center gap-1">
+                                <Eye className="w-2.5 h-2.5 text-emerald-400" /> FACULTY: VISIBLE
+                              </span>
+                            ) : (
+                              <span className="text-[8px] font-bold text-slate-400 bg-slate-500/15 border border-slate-500/30 px-1.5 py-0.5 rounded flex items-center gap-1">
+                                <EyeOff className="w-2.5 h-2.5 text-slate-500" /> FACULTY: HIDDEN
+                              </span>
+                            )
+                          )}
+                        </div>
                         <h3 className="text-sm font-extrabold text-white mt-0.5 truncate leading-tight">{group.title}</h3>
                         {group.due_date && (
-                          <p className="text-[10px] text-slate-500 mt-1 flex items-center gap-1">
-                            <Clock className="w-2.5 h-2.5" />
-                            Due {new Date(group.due_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
+                          <p className="text-[10px] text-slate-400 mt-1 flex items-center gap-1">
+                            <Clock className="w-2.5 h-2.5 text-purple-400" />
+                            Due {new Date(group.due_date).toLocaleString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true })}
                           </p>
                         )}
                       </div>
                       <div className="flex items-center gap-1.5 flex-shrink-0">
                         <span className="text-xl font-black text-white">₹{group.amount.toLocaleString('en-IN')}</span>
-                        <button
-                          onClick={() => {
-                            if (confirm(`Delete ALL ${group.totalAssigned} invoice records for "${group.title}"? This cannot be undone.`)) {
-                              group.items.forEach((item) => handleDeletePayment(item.id));
-                            }
-                          }}
-                          title="Delete campaign"
-                          className="p-1.5 text-slate-700 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition-all"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+                        {isAdminState && (
+                          <>
+                            <button
+                              onClick={() => handleToggleCampaignFacultyVisibility(group)}
+                              title={group.items.some((i) => i.visible_to_faculty !== false) ? "Visible to Faculty (Click to Hide)" : "Hidden from Faculty (Click to Make Visible)"}
+                              className={`p-1.5 rounded-lg transition-all ${
+                                group.items.some((i) => i.visible_to_faculty !== false)
+                                  ? 'text-emerald-400 hover:bg-emerald-500/10'
+                                  : 'text-slate-500 hover:bg-white/10'
+                              }`}
+                            >
+                              {group.items.some((i) => i.visible_to_faculty !== false) ? (
+                                <Eye className="w-3.5 h-3.5" />
+                              ) : (
+                                <EyeOff className="w-3.5 h-3.5" />
+                              )}
+                            </button>
+                            <button
+                              onClick={() => handleOpenEditCampaign(group)}
+                              title="Edit Invoice Details & Visibility"
+                              className="p-1.5 text-slate-400 hover:text-amber-300 hover:bg-amber-500/10 rounded-lg transition-all"
+                            >
+                              <Pencil className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              onClick={() => {
+                                setDeleteTarget({
+                                  type: 'campaign',
+                                  title: group.title,
+                                  itemIds: group.items.map((item) => item.id),
+                                  totalAssigned: group.totalAssigned,
+                                });
+                              }}
+                              title="Delete campaign"
+                              className="p-1.5 text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition-all"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </>
+                        )}
                       </div>
                     </div>
 
@@ -1985,18 +2359,35 @@ const Payments: React.FC<PaymentsProps> = ({
                             )}
                           </div>
                           <div className="flex items-center gap-1">
+                            {isAdminState && (
+                              <button
+                                onClick={() => handleOpenEditSingle(item)}
+                                className="px-2 py-1 text-purple-300 hover:bg-purple-500/10 rounded-lg flex items-center gap-1 font-bold text-[10px]"
+                              >
+                                <Pencil className="w-3 h-3" /> Edit
+                              </button>
+                            )}
                             <button
                               onClick={() => handleOpenAuditModal(item)}
                               className="px-2 py-1 text-amber-400 hover:bg-amber-500/10 rounded-lg flex items-center gap-1 font-bold text-[10px]"
                             >
                               <FileText className="w-3 h-3" /> Audit Logs
                             </button>
-                            <button
-                              onClick={() => handleDeletePayment(item.id)}
-                              className="p-1 text-slate-500 hover:text-rose-400 rounded-lg"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
+                            {isAdminState && (
+                              <button
+                                onClick={() =>
+                                  setDeleteTarget({
+                                    type: 'single',
+                                    title: item.title,
+                                    itemIds: [item.id],
+                                    memberName: name || item.user_email,
+                                  })
+                                }
+                                className="p-1 text-slate-500 hover:text-rose-400 rounded-lg transition-all"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -2014,7 +2405,7 @@ const Payments: React.FC<PaymentsProps> = ({
                       <th className="p-3.5">Email</th>
                       <th className="p-3.5">Status</th>
                       <th className="p-3.5 text-right">Payment Ref / Date</th>
-                      <th className="p-3.5 text-center">Action</th>
+                      <th className="p-3.5 text-center">{isAdminState ? 'Action' : 'Audit Logs'}</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-white/5 font-mono text-slate-300">
@@ -2070,6 +2461,16 @@ const Payments: React.FC<PaymentsProps> = ({
                             </td>
                             <td className="p-3.5 text-center">
                               <div className="flex items-center justify-center gap-1">
+                                {isAdminState && (
+                                  <button
+                                    onClick={() => handleOpenEditSingle(item)}
+                                    title="Edit Invoice Details"
+                                    className="p-1.5 text-purple-300 hover:text-purple-200 hover:bg-purple-500/10 rounded-lg transition-all flex items-center gap-1 text-[10px] font-bold"
+                                  >
+                                    <Pencil className="w-3.5 h-3.5" />
+                                    <span>Edit</span>
+                                  </button>
+                                )}
                                 <button
                                   onClick={() => handleOpenAuditModal(item)}
                                   title="View Audit & Attempt Logs"
@@ -2078,13 +2479,22 @@ const Payments: React.FC<PaymentsProps> = ({
                                   <FileText className="w-3.5 h-3.5" />
                                   <span>Audit Logs</span>
                                 </button>
-                                <button
-                                  onClick={() => handleDeletePayment(item.id)}
-                                  title="Delete record"
-                                  className="p-1.5 text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition-all"
-                                >
-                                  <Trash2 className="w-3.5 h-3.5" />
-                                </button>
+                                {isAdminState && (
+                                  <button
+                                    onClick={() =>
+                                      setDeleteTarget({
+                                        type: 'single',
+                                        title: item.title,
+                                        itemIds: [item.id],
+                                        memberName: name || item.user_email,
+                                      })
+                                    }
+                                    title="Delete record"
+                                    className="p-1.5 text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition-all"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
                               </div>
                             </td>
                           </tr>
@@ -2485,15 +2895,23 @@ const Payments: React.FC<PaymentsProps> = ({
 
               <div>
                 <div className="flex items-center justify-between mb-1">
-                  <label className="block text-slate-300 font-semibold">Payment Due Date</label>
-                  <span className="text-[10px] text-slate-400">Default: 7 Days from today</span>
+                  <label className="block text-slate-300 font-semibold">Payment Due Date &amp; Time (IST)</label>
+                  <span className="text-[10px] text-slate-400">Default: 7 Days from today at 11:59 PM</span>
                 </div>
-                <input
-                  type="date"
-                  value={newDueDate}
-                  onChange={(e) => setNewDueDate(e.target.value)}
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-surface-container-lowest border border-white/10 text-white focus:outline-none focus:border-amber-500 font-mono text-xs"
-                />
+                <div className="grid grid-cols-3 gap-2">
+                  <input
+                    type="date"
+                    value={newDueDate}
+                    onChange={(e) => setNewDueDate(e.target.value)}
+                    className="col-span-2 px-3.5 py-2.5 rounded-xl bg-surface-container-lowest border border-white/10 text-white focus:outline-none focus:border-amber-500 font-mono text-xs"
+                  />
+                  <input
+                    type="time"
+                    value={newDueTime}
+                    onChange={(e) => setNewDueTime(e.target.value)}
+                    className="col-span-1 px-3 py-2.5 rounded-xl bg-surface-container-lowest border border-white/10 text-white focus:outline-none focus:border-amber-500 font-mono text-xs"
+                  />
+                </div>
                 <div className="flex items-center gap-1.5 mt-2 overflow-x-auto pb-1 custom-scrollbar">
                   <span className="text-[10px] text-slate-400 font-semibold flex-shrink-0">Presets:</span>
                   {[
@@ -2523,6 +2941,19 @@ const Payments: React.FC<PaymentsProps> = ({
                   value={newDescription}
                   onChange={(e) => setNewDescription(e.target.value)}
                   className="w-full px-3.5 py-2.5 rounded-xl bg-surface-container-lowest border border-white/10 text-white placeholder-slate-500 focus:outline-none focus:border-amber-500 resize-none"
+                />
+              </div>
+
+              <div className="flex items-center justify-between p-3 rounded-xl bg-purple-950/40 border border-purple-500/30">
+                <div>
+                  <span className="text-xs font-bold text-white block">Visible to Faculty</span>
+                  <span className="text-[10px] text-slate-400">Allow faculty members to view this payment due in payments portal</span>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={newVisibleToFaculty}
+                  onChange={(e) => setNewVisibleToFaculty(e.target.checked)}
+                  className="w-4 h-4 accent-purple-500 rounded cursor-pointer"
                 />
               </div>
             </div>
@@ -2617,15 +3048,23 @@ const Payments: React.FC<PaymentsProps> = ({
 
               <div>
                 <div className="flex items-center justify-between mb-1">
-                  <label className="block text-slate-300 font-semibold">Payment Due Date</label>
-                  <span className="text-[10px] text-slate-400">Default: 7 Days from today</span>
+                  <label className="block text-slate-300 font-semibold">Payment Due Date &amp; Time (IST)</label>
+                  <span className="text-[10px] text-slate-400">Default: 7 Days from today at 11:59 PM</span>
                 </div>
-                <input
-                  type="date"
-                  value={allDueDate}
-                  onChange={(e) => setAllDueDate(e.target.value)}
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-surface-container-lowest border border-white/10 text-white focus:outline-none focus:border-amber-500 font-mono text-xs"
-                />
+                <div className="grid grid-cols-3 gap-2">
+                  <input
+                    type="date"
+                    value={allDueDate}
+                    onChange={(e) => setAllDueDate(e.target.value)}
+                    className="col-span-2 px-3.5 py-2.5 rounded-xl bg-surface-container-lowest border border-white/10 text-white focus:outline-none focus:border-amber-500 font-mono text-xs"
+                  />
+                  <input
+                    type="time"
+                    value={allDueTime}
+                    onChange={(e) => setAllDueTime(e.target.value)}
+                    className="col-span-1 px-3 py-2.5 rounded-xl bg-surface-container-lowest border border-white/10 text-white focus:outline-none focus:border-amber-500 font-mono text-xs"
+                  />
+                </div>
                 <div className="flex items-center gap-1.5 mt-2 overflow-x-auto pb-1 custom-scrollbar">
                   <span className="text-[10px] text-slate-400 font-semibold flex-shrink-0">Presets:</span>
                   {[
@@ -2655,6 +3094,19 @@ const Payments: React.FC<PaymentsProps> = ({
                   value={allDescription}
                   onChange={(e) => setAllDescription(e.target.value)}
                   className="w-full px-3.5 py-2.5 rounded-xl bg-surface-container-lowest border border-white/10 text-white placeholder-slate-500 focus:outline-none focus:border-amber-500 resize-none"
+                />
+              </div>
+
+              <div className="flex items-center justify-between p-3 rounded-xl bg-purple-950/40 border border-purple-500/30">
+                <div>
+                  <span className="text-xs font-bold text-white block">Visible to Faculty</span>
+                  <span className="text-[10px] text-slate-400">Allow faculty members to view this broadcast due in payments portal</span>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={allVisibleToFaculty}
+                  onChange={(e) => setAllVisibleToFaculty(e.target.checked)}
+                  className="w-4 h-4 accent-purple-500 rounded cursor-pointer"
                 />
               </div>
             </div>
@@ -2749,15 +3201,23 @@ const Payments: React.FC<PaymentsProps> = ({
 
               <div>
                 <div className="flex items-center justify-between mb-1">
-                  <label className="block text-slate-300 font-semibold">Payment Due Date</label>
-                  <span className="text-[10px] text-slate-400">Default: 7 Days from today</span>
+                  <label className="block text-slate-300 font-semibold">Payment Due Date &amp; Time (IST)</label>
+                  <span className="text-[10px] text-slate-400">Default: 7 Days from today at 11:59 PM</span>
                 </div>
-                <input
-                  type="date"
-                  value={multiDueDate}
-                  onChange={(e) => setMultiDueDate(e.target.value)}
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-surface-container-lowest border border-white/10 text-white focus:outline-none focus:border-indigo-500 font-mono text-xs"
-                />
+                <div className="grid grid-cols-3 gap-2">
+                  <input
+                    type="date"
+                    value={multiDueDate}
+                    onChange={(e) => setMultiDueDate(e.target.value)}
+                    className="col-span-2 px-3.5 py-2.5 rounded-xl bg-surface-container-lowest border border-white/10 text-white focus:outline-none focus:border-indigo-500 font-mono text-xs"
+                  />
+                  <input
+                    type="time"
+                    value={multiDueTime}
+                    onChange={(e) => setMultiDueTime(e.target.value)}
+                    className="col-span-1 px-3 py-2.5 rounded-xl bg-surface-container-lowest border border-white/10 text-white focus:outline-none focus:border-indigo-500 font-mono text-xs"
+                  />
+                </div>
                 <div className="flex items-center gap-1.5 mt-2 overflow-x-auto pb-1 custom-scrollbar">
                   <span className="text-[10px] text-slate-400 font-semibold flex-shrink-0">Presets:</span>
                   {[
@@ -2787,6 +3247,19 @@ const Payments: React.FC<PaymentsProps> = ({
                   value={multiDescription}
                   onChange={(e) => setMultiDescription(e.target.value)}
                   className="w-full px-3.5 py-2.5 rounded-xl bg-surface-container-lowest border border-white/10 text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 resize-none"
+                />
+              </div>
+
+              <div className="flex items-center justify-between p-3 rounded-xl bg-purple-950/40 border border-purple-500/30">
+                <div>
+                  <span className="text-xs font-bold text-white block">Visible to Faculty</span>
+                  <span className="text-[10px] text-slate-400">Allow faculty members to view this targeted payment in payments portal</span>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={multiVisibleToFaculty}
+                  onChange={(e) => setMultiVisibleToFaculty(e.target.checked)}
+                  className="w-4 h-4 accent-purple-500 rounded cursor-pointer"
                 />
               </div>
 
@@ -2894,7 +3367,7 @@ const Payments: React.FC<PaymentsProps> = ({
               <button
                 type="submit"
                 disabled={assigningMulti || selectedMultiMemberEmails.length === 0}
-                className="flex-1 py-3 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-bold text-xs shadow-[0_0_20px_rgba(99,102,241,0.4)] transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                className="flex-1 py-3 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs shadow-[0_0_20px_rgba(168,85,247,0.4)] transition-all flex items-center justify-center gap-2 disabled:opacity-50"
               >
                 {assigningMulti ? `Assigning...` : `Assign to ${selectedMultiMemberEmails.length} Member(s)`}
               </button>
@@ -2902,6 +3375,276 @@ const Payments: React.FC<PaymentsProps> = ({
           </form>
         </div>
       )}
+      {/* Admin Edit Entire Campaign / Broadcast Due Modal */}
+      {editCampaignGroup && isAdminState && (
+        <div className="fixed inset-0 z-[130] bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <form
+            onSubmit={handleSaveEditCampaign}
+            className="bg-[#0e0518] border border-purple-500/50 rounded-3xl max-w-lg w-full p-6 md:p-8 space-y-5 shadow-[0_0_60px_rgba(168,85,247,0.3)] relative max-h-[90vh] overflow-y-auto custom-scrollbar"
+          >
+            <button
+              type="button"
+              onClick={() => setEditCampaignGroup(null)}
+              className="absolute top-4 right-4 p-2 text-slate-400 hover:text-white rounded-full bg-white/5 hover:bg-white/10 transition-all"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <div className="space-y-1">
+              <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded text-[10px] font-bold bg-purple-500/20 text-purple-300 border border-purple-500/40">
+                <Pencil className="w-3.5 h-3.5 text-purple-400" /> EDIT INVOICE CAMPAIGN
+              </div>
+              <h3 className="text-xl font-bold text-white">Modify Invoice Details</h3>
+              <p className="text-xs text-slate-400">
+                Updates will apply to all <strong className="text-purple-300">{editCampaignGroup.totalAssigned} assigned members</strong> for this invoice.
+              </p>
+            </div>
+
+            <div className="space-y-4 text-xs">
+              {/* Locked Amount Banner */}
+              <div className="p-3 rounded-xl bg-purple-950/30 border border-purple-500/20 flex items-center justify-between">
+                <div>
+                  <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider block">Invoice Amount (Locked)</span>
+                  <span className="text-sm font-black text-emerald-400">₹{editCampaignGroup.amount.toLocaleString('en-IN')} INR</span>
+                </div>
+                <div className="flex items-center gap-1 text-[10px] text-amber-300 font-semibold bg-amber-500/10 px-2 py-1 rounded-lg border border-amber-500/20">
+                  <Lock className="w-3 h-3 text-amber-400" />
+                  <span>Amount Cannot Be Changed</span>
+                </div>
+              </div>
+
+              {/* Title Input */}
+              <div>
+                <label className="block text-slate-300 font-semibold mb-1">Invoice / Payment Title *</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. VRGC Annual Club Fee 2026"
+                  value={editTitle}
+                  onChange={(e) => setEditTitle(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-surface-container-lowest border border-white/10 text-white placeholder-slate-500 focus:outline-none focus:border-purple-500"
+                />
+              </div>
+
+              {/* Due Date & Time */}
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-slate-300 font-semibold">Payment Due Date &amp; Time (IST) *</label>
+                  <span className="text-[10px] text-slate-400">Set deadline</span>
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  <input
+                    type="date"
+                    required
+                    value={editDueDate}
+                    onChange={(e) => setEditDueDate(e.target.value)}
+                    className="col-span-2 px-3.5 py-2.5 rounded-xl bg-surface-container-lowest border border-white/10 text-white focus:outline-none focus:border-purple-500 font-mono text-xs"
+                  />
+                  <input
+                    type="time"
+                    required
+                    value={editDueTime}
+                    onChange={(e) => setEditDueTime(e.target.value)}
+                    className="col-span-1 px-3 py-2.5 rounded-xl bg-surface-container-lowest border border-white/10 text-white focus:outline-none focus:border-purple-500 font-mono text-xs"
+                  />
+                </div>
+                <div className="flex items-center gap-1.5 mt-2 overflow-x-auto pb-1 custom-scrollbar">
+                  <span className="text-[10px] text-slate-400 font-semibold flex-shrink-0">Presets:</span>
+                  {[
+                    { label: '+1 Day', days: 1 },
+                    { label: '+3 Days', days: 3 },
+                    { label: '+7 Days', days: 7 },
+                    { label: '+14 Days', days: 14 },
+                    { label: '+30 Days', days: 30 },
+                  ].map((preset) => (
+                    <button
+                      key={preset.label}
+                      type="button"
+                      onClick={() => setEditDueDate(getPresetDateStr(preset.days))}
+                      className="px-2 py-1 rounded text-[10px] font-bold bg-purple-500/15 hover:bg-purple-500/30 text-purple-300 border border-purple-500/30 transition-all flex-shrink-0"
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Description */}
+              <div>
+                <label className="block text-slate-300 font-semibold mb-1">Description / Notes</label>
+                <textarea
+                  rows={3}
+                  placeholder="Brief description or instructions for members..."
+                  value={editDescription}
+                  onChange={(e) => setEditDescription(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-surface-container-lowest border border-white/10 text-white placeholder-slate-500 focus:outline-none focus:border-purple-500 resize-none"
+                />
+              </div>
+
+              {/* Visible to Faculty Toggle */}
+              <div className="flex items-center justify-between p-3.5 rounded-xl bg-indigo-950/30 border border-indigo-500/30">
+                <div>
+                  <span className="text-xs font-bold text-white block">Visible to Faculty Desk</span>
+                  <span className="text-[10px] text-slate-400">
+                    {editVisibleToFaculty
+                      ? 'Faculty members CAN view this invoice in faculty payments ledger'
+                      : 'Invoice is HIDDEN from faculty members'}
+                  </span>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={editVisibleToFaculty}
+                  onChange={(e) => setEditVisibleToFaculty(e.target.checked)}
+                  className="w-4 h-4 accent-purple-500 rounded cursor-pointer"
+                />
+              </div>
+            </div>
+
+            <div className="pt-2 flex gap-3">
+              <button
+                type="button"
+                onClick={() => setEditCampaignGroup(null)}
+                className="flex-1 py-3 rounded-xl bg-white/10 hover:bg-white/20 text-white font-bold text-xs transition-all"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={savingEdit}
+                className="flex-1 py-3 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs shadow-[0_0_20px_rgba(168,85,247,0.4)] transition-all flex items-center justify-center gap-2"
+              >
+                {savingEdit ? 'Saving Changes...' : `Update All (${editCampaignGroup.totalAssigned})`}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* Admin Edit Single Payment Record Modal */}
+      {editSinglePayment && isAdminState && (
+        <div className="fixed inset-0 z-[130] bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <form
+            onSubmit={handleSaveEditSingle}
+            className="bg-[#0e0518] border border-purple-500/50 rounded-3xl max-w-md w-full p-6 md:p-8 space-y-5 shadow-[0_0_60px_rgba(168,85,247,0.3)] relative max-h-[90vh] overflow-y-auto custom-scrollbar"
+          >
+            <button
+              type="button"
+              onClick={() => setEditSinglePayment(null)}
+              className="absolute top-4 right-4 p-2 text-slate-400 hover:text-white rounded-full bg-white/5 hover:bg-white/10 transition-all"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <div className="space-y-1">
+              <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded text-[10px] font-bold bg-purple-500/20 text-purple-300 border border-purple-500/40">
+                <Pencil className="w-3.5 h-3.5 text-purple-400" /> EDIT MEMBER INVOICE
+              </div>
+              <h3 className="text-xl font-bold text-white">Modify Member Invoice</h3>
+              <p className="text-xs text-slate-400 truncate">
+                Member: <strong className="text-purple-300">{editSinglePayment.candidate_name || editSinglePayment.user_email}</strong>
+              </p>
+            </div>
+
+            <div className="space-y-4 text-xs">
+              {/* Locked Amount Banner */}
+              <div className="p-3 rounded-xl bg-purple-950/30 border border-purple-500/20 flex items-center justify-between">
+                <div>
+                  <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider block">Invoice Amount (Locked)</span>
+                  <span className="text-sm font-black text-emerald-400">₹{editSinglePayment.amount.toLocaleString('en-IN')} INR</span>
+                </div>
+                <div className="flex items-center gap-1 text-[10px] text-amber-300 font-semibold bg-amber-500/10 px-2 py-1 rounded-lg border border-amber-500/20">
+                  <Lock className="w-3 h-3 text-amber-400" />
+                  <span>Non-Editable</span>
+                </div>
+              </div>
+
+              {/* Title Input */}
+              <div>
+                <label className="block text-slate-300 font-semibold mb-1">Invoice Title *</label>
+                <input
+                  type="text"
+                  required
+                  value={editSingleTitle}
+                  onChange={(e) => setEditSingleTitle(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-surface-container-lowest border border-white/10 text-white placeholder-slate-500 focus:outline-none focus:border-amber-500"
+                />
+              </div>
+
+              {/* Due Date & Time */}
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-slate-300 font-semibold">Payment Due Date &amp; Time (IST) *</label>
+                  <span className="text-[10px] text-slate-400">Deadline</span>
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  <input
+                    type="date"
+                    required
+                    value={editSingleDueDate}
+                    onChange={(e) => setEditSingleDueDate(e.target.value)}
+                    className="col-span-2 px-3.5 py-2.5 rounded-xl bg-surface-container-lowest border border-white/10 text-white focus:outline-none focus:border-amber-500 font-mono text-xs"
+                  />
+                  <input
+                    type="time"
+                    required
+                    value={editSingleDueTime}
+                    onChange={(e) => setEditSingleDueTime(e.target.value)}
+                    className="col-span-1 px-3 py-2.5 rounded-xl bg-surface-container-lowest border border-white/10 text-white focus:outline-none focus:border-amber-500 font-mono text-xs"
+                  />
+                </div>
+                <div className="flex items-center gap-1.5 mt-2 overflow-x-auto pb-1 custom-scrollbar">
+                  <span className="text-[10px] text-slate-400 font-semibold flex-shrink-0">Presets:</span>
+                  {[
+                    { label: '+1 Day', days: 1 },
+                    { label: '+3 Days', days: 3 },
+                    { label: '+7 Days', days: 7 },
+                    { label: '+14 Days', days: 14 },
+                    { label: '+30 Days', days: 30 },
+                  ].map((preset) => (
+                    <button
+                      key={preset.label}
+                      type="button"
+                      onClick={() => setEditSingleDueDate(getPresetDateStr(preset.days))}
+                      className="px-2 py-1 rounded text-[10px] font-bold bg-amber-500/15 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 transition-all flex-shrink-0"
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Description */}
+              <div>
+                <label className="block text-slate-300 font-semibold mb-1">Description / Notes</label>
+                <textarea
+                  rows={3}
+                  value={editSingleDescription}
+                  onChange={(e) => setEditSingleDescription(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-surface-container-lowest border border-white/10 text-white placeholder-slate-500 focus:outline-none focus:border-amber-500 resize-none"
+                />
+              </div>
+            </div>
+
+            <div className="pt-2 flex gap-3">
+              <button
+                type="button"
+                onClick={() => setEditSinglePayment(null)}
+                className="flex-1 py-3 rounded-xl bg-white/10 hover:bg-white/20 text-white font-bold text-xs transition-all"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={savingSingleEdit}
+                className="flex-1 py-3 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs shadow-[0_0_20px_rgba(168,85,247,0.4)] transition-all flex items-center justify-center gap-2"
+              >
+                {savingSingleEdit ? 'Saving...' : 'Save Invoice'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
       {/* Admin Individual Payment Audit Log Modal */}
       {auditModalPayment && (
         <div className="fixed inset-0 z-[130] bg-black/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-200">
@@ -3043,6 +3786,80 @@ const Payments: React.FC<PaymentsProps> = ({
                 className="px-5 py-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-white font-bold text-xs transition-all"
               >
                 Close Audit View
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Non-blocking Modern Delete Confirmation Modal */}
+      {deleteTarget && isAdminState && (
+        <div className="fixed inset-0 z-[140] bg-black/85 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-[#0e0518] border border-rose-500/50 rounded-3xl max-w-md w-full p-6 md:p-8 space-y-5 shadow-[0_0_60px_rgba(244,63,94,0.35)] relative animate-in zoom-in-95 duration-200">
+            <button
+              type="button"
+              disabled={deletingInProgress}
+              onClick={() => setDeleteTarget(null)}
+              className="absolute top-4 right-4 p-2 text-slate-400 hover:text-white rounded-full bg-white/5 hover:bg-white/10 transition-all disabled:opacity-50"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <div className="space-y-2">
+              <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded text-[10px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/40">
+                <Trash2 className="w-3.5 h-3.5 text-rose-400" /> CONFIRM PERMANENT DELETION
+              </div>
+              <h3 className="text-xl font-bold text-white">
+                {deleteTarget.type === 'campaign' ? 'Delete Entire Campaign?' : 'Delete Member Invoice?'}
+              </h3>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                {deleteTarget.type === 'campaign' ? (
+                  <>
+                    Are you sure you want to permanently delete campaign <strong className="text-rose-300">"{deleteTarget.title}"</strong> and all its <strong className="text-rose-300">{deleteTarget.totalAssigned || deleteTarget.itemIds.length} assigned member invoices</strong> from Firebase?
+                  </>
+                ) : (
+                  <>
+                    Are you sure you want to delete invoice <strong className="text-rose-300">"{deleteTarget.title}"</strong> for member <strong className="text-rose-300">{deleteTarget.memberName}</strong> from Firebase?
+                  </>
+                )}
+              </p>
+            </div>
+
+            <div className="p-3.5 rounded-xl bg-rose-950/30 border border-rose-500/30 text-xs text-rose-200 space-y-1">
+              <div className="font-bold flex items-center gap-1.5 text-rose-300">
+                <AlertCircle className="w-3.5 h-3.5" /> Warning: Action Cannot Be Undone
+              </div>
+              <p className="text-[11px] text-slate-300">
+                All associated records and transaction history will be purged from the database without freezing your browser.
+              </p>
+            </div>
+
+            <div className="pt-2 flex gap-3">
+              <button
+                type="button"
+                disabled={deletingInProgress}
+                onClick={() => setDeleteTarget(null)}
+                className="flex-1 py-3 rounded-xl bg-white/10 hover:bg-white/20 text-white font-bold text-xs transition-all disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={deletingInProgress}
+                onClick={handleConfirmDelete}
+                className="flex-1 py-3 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs shadow-[0_0_20px_rgba(244,63,94,0.3)] transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+              >
+                {deletingInProgress ? (
+                  <>
+                    <RotateCcw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Deleting from DB...</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Delete Forever</span>
+                  </>
+                )}
               </button>
             </div>
           </div>

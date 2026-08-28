@@ -78,6 +78,13 @@ const TECH_TEAM_LIST: TeamMember[] = [
     linkedinUrl: "https://www.linkedin.com/in/mohit-borekar-522879396/",
   },
   {
+    name: "Haardik Pahlajani",
+    role: "Creative Director",
+    badgeRole: "Student Coordinator",
+    githubUrl: "https://github.com/Haardik2111",
+    linkedinUrl: "https://www.linkedin.com/in/haardik-pahlajani-a550772b9/",
+  },
+  {
     name: "Parardha Dhar",
     role: "Technical Guide",
     badgeRole: "Student Coordinator",
@@ -212,7 +219,7 @@ export default function AboutPage() {
             {teamMembers.map((member) => {
               const isLead = member.rank === 1 || member.role === 'Technical Lead';
               const isCoLead = member.rank === 2 || member.role === 'Technical Co-Lead';
-              const isGuide = member.role?.toLowerCase().includes('guide');
+              const isCoordinator = member.badgeRole === 'Student Coordinator' || member.role?.toLowerCase().includes('guide');
 
               return (
                 <div
@@ -221,7 +228,7 @@ export default function AboutPage() {
                     ? 'bg-gradient-to-br from-amber-500/15 via-white/[0.04] to-pink-950/20 backdrop-blur-2xl border border-amber-500/40 shadow-[inset_0_1px_1px_rgba(255,255,255,0.3),0_0_35px_rgba(245,158,11,0.15)] hover:shadow-[inset_0_1px_1px_rgba(255,255,255,0.4),0_0_45px_rgba(245,158,11,0.25)]'
                     : isCoLead
                       ? 'bg-gradient-to-br from-purple-950/50 via-white/[0.04] to-pink-950/30 backdrop-blur-2xl border border-purple-500/40 shadow-[inset_0_1px_1px_rgba(255,255,255,0.25),0_0_25px_rgba(168,85,247,0.12)] hover:shadow-[inset_0_1px_1px_rgba(255,255,255,0.35),0_0_35px_rgba(168,85,247,0.22)]'
-                      : isGuide
+                      : isCoordinator
                         ? 'bg-gradient-to-br from-fuchsia-950/50 via-white/[0.04] to-purple-950/30 backdrop-blur-2xl border border-fuchsia-500/40 shadow-[inset_0_1px_1px_rgba(255,255,255,0.25),0_0_25px_rgba(217,70,239,0.12)] hover:shadow-[inset_0_1px_1px_rgba(255,255,255,0.35),0_0_35px_rgba(217,70,239,0.22)]'
                         : 'bg-gradient-to-b from-white/[0.07] via-white/[0.03] to-white/[0.01] backdrop-blur-2xl border border-white/[0.12] shadow-[inset_0_1px_1px_rgba(255,255,255,0.2)] hover:border-purple-500/40 hover:shadow-[inset_0_1px_1px_rgba(255,255,255,0.3),0_0_25px_rgba(168,85,247,0.15)]'
                     }`}
@@ -236,13 +243,13 @@ export default function AboutPage() {
                         ? 'bg-gradient-to-br from-amber-400 to-amber-600 text-black shadow-amber-500/40'
                         : isCoLead
                           ? 'bg-gradient-to-br from-purple-500 to-pink-500 text-white shadow-purple-500/40'
-                          : isGuide
+                          : isCoordinator
                             ? 'bg-gradient-to-br from-fuchsia-500 to-pink-600 text-white shadow-fuchsia-500/40'
                             : 'bg-white/10 text-slate-300 border border-white/10'
                         }`}>
                         {isLead ? (
                           <Crown className="w-4 h-4 fill-black" />
-                        ) : isGuide ? (
+                        ) : isCoordinator ? (
                           <ShieldCheck className="w-4 h-4 text-white" />
                         ) : member.rank ? (
                           `#${member.rank}`
@@ -256,13 +263,13 @@ export default function AboutPage() {
                         ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
                         : isCoLead
                           ? 'bg-purple-500/20 text-purple-200 border-purple-500/40'
-                          : isGuide
+                          : isCoordinator
                             ? 'bg-fuchsia-500/20 text-fuchsia-200 border-fuchsia-500/40'
                             : 'bg-slate-800/80 text-slate-300 border-slate-700'
                         }`}>
                         {isLead ? (
                           <Award className="w-3 h-3 text-amber-400" />
-                        ) : isGuide ? (
+                        ) : isCoordinator ? (
                           <Sparkles className="w-3 h-3 text-fuchsia-400" />
                         ) : (
                           <UserCheck className="w-3 h-3 text-purple-400" />

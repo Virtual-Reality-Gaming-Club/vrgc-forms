@@ -12,6 +12,8 @@ import {
 import { collection, query, where, getDocs, getDoc, doc } from 'firebase/firestore';
 import { CONFIG } from '@/lib/config';
 
+import { checkIsFaculty, ensureDefaultTestFaculty } from '@/lib/faculty';
+
 // Designated payment admin emails loaded from environment variables
 export const PAYMENT_ADMIN_EMAILS = (process.env.NEXT_PUBLIC_PAYMENT_ADMIN_EMAILS || '')
   .split(',')
@@ -36,6 +38,7 @@ interface AuthContextType {
   userEmail: string;
   isAdmin: boolean;
   isPaymentAdmin: boolean;
+  isFaculty: boolean;
   isAuthorized: boolean;
   memberData: MemberData | null;
   authLoading: boolean;
@@ -49,6 +52,7 @@ const AuthContext = createContext<AuthContextType>({
   userEmail: '',
   isAdmin: false,
   isPaymentAdmin: false,
+  isFaculty: false,
   isAuthorized: false,
   memberData: null,
   authLoading: true,
@@ -62,6 +66,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [userEmail, setUserEmail] = useState('');
   const [isAdmin, setIsAdmin] = useState(false);
   const [isPaymentAdmin, setIsPaymentAdmin] = useState(false);
+  const [isFaculty, setIsFaculty] = useState(false);
   const [isAuthorized, setIsAuthorized] = useState(false);
   const [memberData, setMemberData] = useState<MemberData | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -74,6 +79,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUserEmail('');
       setIsAdmin(false);
       setIsPaymentAdmin(false);
+      setIsFaculty(false);
       setIsAuthorized(false);
       setMemberData(null);
       setAuthError('');
@@ -86,7 +92,32 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUserEmail(em);
 
     try {
-      // 1. Check Admin status (Firestore 'admins' collection OR Config env / payment admin)
+      // Ensure test faculty exists in Firestore in background
+      ensureDefaultTestFaculty().catch(() => {});
+
+      // 1. Check Faculty status (Firestore 'faculty' collection or test faculty)
+      const facultyRecord = await checkIsFaculty(em);
+      if (facultyRecord) {
+        setIsFaculty(true);
+        setIsAdmin(false);
+        setIsPaymentAdmin(false);
+        setIsAuthorized(true);
+        setMemberData({
+          name: facultyRecord.name || firebaseUser.displayName || 'Faculty Member',
+          registrationNumber: facultyRecord.facultyId || 'FACULTY',
+          phone: facultyRecord.phone || '',
+          email: em,
+          team: facultyRecord.department ? `Faculty (${facultyRecord.department})` : 'Faculty Advisory',
+          position: facultyRecord.designation || 'Faculty Mentor',
+        });
+        setAuthError('');
+        setAuthLoading(false);
+        return;
+      }
+
+      setIsFaculty(false);
+
+      // 2. Check Admin status (Firestore 'admins' collection OR Config env / payment admin)
       const configAdmins = CONFIG.ADMIN_EMAILS.map((e) => e.toLowerCase());
       let isDbAdmin = false;
 
@@ -113,7 +144,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setIsAdmin(admin);
       setIsPaymentAdmin(paymentAdmin);
 
-      // 2. Query Firestore 'members' collection by email
+      // 3. Query Firestore 'members' collection by email
       let memberRecord: MemberData | null = null;
       try {
         const memberQuery = query(collection(db, 'members'), where('email', '==', em));
@@ -211,6 +242,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         userEmail,
         isAdmin,
         isPaymentAdmin,
+        isFaculty,
         isAuthorized,
         memberData,
         authLoading,

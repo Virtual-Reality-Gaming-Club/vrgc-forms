@@ -12,6 +12,7 @@ import {
   orderBy,
   onSnapshot,
   serverTimestamp,
+  writeBatch,
 } from 'firebase/firestore';
 import { PaymentItem, PaymentStatus } from '@/types/payment';
 
@@ -257,6 +258,7 @@ export async function fetchPaymentsFromFirestore(
         error_description: errorDesc,
         paid_at: data.paid_at || '',
         failed_at: data.failed_at || '',
+        visible_to_faculty: data.visible_to_faculty !== undefined ? !!data.visible_to_faculty : true,
         created_at: createdAtIso,
         updated_at: updatedAtIso,
       };
@@ -270,6 +272,116 @@ export async function fetchPaymentsFromFirestore(
     console.error('Failed to fetch payments from Firestore:', err);
     return [];
   }
+}
+
+/**
+ * Toggle faculty visibility for a specific payment invoice.
+ */
+export async function togglePaymentFacultyVisibility(
+  paymentId: string,
+  visibleToFaculty: boolean
+): Promise<boolean> {
+  try {
+    const docRef = doc(db, INVOICES_COLLECTION, paymentId);
+    await updateDoc(docRef, {
+      visible_to_faculty: visibleToFaculty,
+      updated_at: serverTimestamp(),
+    });
+    return true;
+  } catch (err) {
+    console.error('Failed to toggle faculty visibility:', err);
+    return false;
+  }
+}
+
+/**
+ * Update editable invoice properties (Title, Description, Due Date/Time, Visible to Faculty).
+ * Amount is intentionally excluded/immutable.
+ */
+export async function updateInvoiceDetailsInFirestore(
+  paymentId: string,
+  updates: {
+    title?: string;
+    description?: string;
+    due_date?: string;
+    visible_to_faculty?: boolean;
+  }
+): Promise<boolean> {
+  try {
+    const docRef = doc(db, INVOICES_COLLECTION, paymentId);
+    await updateDoc(docRef, {
+      ...updates,
+      updated_at: serverTimestamp(),
+    });
+    return true;
+  } catch (err) {
+    console.error('Failed to update invoice details in Firestore:', err);
+    return false;
+  }
+}
+
+/**
+ * Batch update editable invoice properties across multiple payment documents in Firestore.
+ * Strictly operates on the provided payment document IDs for exact isolation.
+ * Amount is intentionally excluded/immutable.
+ */
+export async function batchUpdateCampaignInFirestore(
+  paymentIds: string[],
+  updates: {
+    title?: string;
+    description?: string;
+    due_date?: string;
+    visible_to_faculty?: boolean;
+  }
+): Promise<boolean> {
+  try {
+    const targetDocIds = Array.from(new Set((paymentIds || []).filter(Boolean)));
+    if (targetDocIds.length === 0) return true;
+
+    // Process in batches of 450 (Firestore batch limit is 500 operations)
+    const chunkSize = 450;
+    for (let i = 0; i < targetDocIds.length; i += chunkSize) {
+      const chunk = targetDocIds.slice(i, i + chunkSize);
+      const batch = writeBatch(db);
+      chunk.forEach((id) => {
+        const docRef = doc(db, INVOICES_COLLECTION, id);
+        batch.update(docRef, {
+          ...updates,
+          updated_at: serverTimestamp(),
+        });
+      });
+      await batch.commit();
+    }
+    return true;
+  } catch (err) {
+    console.error('Failed to batch update campaign in Firestore via writeBatch:', err);
+    try {
+      const fallbackIds = Array.from(new Set((paymentIds || []).filter(Boolean)));
+      const promises = fallbackIds.map((id) =>
+        updateDoc(doc(db, INVOICES_COLLECTION, id), {
+          ...updates,
+          updated_at: serverTimestamp(),
+        })
+      );
+      await Promise.allSettled(promises);
+      return true;
+    } catch (fallbackErr) {
+      console.error('Fallback update failed:', fallbackErr);
+      return false;
+    }
+  }
+}
+
+/**
+ * Toggle faculty visibility for an entire campaign across all its invoice records in Firestore.
+ */
+export async function toggleCampaignFacultyVisibility(
+  paymentIds: string[],
+  visibleToFaculty: boolean
+): Promise<boolean> {
+  return batchUpdateCampaignInFirestore(paymentIds, {
+    visible_to_faculty: visibleToFaculty,
+  });
 }
 
 /**
@@ -453,6 +565,42 @@ export async function deletePaymentFromFirestore(paymentId: string): Promise<boo
   } catch (err) {
     console.error('Error deleting payment from Firestore:', err);
     return false;
+  }
+}
+
+/**
+ * Batch delete all invoice records for an entire campaign from Firestore.
+ * Executed in writeBatch chunks of 450 for high performance without locking the UI.
+ * Strictly operates on the provided payment document IDs for exact isolation.
+ */
+export async function batchDeleteCampaignFromFirestore(
+  paymentIds: string[]
+): Promise<boolean> {
+  try {
+    const targetDocIds = Array.from(new Set((paymentIds || []).filter(Boolean)));
+    if (targetDocIds.length === 0) return true;
+
+    const chunkSize = 450;
+    for (let i = 0; i < targetDocIds.length; i += chunkSize) {
+      const chunk = targetDocIds.slice(i, i + chunkSize);
+      const batch = writeBatch(db);
+      chunk.forEach((id) => {
+        batch.delete(doc(db, INVOICES_COLLECTION, id));
+      });
+      await batch.commit();
+    }
+    return true;
+  } catch (err) {
+    console.error('Failed to batch delete campaign from Firestore:', err);
+    try {
+      const fallbackIds = Array.from(new Set((paymentIds || []).filter(Boolean)));
+      const promises = fallbackIds.map((id) => deleteDoc(doc(db, INVOICES_COLLECTION, id)));
+      await Promise.allSettled(promises);
+      return true;
+    } catch (fallbackErr) {
+      console.error('Fallback delete failed:', fallbackErr);
+      return false;
+    }
   }
 }
 

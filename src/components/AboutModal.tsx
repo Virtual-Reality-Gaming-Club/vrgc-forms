@@ -27,7 +27,8 @@ interface AboutModalProps {
 interface TeamMember {
   name: string;
   role: string;
-  rank: number;
+  badgeRole?: string;
+  rank?: number;
   regNo?: string;
   email?: string;
   phone?: string;
@@ -76,6 +77,20 @@ const TECH_TEAM_LIST: TeamMember[] = [
     rank: 5,
     githubUrl: "https://github.com/Mohit-Borekar",
     linkedinUrl: "https://www.linkedin.com/in/mohit-borekar-522879396/",
+  },
+  {
+    name: "Haardik Pahlajani",
+    role: "Creative Director",
+    badgeRole: "Student Coordinator",
+    githubUrl: "https://github.com/Haardik2111",
+    linkedinUrl: "https://www.linkedin.com/in/haardik-pahlajani-a550772b9/",
+  },
+  {
+    name: "Parardha Dhar",
+    role: "Technical Guide",
+    badgeRole: "Student Coordinator",
+    githubUrl: "https://github.com/parardhadhar",
+    linkedinUrl: "https://www.linkedin.com/in/parardhadhar/",
   },
 ];
 
@@ -190,17 +205,20 @@ export const AboutModal: React.FC<AboutModalProps> = ({ isOpen, onClose }) => {
           {/* Rank-Wise Team Members List */}
           <div className="space-y-2.5">
             {teamMembers.map((member) => {
-              const isTopRank = member.rank === 1;
-              const isCoreAdmin = member.rank === 2 || member.rank === 3;
+              const isTopRank = member.rank === 1 || member.role === 'Technical Lead';
+              const isCoLead = member.rank === 2 || member.role === 'Technical Co-Lead';
+              const isCoordinator = member.badgeRole === 'Student Coordinator' || member.role?.toLowerCase().includes('guide');
 
               return (
                 <div
                   key={member.name}
                   className={`group relative p-4 rounded-xl transition-all duration-300 hover:-translate-y-0.5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 overflow-hidden ${isTopRank
                       ? 'bg-gradient-to-br from-amber-500/15 via-white/[0.04] to-pink-950/20 backdrop-blur-xl border border-amber-500/40 shadow-[inset_0_1px_1px_rgba(255,255,255,0.3),0_0_20px_rgba(245,158,11,0.12)]'
-                      : isCoreAdmin
+                      : isCoLead
                         ? 'bg-gradient-to-br from-purple-950/50 via-white/[0.04] to-pink-950/30 backdrop-blur-xl border border-purple-500/40 shadow-[inset_0_1px_1px_rgba(255,255,255,0.25),0_0_15px_rgba(168,85,247,0.1)]'
-                        : 'bg-gradient-to-b from-white/[0.07] via-white/[0.03] to-white/[0.01] backdrop-blur-xl border border-white/[0.12] shadow-[inset_0_1px_1px_rgba(255,255,255,0.2)] hover:border-purple-500/40'
+                        : isCoordinator
+                          ? 'bg-gradient-to-br from-fuchsia-950/50 via-white/[0.04] to-purple-950/30 backdrop-blur-xl border border-fuchsia-500/40 shadow-[inset_0_1px_1px_rgba(255,255,255,0.25),0_0_20px_rgba(217,70,239,0.12)]'
+                          : 'bg-gradient-to-b from-white/[0.07] via-white/[0.03] to-white/[0.01] backdrop-blur-xl border border-white/[0.12] shadow-[inset_0_1px_1px_rgba(255,255,255,0.2)] hover:border-purple-500/40'
                     }`}
                 >
                   {/* Liquid Specular Light Sheen Reflection */}
@@ -211,11 +229,19 @@ export const AboutModal: React.FC<AboutModalProps> = ({ isOpen, onClose }) => {
                     {/* Rank Badge */}
                     <div className={`w-7 h-7 rounded-lg flex items-center justify-center font-black text-[11px] shrink-0 ${isTopRank
                         ? 'bg-gradient-to-br from-amber-400 to-amber-600 text-black shadow-md'
-                        : isCoreAdmin
+                        : isCoLead
                           ? 'bg-gradient-to-br from-purple-500 to-pink-500 text-white shadow-md'
-                          : 'bg-white/10 text-slate-300 border border-white/10'
+                          : isCoordinator
+                            ? 'bg-gradient-to-br from-fuchsia-500 to-pink-600 text-white shadow-md'
+                            : 'bg-white/10 text-slate-300 border border-white/10'
                       }`}>
-                      {isTopRank ? <Crown className="w-3.5 h-3.5 fill-black" /> : `#${member.rank}`}
+                      {isTopRank ? (
+                        <Crown className="w-3.5 h-3.5 fill-black" />
+                      ) : isCoordinator ? (
+                        <ShieldCheck className="w-3.5 h-3.5 text-white" />
+                      ) : (
+                        `#${member.rank || 6}`
+                      )}
                     </div>
 
                     {/* Member Avatar */}
@@ -280,12 +306,20 @@ export const AboutModal: React.FC<AboutModalProps> = ({ isOpen, onClose }) => {
 
                     <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold border flex items-center gap-1 backdrop-blur-md ${isTopRank
                         ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
-                        : isCoreAdmin
+                        : isCoLead
                           ? 'bg-purple-500/20 text-purple-200 border-purple-500/40'
-                          : 'bg-slate-800/80 text-slate-300 border-slate-700'
+                          : isCoordinator
+                            ? 'bg-fuchsia-500/20 text-fuchsia-200 border-fuchsia-500/40'
+                            : 'bg-slate-800/80 text-slate-300 border-slate-700'
                       }`}>
-                      {isTopRank ? <Award className="w-3 h-3 text-amber-400" /> : <UserCheck className="w-3 h-3 text-purple-400" />}
-                      <span>{isTopRank ? 'Technical Lead' : member.rank === 2 ? 'Technical Co-Lead' : 'Core Member'}</span>
+                      {isTopRank ? (
+                        <Award className="w-3 h-3 text-amber-400" />
+                      ) : isCoordinator ? (
+                        <Sparkles className="w-3 h-3 text-fuchsia-400" />
+                      ) : (
+                        <UserCheck className="w-3 h-3 text-purple-400" />
+                      )}
+                      <span>{member.badgeRole || member.role}</span>
                     </span>
                   </div>
                 </div>

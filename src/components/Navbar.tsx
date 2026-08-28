@@ -11,11 +11,12 @@ interface NavbarProps {
   user?: User | null;
   memberData?: { name?: string; fullName?: string; registrationNumber?: string; regNo?: string } | null;
   isAdmin?: boolean;
+  isFaculty?: boolean;
   onLogout?: () => Promise<void> | void;
   onLogin?: () => Promise<void> | void;
 }
 
-const Navbar: React.FC<NavbarProps> = ({ pageTitle = 'Dashboard', userEmail, user, memberData, isAdmin, onLogout, onLogin }) => {
+const Navbar: React.FC<NavbarProps> = ({ pageTitle = 'Dashboard', userEmail, user, memberData, isAdmin, isFaculty, onLogout, onLogin }) => {
   const extractRegNo = (emailAddress?: string | null) => {
     if (!emailAddress) return null;
     const match = emailAddress.match(/\b\d{2}[a-zA-Z]{3}\d{5}\b/);
@@ -59,6 +60,14 @@ const Navbar: React.FC<NavbarProps> = ({ pageTitle = 'Dashboard', userEmail, use
           <span className="hidden sm:inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[9px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-[0_0_10px_rgba(245,158,11,0.2)]">
             <span className="material-symbols-outlined text-[11px]">shield</span>
             ADMIN
+          </span>
+        )}
+
+        {/* Faculty Badge */}
+        {isFaculty && (
+          <span className="hidden sm:inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[9px] font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/40 shadow-[0_0_10px_rgba(99,102,241,0.2)]">
+            <span className="material-symbols-outlined text-[11px]">school</span>
+            FACULTY
           </span>
         )}
 

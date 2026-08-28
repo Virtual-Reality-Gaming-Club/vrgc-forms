@@ -93,7 +93,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onPageChange }) => {
         </section>
 
         {/* Navigation Bento Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           {/* Referral Program Card */}
           <button
             onClick={() => onPageChange('referrals')}
@@ -172,33 +172,6 @@ const Dashboard: React.FC<DashboardProps> = ({ onPageChange }) => {
                 GENERATE CARD
               </span>
               <span className="material-symbols-outlined text-white">arrow_forward</span>
-            </div>
-          </button>
-
-          {/* Support Tickets Card */}
-          <button
-            onClick={() => onPageChange('tickets')}
-            className="group relative flex flex-col items-start p-8 bg-[#1A1A1A] border border-[#333333] hover:border-purple-500 rounded-2xl glow-hover transition-all duration-300 text-left overflow-hidden h-[300px] w-full"
-          >
-            <div className="absolute -right-4 -top-4 opacity-10 group-hover:opacity-20 transition-opacity">
-              <span className="material-symbols-outlined text-[150px] text-purple-400">confirmation_number</span>
-            </div>
-            <div className="mb-auto z-10">
-              <div className="w-14 h-14 rounded-xl bg-purple-500/10 border border-purple-500/20 flex items-center justify-center mb-6">
-                <span className="material-symbols-outlined text-purple-400 text-3xl">support_agent</span>
-              </div>
-              <h3 className="font-display-lg text-xl text-white font-bold mb-2">
-                Support Tickets
-              </h3>
-              <p className="text-slate-400 text-sm leading-relaxed">
-                Priority support for hardware issues, server calibration, and account operations.
-              </p>
-            </div>
-            <div className="mt-4 w-full flex items-center justify-between z-10">
-              <span className="font-label-caps text-xs text-purple-400 font-bold group-hover:translate-x-2 transition-transform duration-300">
-                LOCKED
-              </span>
-              <span className="material-symbols-outlined text-white">lock</span>
             </div>
           </button>
         </div>

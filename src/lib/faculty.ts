@@ -1,0 +1,297 @@
+import { db } from './firebase';
+import {
+  collection,
+  doc,
+  getDocs,
+  getDoc,
+  setDoc,
+  updateDoc,
+  deleteDoc,
+  query,
+  where,
+  orderBy,
+  onSnapshot,
+} from 'firebase/firestore';
+import { FacultyMember, FutureEventPlan, FacultyDecision, FacultyApprovalStatus } from '@/types/faculty';
+
+export const FACULTY_COLLECTION = 'faculty';
+export const FUTURE_EVENTS_COLLECTION = 'future_events';
+
+// Default test faculty as requested
+export const DEFAULT_TEST_FACULTY_EMAIL = 'haardikpahlajani@gmail.com';
+
+/**
+ * Seed or ensure default test faculty member exists in Firestore `faculty` collection.
+ */
+export async function ensureDefaultTestFaculty(): Promise<void> {
+  try {
+    const docRef = doc(db, FACULTY_COLLECTION, DEFAULT_TEST_FACULTY_EMAIL);
+    const docSnap = await getDoc(docRef);
+    if (!docSnap.exists()) {
+      await setDoc(
+        docRef,
+        {
+          id: DEFAULT_TEST_FACULTY_EMAIL,
+          email: DEFAULT_TEST_FACULTY_EMAIL,
+          name: 'Prof. Haardik Pahlajani',
+          facultyId: 'FAC-VRGC-01',
+          department: 'Computer Science & Engineering',
+          designation: 'Faculty Mentor & Advisory Chair',
+          created_at: new Date().toISOString(),
+        },
+        { merge: true }
+      );
+    }
+  } catch (err) {
+    console.warn('Unable to auto-seed default test faculty to Firestore:', err);
+  }
+}
+
+/**
+ * Check if a given email belongs to the `faculty` Firestore collection or is test faculty.
+ */
+export async function checkIsFaculty(email: string): Promise<FacultyMember | null> {
+  if (!email) return null;
+  const cleanEmail = email.toLowerCase().trim();
+
+  // Fast check for test email
+  if (cleanEmail === DEFAULT_TEST_FACULTY_EMAIL) {
+    return {
+      id: DEFAULT_TEST_FACULTY_EMAIL,
+      email: DEFAULT_TEST_FACULTY_EMAIL,
+      name: 'Prof. Haardik Pahlajani',
+      facultyId: 'FAC-VRGC-01',
+      department: 'Computer Science & Engineering',
+      designation: 'Faculty Mentor & Advisory Chair',
+      created_at: new Date().toISOString(),
+    };
+  }
+
+  try {
+    // 1. Direct document lookup by email docId
+    const directDoc = await getDoc(doc(db, FACULTY_COLLECTION, cleanEmail));
+    if (directDoc.exists()) {
+      const data = directDoc.data();
+      return {
+        id: directDoc.id,
+        email: data.email || cleanEmail,
+        name: data.name || data.fullName || 'Faculty Member',
+        facultyId: data.facultyId || data.faculty_id || '',
+        department: data.department || '',
+        designation: data.designation || 'Faculty Member',
+        phone: data.phone || '',
+        avatarUrl: data.avatarUrl || data.photoUrl || '',
+        created_at: data.created_at || '',
+      };
+    }
+
+    // 2. Query lookup by 'email' field
+    const q = query(collection(db, FACULTY_COLLECTION), where('email', '==', cleanEmail));
+    const snap = await getDocs(q);
+    if (!snap.empty) {
+      const docSnap = snap.docs[0];
+      const data = docSnap.data();
+      return {
+        id: docSnap.id,
+        email: data.email || cleanEmail,
+        name: data.name || data.fullName || 'Faculty Member',
+        facultyId: data.facultyId || data.faculty_id || '',
+        department: data.department || '',
+        designation: data.designation || 'Faculty Member',
+        phone: data.phone || '',
+        avatarUrl: data.avatarUrl || data.photoUrl || '',
+        created_at: data.created_at || '',
+      };
+    }
+  } catch (err) {
+    console.warn('Error checking faculty status:', err);
+  }
+
+  return null;
+}
+
+/**
+ * Fetch all registered faculty members from Firestore `faculty` collection.
+ */
+export async function fetchAllFaculty(): Promise<FacultyMember[]> {
+  try {
+    const colRef = collection(db, FACULTY_COLLECTION);
+    const snap = await getDocs(colRef);
+    const list: FacultyMember[] = [];
+
+    snap.forEach((d) => {
+      const data = d.data();
+      list.push({
+        id: d.id,
+        email: (data.email || d.id).toLowerCase(),
+        name: data.name || data.fullName || 'Faculty Member',
+        facultyId: data.facultyId || data.faculty_id || '',
+        department: data.department || '',
+        designation: data.designation || 'Faculty Member',
+        phone: data.phone || '',
+        avatarUrl: data.avatarUrl || data.photoUrl || '',
+        created_at: data.created_at || '',
+      });
+    });
+
+    // If list does not contain default test faculty, include it
+    if (!list.some((f) => f.email.toLowerCase() === DEFAULT_TEST_FACULTY_EMAIL)) {
+      list.push({
+        id: DEFAULT_TEST_FACULTY_EMAIL,
+        email: DEFAULT_TEST_FACULTY_EMAIL,
+        name: 'Prof. Haardik Pahlajani',
+        facultyId: 'FAC-VRGC-01',
+        department: 'Computer Science & Engineering',
+        designation: 'Faculty Mentor & Advisory Chair',
+        created_at: new Date().toISOString(),
+      });
+    }
+
+    return list;
+  } catch (err) {
+    console.error('Error fetching faculty list:', err);
+    return [
+      {
+        id: DEFAULT_TEST_FACULTY_EMAIL,
+        email: DEFAULT_TEST_FACULTY_EMAIL,
+        name: 'Prof. Haardik Pahlajani',
+        facultyId: 'FAC-VRGC-01',
+        department: 'Computer Science & Engineering',
+        designation: 'Faculty Mentor & Advisory Chair',
+        created_at: new Date().toISOString(),
+      },
+    ];
+  }
+}
+
+// ─── Future Event Plans CRUD ──────────────────────────────────────────────────
+
+/**
+ * Fetch all future event plans from Firestore.
+ */
+export async function fetchFutureEvents(): Promise<FutureEventPlan[]> {
+  try {
+    const colRef = collection(db, FUTURE_EVENTS_COLLECTION);
+    const snap = await getDocs(colRef);
+    const plans: FutureEventPlan[] = [];
+
+    snap.forEach((docSnap) => {
+      const data = docSnap.data();
+      plans.push({
+        id: docSnap.id,
+        title: data.title || '',
+        tentativeDate: data.tentativeDate || data.tentative_date || '',
+        description: data.description || '',
+        driveLink: data.driveLink || data.drive_link || '',
+        createdBy: data.createdBy || data.created_by || '',
+        createdAt: data.createdAt || data.created_at || new Date().toISOString(),
+        updatedAt: data.updatedAt || data.updated_at || '',
+        facultyDecisions: data.facultyDecisions || {},
+      });
+    });
+
+    // Sort by createdAt descending
+    return plans.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  } catch (err) {
+    console.error('Error fetching future event plans:', err);
+    return [];
+  }
+}
+
+/**
+ * Create a new planned future event (Admin action).
+ */
+export async function createFutureEvent(
+  plan: Omit<FutureEventPlan, 'id' | 'createdAt' | 'updatedAt' | 'facultyDecisions' | 'createdBy'>,
+  adminEmail: string
+): Promise<FutureEventPlan | null> {
+  try {
+    const newDocRef = doc(collection(db, FUTURE_EVENTS_COLLECTION));
+    const nowIso = new Date().toISOString();
+    const newPlan: FutureEventPlan = {
+      id: newDocRef.id,
+      title: plan.title,
+      tentativeDate: plan.tentativeDate,
+      description: plan.description,
+      driveLink: plan.driveLink,
+      createdBy: adminEmail,
+      createdAt: nowIso,
+      updatedAt: nowIso,
+      facultyDecisions: {},
+    };
+
+    await setDoc(newDocRef, newPlan);
+    return newPlan;
+  } catch (err) {
+    console.error('Error creating future event plan:', err);
+    return null;
+  }
+}
+
+/**
+ * Update an existing planned future event (Admin action).
+ */
+export async function updateFutureEvent(
+  eventId: string,
+  updates: Partial<Omit<FutureEventPlan, 'id' | 'createdAt'>>
+): Promise<boolean> {
+  try {
+    const docRef = doc(db, FUTURE_EVENTS_COLLECTION, eventId);
+    await updateDoc(docRef, {
+      ...updates,
+      updatedAt: new Date().toISOString(),
+    });
+    return true;
+  } catch (err) {
+    console.error('Error updating future event plan:', err);
+    return false;
+  }
+}
+
+/**
+ * Delete a planned future event (Admin action).
+ */
+export async function deleteFutureEvent(eventId: string): Promise<boolean> {
+  try {
+    const docRef = doc(db, FUTURE_EVENTS_COLLECTION, eventId);
+    await deleteDoc(docRef);
+    return true;
+  } catch (err) {
+    console.error('Error deleting future event plan:', err);
+    return false;
+  }
+}
+
+/**
+ * Submit or update a faculty member's decision (Approve / Reject) for a future event plan.
+ */
+export async function submitFacultyDecision(
+  eventId: string,
+  facultyEmail: string,
+  facultyName: string,
+  status: FacultyApprovalStatus,
+  remarks: string = ''
+): Promise<boolean> {
+  try {
+    const docRef = doc(db, FUTURE_EVENTS_COLLECTION, eventId);
+    const sanitizedKey = facultyEmail.replace(/[^a-zA-Z0-9_]/g, '_');
+
+    const decision: FacultyDecision = {
+      facultyEmail,
+      facultyName,
+      status,
+      remarks,
+      respondedAt: new Date().toISOString(),
+    };
+
+    await updateDoc(docRef, {
+      [`facultyDecisions.${sanitizedKey}`]: decision,
+      updatedAt: new Date().toISOString(),
+    });
+
+    return true;
+  } catch (err) {
+    console.error('Error submitting faculty decision:', err);
+    return false;
+  }
+}

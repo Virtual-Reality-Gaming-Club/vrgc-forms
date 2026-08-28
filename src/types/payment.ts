@@ -27,6 +27,7 @@ export interface PaymentItem {
   error_description?: string;
   paid_at?: string;
   failed_at?: string;
+  visible_to_faculty?: boolean;
   created_at: string;
   updated_at?: string;
 }
