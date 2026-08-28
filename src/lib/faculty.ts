@@ -17,13 +17,15 @@ import { FacultyMember, FutureEventPlan, FacultyDecision, FacultyApprovalStatus 
 export const FACULTY_COLLECTION = 'faculty';
 export const FUTURE_EVENTS_COLLECTION = 'future_events';
 
-// Default test faculty as requested
-export const DEFAULT_TEST_FACULTY_EMAIL = 'haardikpahlajani@gmail.com';
+// Default test faculty email loaded from environment — no hardcoded email or name
+export const DEFAULT_TEST_FACULTY_EMAIL = (process.env.NEXT_PUBLIC_DEFAULT_FACULTY_EMAIL || '').toLowerCase().trim();
 
 /**
- * Seed or ensure default test faculty member exists in Firestore `faculty` collection.
+ * Seed or ensure default faculty member exists in Firestore `faculty` collection.
+ * Only runs if NEXT_PUBLIC_DEFAULT_FACULTY_EMAIL is set in the environment.
  */
 export async function ensureDefaultTestFaculty(): Promise<void> {
+  if (!DEFAULT_TEST_FACULTY_EMAIL) return; // Skip seeding if no env var is set
   try {
     const docRef = doc(db, FACULTY_COLLECTION, DEFAULT_TEST_FACULTY_EMAIL);
     const docSnap = await getDoc(docRef);
@@ -33,17 +35,17 @@ export async function ensureDefaultTestFaculty(): Promise<void> {
         {
           id: DEFAULT_TEST_FACULTY_EMAIL,
           email: DEFAULT_TEST_FACULTY_EMAIL,
-          name: 'Prof. Haardik Pahlajani',
-          facultyId: 'FAC-VRGC-01',
-          department: 'Computer Science & Engineering',
-          designation: 'Faculty Mentor & Advisory Chair',
+          name: process.env.NEXT_PUBLIC_DEFAULT_FACULTY_NAME || 'Faculty Member',
+          facultyId: process.env.NEXT_PUBLIC_DEFAULT_FACULTY_ID || 'FAC-VRGC-01',
+          department: process.env.NEXT_PUBLIC_DEFAULT_FACULTY_DEPT || '',
+          designation: process.env.NEXT_PUBLIC_DEFAULT_FACULTY_DESIGNATION || 'Faculty Mentor',
           created_at: new Date().toISOString(),
         },
         { merge: true }
       );
     }
   } catch (err) {
-    console.warn('Unable to auto-seed default test faculty to Firestore:', err);
+    console.warn('Unable to auto-seed default faculty to Firestore:', err);
   }
 }
 
@@ -54,15 +56,15 @@ export async function checkIsFaculty(email: string): Promise<FacultyMember | nul
   if (!email) return null;
   const cleanEmail = email.toLowerCase().trim();
 
-  // Fast check for test email
-  if (cleanEmail === DEFAULT_TEST_FACULTY_EMAIL) {
+  // Fast in-memory check for the seeded default faculty email (env-driven, never hardcoded)
+  if (DEFAULT_TEST_FACULTY_EMAIL && cleanEmail === DEFAULT_TEST_FACULTY_EMAIL) {
     return {
       id: DEFAULT_TEST_FACULTY_EMAIL,
       email: DEFAULT_TEST_FACULTY_EMAIL,
-      name: 'Prof. Haardik Pahlajani',
-      facultyId: 'FAC-VRGC-01',
-      department: 'Computer Science & Engineering',
-      designation: 'Faculty Mentor & Advisory Chair',
+      name: process.env.NEXT_PUBLIC_DEFAULT_FACULTY_NAME || 'Faculty Member',
+      facultyId: process.env.NEXT_PUBLIC_DEFAULT_FACULTY_ID || 'FAC-VRGC-01',
+      department: process.env.NEXT_PUBLIC_DEFAULT_FACULTY_DEPT || '',
+      designation: process.env.NEXT_PUBLIC_DEFAULT_FACULTY_DESIGNATION || 'Faculty Mentor',
       created_at: new Date().toISOString(),
     };
   }
@@ -134,15 +136,18 @@ export async function fetchAllFaculty(): Promise<FacultyMember[]> {
       });
     });
 
-    // If list does not contain default test faculty, include it
-    if (!list.some((f) => f.email.toLowerCase() === DEFAULT_TEST_FACULTY_EMAIL)) {
+    // If a default faculty email is set via env and not already in the list, include it
+    if (
+      DEFAULT_TEST_FACULTY_EMAIL &&
+      !list.some((f) => f.email.toLowerCase() === DEFAULT_TEST_FACULTY_EMAIL)
+    ) {
       list.push({
         id: DEFAULT_TEST_FACULTY_EMAIL,
         email: DEFAULT_TEST_FACULTY_EMAIL,
-        name: 'Prof. Haardik Pahlajani',
-        facultyId: 'FAC-VRGC-01',
-        department: 'Computer Science & Engineering',
-        designation: 'Faculty Mentor & Advisory Chair',
+        name: process.env.NEXT_PUBLIC_DEFAULT_FACULTY_NAME || 'Faculty Member',
+        facultyId: process.env.NEXT_PUBLIC_DEFAULT_FACULTY_ID || 'FAC-VRGC-01',
+        department: process.env.NEXT_PUBLIC_DEFAULT_FACULTY_DEPT || '',
+        designation: process.env.NEXT_PUBLIC_DEFAULT_FACULTY_DESIGNATION || 'Faculty Mentor',
         created_at: new Date().toISOString(),
       });
     }
@@ -150,17 +155,19 @@ export async function fetchAllFaculty(): Promise<FacultyMember[]> {
     return list;
   } catch (err) {
     console.error('Error fetching faculty list:', err);
-    return [
-      {
-        id: DEFAULT_TEST_FACULTY_EMAIL,
-        email: DEFAULT_TEST_FACULTY_EMAIL,
-        name: 'Prof. Haardik Pahlajani',
-        facultyId: 'FAC-VRGC-01',
-        department: 'Computer Science & Engineering',
-        designation: 'Faculty Mentor & Advisory Chair',
-        created_at: new Date().toISOString(),
-      },
-    ];
+    return DEFAULT_TEST_FACULTY_EMAIL
+      ? [
+          {
+            id: DEFAULT_TEST_FACULTY_EMAIL,
+            email: DEFAULT_TEST_FACULTY_EMAIL,
+            name: process.env.NEXT_PUBLIC_DEFAULT_FACULTY_NAME || 'Faculty Member',
+            facultyId: process.env.NEXT_PUBLIC_DEFAULT_FACULTY_ID || 'FAC-VRGC-01',
+            department: process.env.NEXT_PUBLIC_DEFAULT_FACULTY_DEPT || '',
+            designation: process.env.NEXT_PUBLIC_DEFAULT_FACULTY_DESIGNATION || 'Faculty Mentor',
+            created_at: new Date().toISOString(),
+          },
+        ]
+      : [];
   }
 }
 
