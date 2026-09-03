@@ -34,5 +34,44 @@ service cloud.firestore {
         allow write: if request.auth != null;
       }
     }
+
+    // Members collection — readable by all authenticated users
+    // Writable only by Payment Admins (checked against config/payment_admins document)
+    match /members/{memberId} {
+      allow read: if request.auth != null;
+      allow create, update, delete: if request.auth != null
+        && exists(/databases/$(database)/documents/config/payment_admins)
+        && request.auth.token.email in get(/databases/$(database)/documents/config/payment_admins).data.emails;
+    }
+
+    // ID Cards collection — readable by all authenticated users, writable by authenticated users
+    match /id_cards/{cardId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null;
+    }
+
+    // Admin Logs — readable and writable by authenticated users
+    match /admin_logs/{logId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null;
+    }
+
+    // Member Admin Logs — readable by authenticated users
+    // Writable only by Payment Admins (checked against config/payment_admins document)
+    match /member_admin_logs/{logId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null
+        && exists(/databases/$(database)/documents/config/payment_admins)
+        && request.auth.token.email in get(/databases/$(database)/documents/config/payment_admins).data.emails;
+      allow delete: if request.auth != null
+        && exists(/databases/$(database)/documents/config/payment_admins)
+        && request.auth.token.email in get(/databases/$(database)/documents/config/payment_admins).data.emails;
+    }
+
+    // Admins collection — readable by all authenticated users, writable by authenticated users
+    match /admins/{adminId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null;
+    }
   }
 }

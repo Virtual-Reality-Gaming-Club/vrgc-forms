@@ -1,8 +1,10 @@
 "use client";
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { collection, getDocs } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
+import { useAuth } from '@/lib/auth-context';
+import AdminDesk from './AdminDesk';
 
 export interface RosterMember {
   id: string;
@@ -94,6 +96,7 @@ interface MembersRosterProps {
 }
 
 const MembersRoster: React.FC<MembersRosterProps> = ({ onRedirect }) => {
+  const { isPaymentAdmin, user, memberData: authMemberData } = useAuth();
   const [members, setMembers] = useState<RosterMember[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -101,99 +104,100 @@ const MembersRoster: React.FC<MembersRosterProps> = ({ onRedirect }) => {
   const [selectedPosition, setSelectedPosition] = useState<string>('ALL');
   const [viewMode, setViewMode] = useState<'grid' | 'table'>('grid');
 
-  // Load members from Firestore `members` and `id_cards` collections
-  useEffect(() => {
-    const loadAllMembers = async () => {
-      setLoading(true);
+  // Reusable member loading function for initial load and CRUD refresh
+  const loadAllMembers = useCallback(async () => {
+    setLoading(true);
+    try {
+      const membersMap = new Map<string, RosterMember>();
+
+      // 1. Query `members` collection
       try {
-        const membersMap = new Map<string, RosterMember>();
+        const membersSnap = await getDocs(collection(db, 'members'));
+        membersSnap.forEach((docSnap) => {
+          const data = docSnap.data();
+          const email = (data.email || data.Email || docSnap.id || '').toLowerCase().trim();
+          if (email && email.includes('@')) {
+            const pos = (data.position || data.role || 'Member').trim();
+            const rawTeam = (data.team || data.domain || 'VRGC Member').trim();
+            const posLower = pos.toLowerCase();
+            const teamLower = rawTeam.toLowerCase();
 
-        // 1. Query `members` collection
-        try {
-          const membersSnap = await getDocs(collection(db, 'members'));
-          membersSnap.forEach((docSnap) => {
-            const data = docSnap.data();
-            const email = (data.email || data.Email || docSnap.id || '').toLowerCase().trim();
-            if (email && email.includes('@')) {
-              const pos = (data.position || data.role || 'Member').trim();
-              const rawTeam = (data.team || data.domain || 'VRGC Member').trim();
-              const posLower = pos.toLowerCase();
-              const teamLower = rawTeam.toLowerCase();
+            const isCoPres = (posLower.includes('president') || teamLower.includes('president')) && !posLower.includes('vice');
+            const isCoord = posLower.includes('student coordinator') || teamLower.includes('student coordinator') || (posLower.includes('coordinator') && !posLower.includes('event'));
+            const isLd = posLower.includes('lead') || posLower.includes('head');
+            const assignedTeams = extractMemberTeams(rawTeam);
 
-              const isCoPres = (posLower.includes('president') || teamLower.includes('president')) && !posLower.includes('vice');
-              const isCoord = posLower.includes('student coordinator') || teamLower.includes('student coordinator') || (posLower.includes('coordinator') && !posLower.includes('event'));
-              const isLd = posLower.includes('lead') || posLower.includes('head');
-              const assignedTeams = extractMemberTeams(rawTeam);
-
-              membersMap.set(email, {
-                id: docSnap.id,
-                name: data.name || data.Name || data.fullName || 'Member',
-                registrationNumber: (data.registrationNumber || data['Registration Number'] || data.regNo || '').toUpperCase(),
-                email,
-                phone: data.phone || data.Phone || '',
-                team: assignedTeams.join(' • '),
-                teams: assignedTeams,
-                position: pos || 'Member',
-                avatarUrl: data.photoUrl || data.avatarUrl || `https://api.dicebear.com/9.x/bottts/svg?seed=${encodeURIComponent(data.name || email)}`,
-                isCoPresident: isCoPres,
-                isCoordinator: isCoord,
-                isLead: isLd,
-              });
-            }
-          });
-        } catch (mErr) {
-          console.warn('Error fetching members collection:', mErr);
-        }
-
-        // 2. Query `id_cards` collection
-        try {
-          const idCardsSnap = await getDocs(collection(db, 'id_cards'));
-          idCardsSnap.forEach((docSnap) => {
-            const data = docSnap.data();
-            const email = (data.email || data.Email || docSnap.id || '').toLowerCase().trim();
-            if (email && email.includes('@')) {
-              const existing = membersMap.get(email);
-              const pos = (data.position || existing?.position || 'Member').trim();
-              const rawTeam = (data.team || existing?.team || 'General').trim();
-              const posLower = pos.toLowerCase();
-              const teamLower = rawTeam.toLowerCase();
-
-              const isCoPres = (posLower.includes('president') || teamLower.includes('president')) && !posLower.includes('vice');
-              const isCoord = posLower.includes('student coordinator') || teamLower.includes('student coordinator') || (posLower.includes('coordinator') && !posLower.includes('event'));
-              const isLd = posLower.includes('lead') || posLower.includes('head');
-              const assignedTeams = extractMemberTeams(rawTeam);
-
-              membersMap.set(email, {
-                id: existing?.id || docSnap.id,
-                name: data.name || data.fullName || existing?.name || 'Member',
-                registrationNumber: (data.regNo || data.registrationNumber || existing?.registrationNumber || '').toUpperCase(),
-                email,
-                phone: data.phone || existing?.phone || '',
-                team: assignedTeams.join(' • '),
-                teams: assignedTeams,
-                position: pos || 'Member',
-                avatarUrl: data.photoUrl || data.avatarUrl || existing?.avatarUrl || `https://api.dicebear.com/9.x/bottts/svg?seed=${encodeURIComponent(data.name || email)}`,
-                isCoPresident: isCoPres,
-                isCoordinator: isCoord,
-                isLead: isLd,
-              });
-            }
-          });
-        } catch (idErr) {
-          console.warn('Error fetching id_cards collection:', idErr);
-        }
-
-        const membersList = Array.from(membersMap.values());
-        setMembers(membersList);
-      } catch (err) {
-        console.error('Failed to load roster:', err);
-      } finally {
-        setLoading(false);
+            membersMap.set(email, {
+              id: docSnap.id,
+              name: data.name || data.Name || data.fullName || 'Member',
+              registrationNumber: (data.registrationNumber || data['Registration Number'] || data.regNo || '').toUpperCase(),
+              email,
+              phone: data.phone || data.Phone || '',
+              team: assignedTeams.join(' • '),
+              teams: assignedTeams,
+              position: pos || 'Member',
+              avatarUrl: data.photoUrl || data.avatarUrl || `https://api.dicebear.com/9.x/bottts/svg?seed=${encodeURIComponent(data.name || email)}`,
+              isCoPresident: isCoPres,
+              isCoordinator: isCoord,
+              isLead: isLd,
+            });
+          }
+        });
+      } catch (mErr) {
+        console.warn('Error fetching members collection:', mErr);
       }
-    };
 
-    loadAllMembers();
+      // 2. Query `id_cards` collection
+      try {
+        const idCardsSnap = await getDocs(collection(db, 'id_cards'));
+        idCardsSnap.forEach((docSnap) => {
+          const data = docSnap.data();
+          const email = (data.email || data.Email || docSnap.id || '').toLowerCase().trim();
+          if (email && email.includes('@')) {
+            const existing = membersMap.get(email);
+            const pos = (data.position || existing?.position || 'Member').trim();
+            const rawTeam = (data.team || existing?.team || 'General').trim();
+            const posLower = pos.toLowerCase();
+            const teamLower = rawTeam.toLowerCase();
+
+            const isCoPres = (posLower.includes('president') || teamLower.includes('president')) && !posLower.includes('vice');
+            const isCoord = posLower.includes('student coordinator') || teamLower.includes('student coordinator') || (posLower.includes('coordinator') && !posLower.includes('event'));
+            const isLd = posLower.includes('lead') || posLower.includes('head');
+            const assignedTeams = extractMemberTeams(rawTeam);
+
+            membersMap.set(email, {
+              id: existing?.id || docSnap.id,
+              name: data.name || data.fullName || existing?.name || 'Member',
+              registrationNumber: (data.regNo || data.registrationNumber || existing?.registrationNumber || '').toUpperCase(),
+              email,
+              phone: data.phone || existing?.phone || '',
+              team: assignedTeams.join(' • '),
+              teams: assignedTeams,
+              position: pos || 'Member',
+              avatarUrl: data.photoUrl || data.avatarUrl || existing?.avatarUrl || `https://api.dicebear.com/9.x/bottts/svg?seed=${encodeURIComponent(data.name || email)}`,
+              isCoPresident: isCoPres,
+              isCoordinator: isCoord,
+              isLead: isLd,
+            });
+          }
+        });
+      } catch (idErr) {
+        console.warn('Error fetching id_cards collection:', idErr);
+      }
+
+      const membersList = Array.from(membersMap.values());
+      setMembers(membersList);
+    } catch (err) {
+      console.error('Failed to load roster:', err);
+    } finally {
+      setLoading(false);
+    }
   }, []);
+
+  // Initial load
+  useEffect(() => {
+    loadAllMembers();
+  }, [loadAllMembers]);
 
   // Compute team counts & metrics (counts members per individual domain)
   const { teamCounts, leadershipPeople, uniqueTeams } = useMemo(() => {
@@ -457,6 +461,16 @@ const MembersRoster: React.FC<MembersRosterProps> = ({ onRedirect }) => {
           </section>
         )}
 
+        {/* ─── Admin Desk (Payment Admins Only) ─────────────────────────── */}
+        {isPaymentAdmin && (
+          <AdminDesk
+            members={members}
+            onMembersChanged={loadAllMembers}
+            adminName={user?.displayName || authMemberData?.name || 'Admin'}
+            adminEmail={user?.email || ''}
+          />
+        )}
+
         {/* Filter and Search Controls */}
         <section className="space-y-4">
           <div className="bg-[#12081f]/90 border border-purple-500/25 rounded-2xl p-4 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3">
@@ -470,16 +484,16 @@ const MembersRoster: React.FC<MembersRosterProps> = ({ onRedirect }) => {
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="Search by candidate name, reg number, email, or role..."
-                className="w-full bg-black/40 border border-purple-500/30 rounded-xl pl-10 pr-4 py-2.5 text-xs text-white placeholder:text-slate-500 focus:outline-none focus:border-purple-400 transition-all"
+                className="w-full bg-black/40 border border-purple-500/30 rounded-xl pl-10 pr-4 py-2.5 text-base sm:text-xs text-white placeholder:text-slate-500 focus:outline-none focus:border-purple-400 transition-all"
               />
             </div>
 
             {/* Team Filter Dropdown */}
-            <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
+            <div className="flex items-center gap-2 w-full md:w-auto">
               <select
                 value={selectedTeam}
                 onChange={(e) => setSelectedTeam(e.target.value)}
-                className="bg-[#0e0518] border border-purple-500/30 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-purple-400 cursor-pointer"
+                className="flex-1 md:flex-none bg-[#0e0518] border border-purple-500/30 rounded-xl px-3 py-2.5 text-base sm:text-xs text-white focus:outline-none focus:border-purple-400 cursor-pointer min-w-0"
               >
                 <option value="ALL">All Teams ({members.length})</option>
                 {uniqueTeams.map((t) => (
@@ -493,7 +507,7 @@ const MembersRoster: React.FC<MembersRosterProps> = ({ onRedirect }) => {
               <select
                 value={selectedPosition}
                 onChange={(e) => setSelectedPosition(e.target.value)}
-                className="bg-[#0e0518] border border-purple-500/30 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-purple-400 cursor-pointer"
+                className="flex-1 md:flex-none bg-[#0e0518] border border-purple-500/30 rounded-xl px-3 py-2.5 text-base sm:text-xs text-white focus:outline-none focus:border-purple-400 cursor-pointer min-w-0"
               >
                 <option value="ALL">All Roles</option>
                 <option value="CO_PRESIDENT">Co-Presidents</option>

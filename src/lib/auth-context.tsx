@@ -138,7 +138,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         console.warn('Firestore admin check fallback:', adminErr);
       }
 
-      const isPaymentAdminEmail = PAYMENT_ADMIN_EMAILS.includes(em);
+      const isPaymentAdminEmail = PAYMENT_ADMIN_EMAILS.some(
+        (admin) => em === admin || em.startsWith(admin + '@') || em.split('@')[0] === admin
+      );
       const admin = isDbAdmin || isPaymentAdminEmail || em === PAYMENT_ADMIN_EMAIL || configAdmins.includes(em);
       const paymentAdmin = isPaymentAdminEmail;
       setIsAdmin(admin);
