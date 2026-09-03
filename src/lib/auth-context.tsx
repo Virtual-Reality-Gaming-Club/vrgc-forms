@@ -14,11 +14,8 @@ import { CONFIG } from '@/lib/config';
 
 import { checkIsFaculty, ensureDefaultTestFaculty } from '@/lib/faculty';
 
-// Designated payment admin emails loaded from environment variables
-export const PAYMENT_ADMIN_EMAILS = (process.env.NEXT_PUBLIC_PAYMENT_ADMIN_EMAILS || '')
-  .split(',')
-  .map((e) => e.trim().toLowerCase())
-  .filter(Boolean);
+// Designated payment admin emails loaded from CONFIG
+export const PAYMENT_ADMIN_EMAILS = CONFIG.PAYMENT_ADMIN_EMAILS;
 export const PAYMENT_ADMIN_EMAIL = PAYMENT_ADMIN_EMAILS[0] || '';
 export const ADMIN_EMAIL = PAYMENT_ADMIN_EMAILS[0] || '';
 
