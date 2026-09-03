@@ -588,32 +588,32 @@ const Referrals: React.FC<ReferralsProps> = ({
   const renderRankBadge = (rankNum: number) => {
     if (rankNum === 1) {
       return (
-        <div className="w-10 h-10 bg-gradient-to-tr from-amber-600 via-yellow-400 to-amber-200 rounded-2xl border-2 border-yellow-200 flex flex-col items-center justify-center shadow-[0_0_20px_rgba(245,158,11,0.5)]">
-          <span className="material-symbols-outlined text-black font-black text-lg">sports_esports</span>
-          <span className="text-[7px] font-black text-black font-mono leading-none">#1</span>
+        <div className="w-8 h-8 sm:w-10 sm:h-10 bg-gradient-to-tr from-amber-600 via-yellow-400 to-amber-200 rounded-xl sm:rounded-2xl border-2 border-yellow-200 flex flex-col items-center justify-center shadow-[0_0_20px_rgba(245,158,11,0.5)] shrink-0">
+          <span className="material-symbols-outlined text-black font-black text-sm sm:text-lg">sports_esports</span>
+          <span className="text-[6.5px] sm:text-[7px] font-black text-black font-mono leading-none">#1</span>
         </div>
       );
     }
     if (rankNum === 2) {
       return (
-        <div className="w-10 h-10 bg-gradient-to-tr from-purple-800 via-fuchsia-500 to-purple-400 rounded-2xl border-2 border-fuchsia-300 flex flex-col items-center justify-center shadow-[0_0_20px_rgba(217,70,239,0.4)]">
-          <span className="material-symbols-outlined text-white font-black text-lg">bolt</span>
-          <span className="text-[7.5px] font-black text-white font-mono leading-none">#2</span>
+        <div className="w-8 h-8 sm:w-10 sm:h-10 bg-gradient-to-tr from-purple-800 via-fuchsia-500 to-purple-400 rounded-xl sm:rounded-2xl border-2 border-fuchsia-300 flex flex-col items-center justify-center shadow-[0_0_20px_rgba(217,70,239,0.4)] shrink-0">
+          <span className="material-symbols-outlined text-white font-black text-sm sm:text-lg">bolt</span>
+          <span className="text-[6.5px] sm:text-[7.5px] font-black text-white font-mono leading-none">#2</span>
         </div>
       );
     }
     if (rankNum === 3) {
       return (
-        <div className="w-10 h-10 bg-gradient-to-tr from-cyan-800 via-cyan-400 to-teal-300 rounded-2xl border-2 border-cyan-200 flex flex-col items-center justify-center shadow-[0_0_20px_rgba(6,182,212,0.4)]">
-          <span className="material-symbols-outlined text-black font-black text-lg">videogame_asset</span>
-          <span className="text-[7.5px] font-black text-black font-mono leading-none">#3</span>
+        <div className="w-8 h-8 sm:w-10 sm:h-10 bg-gradient-to-tr from-cyan-800 via-cyan-400 to-teal-300 rounded-xl sm:rounded-2xl border-2 border-cyan-200 flex flex-col items-center justify-center shadow-[0_0_20px_rgba(6,182,212,0.4)] shrink-0">
+          <span className="material-symbols-outlined text-black font-black text-sm sm:text-lg">videogame_asset</span>
+          <span className="text-[6.5px] sm:text-[7.5px] font-black text-black font-mono leading-none">#3</span>
         </div>
       );
     }
     return (
-      <div className="w-10 h-10 bg-[#0c0419] border border-purple-500/30 rounded-2xl flex flex-col items-center justify-center text-purple-300 font-bold shadow-[0_0_10px_rgba(168,85,247,0.1)]">
-        <span className="text-xs font-black font-mono">#{rankNum}</span>
-        <span className="text-[6px] text-slate-400 font-bold uppercase">LVL</span>
+      <div className="w-8 h-8 sm:w-10 sm:h-10 bg-[#0c0419] border border-purple-500/30 rounded-xl sm:rounded-2xl flex flex-col items-center justify-center text-purple-300 font-bold shadow-[0_0_10px_rgba(168,85,247,0.1)] shrink-0">
+        <span className="text-[11px] sm:text-xs font-black font-mono">#{rankNum}</span>
+        <span className="text-[5.5px] sm:text-[6px] text-slate-400 font-bold uppercase">LVL</span>
       </div>
     );
   };
@@ -1408,8 +1408,8 @@ const Referrals: React.FC<ReferralsProps> = ({
             })()}
 
             {/* Comprehensive Standings Table */}
-            <div className="bg-[#0b0318]/90 border border-purple-500/30 rounded-3xl p-4 sm:p-6 shadow-[0_0_35px_rgba(168,85,247,0.1)] space-y-4">
-              <div className="flex items-center justify-between px-2">
+            <div className="bg-[#0b0318]/90 border border-purple-500/30 rounded-3xl p-3 sm:p-6 shadow-[0_0_35px_rgba(168,85,247,0.1)] space-y-4">
+              <div className="flex items-center justify-between px-1 sm:px-2">
                 <span className="text-xs font-black uppercase tracking-wider text-purple-300">
                   ALL OPERATOR STANDINGS
                 </span>
@@ -1427,14 +1427,14 @@ const Referrals: React.FC<ReferralsProps> = ({
                     return (
                       <div 
                         key={lb.registrationNumber} 
-                        className={`p-3.5 sm:p-4 rounded-2xl border transition-all duration-200 flex items-center justify-between gap-3 ${
+                        className={`p-3 sm:p-4 rounded-2xl border transition-all duration-200 flex items-center justify-between gap-2.5 sm:gap-3 ${
                           isCurrentUser
                             ? 'bg-purple-600/20 border-purple-400/80 shadow-[0_0_20px_rgba(168,85,247,0.25)]'
                             : 'bg-black/40 border-purple-500/15 hover:border-purple-500/40 hover:bg-white/5'
                         }`}
                       >
-                        <div className="flex items-center gap-3.5 min-w-0">
-                          <div className="shrink-0 flex items-center gap-2">
+                        <div className="flex items-center gap-2 sm:gap-3.5 min-w-0 flex-1">
+                          <div className="shrink-0 flex items-center gap-1.5 sm:gap-2">
                             {renderRankBadge(lb.rankNumber)}
                             <img
                               src={lb.photoURL || `https://api.dicebear.com/9.x/bottts/svg?seed=${encodeURIComponent(lb.name)}`}
@@ -1442,39 +1442,42 @@ const Referrals: React.FC<ReferralsProps> = ({
                               onError={(e) => {
                                 (e.target as HTMLImageElement).src = `https://api.dicebear.com/9.x/bottts/svg?seed=${encodeURIComponent(lb.name)}`;
                               }}
-                              className="w-10 h-10 rounded-xl object-cover border border-purple-500/30 bg-purple-950/40"
+                              className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl object-cover border border-purple-500/30 bg-purple-950/40 shrink-0"
                             />
                           </div>
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <h4 className="text-white font-bold text-sm truncate">{lb.name}</h4>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <h4 className="text-white font-bold text-xs sm:text-sm truncate">{lb.name}</h4>
                               {isCurrentUser && (
-                                <span className="text-[9px] font-black uppercase px-2 py-0.2 rounded-full bg-purple-500 text-white shadow-[0_0_10px_rgba(168,85,247,0.5)]">
+                                <span className="text-[8px] sm:text-[9px] font-black uppercase px-1.5 py-0.2 rounded-full bg-purple-500 text-white shadow-[0_0_10px_rgba(168,85,247,0.5)] shrink-0">
                                   YOU
                                 </span>
                               )}
                             </div>
-                            <div className="flex items-center gap-2 text-xs text-slate-400 font-mono mt-0.5">
-                              <span>{lb.registrationNumber}</span>
-                              <span>•</span>
-                              <span>{lb.totalReferrals} referred</span>
+                            <div className="flex items-center gap-x-1.5 gap-y-0.5 text-[10px] sm:text-xs text-slate-400 font-mono mt-0.5 flex-wrap">
+                              <span className="text-slate-300 font-medium shrink-0">{lb.registrationNumber}</span>
+                              <span className="text-slate-600 shrink-0">•</span>
+                              <span className="shrink-0">{lb.totalReferrals} referred</span>
                               {lb.admittedCount > 0 && (
                                 <>
-                                  <span>•</span>
-                                  <span className="text-emerald-400 font-bold">{lb.admittedCount} admitted</span>
+                                  <span className="text-slate-600 shrink-0">•</span>
+                                  <span className="text-emerald-400 font-bold shrink-0">{lb.admittedCount} admitted</span>
                                 </>
                               )}
                             </div>
                           </div>
                         </div>
 
-                        <div className="flex items-center gap-3 shrink-0">
-                          <span className={`hidden sm:inline-flex text-[10px] px-2.5 py-1 rounded-full uppercase tracking-wider font-extrabold ${tier.color}`}>
+                        <div className="flex items-center gap-2 sm:gap-3 shrink-0 text-right ml-1 sm:ml-0">
+                          <span className={`hidden md:inline-flex text-[10px] px-2.5 py-1 rounded-full uppercase tracking-wider font-extrabold ${tier.color}`}>
                             {tier.name}
                           </span>
                           <div className="text-right">
-                            <span className="text-sm sm:text-base font-black text-purple-300 font-mono tracking-tight block">
+                            <span className="text-xs sm:text-base font-black text-purple-300 font-mono tracking-tight block whitespace-nowrap">
                               {lb.totalXP} XP
+                            </span>
+                            <span className={`md:hidden text-[8px] font-black uppercase tracking-wider block font-mono ${tier.color.split(' ')[0]}`}>
+                              {tier.name}
                             </span>
                           </div>
                         </div>
