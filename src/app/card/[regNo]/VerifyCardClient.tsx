@@ -79,7 +79,7 @@ export default function VerifyCardClient({
 
   if (loading) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-screen bg-[#020006] text-white p-6 relative overflow-hidden">
+      <div className="flex flex-col items-center justify-center min-h-screen bg-transparent text-white p-6 relative overflow-hidden">
         <div className="w-12 h-12 rounded-full border-2 border-t-2 border-t-[#c084fc] border-purple-950/40 animate-spin" />
       </div>
     );
@@ -87,7 +87,7 @@ export default function VerifyCardClient({
 
   if (error || !member) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-screen bg-[#020006] text-white p-6 relative">
+      <div className="flex flex-col items-center justify-center min-h-screen bg-transparent text-white p-6 relative">
         <div className="max-w-md w-full glass-panel p-8 rounded-3xl border border-red-500/30 bg-black/80 backdrop-blur-md space-y-6 text-center shadow-[0_0_50px_rgba(239,68,68,0.2)]">
           <span className="material-symbols-outlined text-red-400 text-5xl animate-bounce">
             gavel

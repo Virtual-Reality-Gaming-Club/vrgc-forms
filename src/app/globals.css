@@ -5,7 +5,7 @@
   :root {
     --neon-purple: #A855F7;
     --true-black: #000000;
-    --background: #05010a;
+    --background: #03010A;
     --surface: #0e0518;
     --surface-variant: #160a26;
     --primary: #a855f7;
@@ -47,10 +47,10 @@
 
 /* Custom Background Mesh */
 .bg-mesh {
-  background-color: #05010a;
+  background-color: transparent;
   background-image: 
-    radial-gradient(circle at 15% 15%, rgba(168, 85, 247, 0.12) 0%, transparent 45%),
-    radial-gradient(circle at 85% 85%, rgba(207, 92, 255, 0.08) 0%, transparent 45%),
+    radial-gradient(circle at 15% 15%, rgba(168, 85, 247, 0.08) 0%, transparent 45%),
+    radial-gradient(circle at 85% 85%, rgba(207, 92, 255, 0.05) 0%, transparent 45%),
     linear-gradient(rgba(255, 255, 255, 0.015) 1px, transparent 1px),
     linear-gradient(90deg, rgba(255, 255, 255, 0.015) 1px, transparent 1px);
   background-size: 100% 100%, 100% 100%, 24px 24px, 24px 24px;
@@ -337,18 +337,31 @@
 .no-scrollbar::-webkit-scrollbar { display: none; }
 .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
 
+/* VRGC Modern Loading Shimmer Keyframes */
+@keyframes shimmerLaser {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(250%); }
+}
+
+.animate-shimmer-laser {
+  animation: shimmerLaser 1.8s infinite ease-in-out;
+}
+
 /* ═══════════════════════════════════════ */
-/* ═══ MOBILE: Pause heavy animations  ═══ */
+/* ═══ MOBILE: Hardware Accelerated  ═══ */
 /* ═══════════════════════════════════════ */
 @media (max-width: 767px) {
-  /* Disable expensive ambient background animation on mobile */
-  body > * { animation: none !important; }
+  /* Hardware accelerated touch scrolling */
+  main, .custom-scrollbar {
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-y: contain;
+  }
 
-  /* Pause camera-breathe on mobile — causes full subtree repaint */
+  /* Pause heavy 3D camera-breathe on mobile to prevent subtree repaint */
   .animate-camera-breathe { animation: none !important; }
 
   /* Reduce blur cost on mobile filters */
-  .blur-heavy { filter: blur(20px) !important; }
+  .blur-heavy { filter: blur(12px) !important; }
 }
 
 /* ═══════════════════════════════════ */

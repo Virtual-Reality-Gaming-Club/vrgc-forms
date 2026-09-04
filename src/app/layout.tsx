@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Orbitron, Outfit, JetBrains_Mono, Rajdhani } from 'next/font/google';
 import "./globals.css";
 import { AuthProvider } from "@/lib/auth-context";
+import GlobalBackground from "@/components/GlobalBackground";
 
 const orbitron = Orbitron({
   subsets: ['latin'],
@@ -60,11 +61,15 @@ export default function RootLayout({
           href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0&display=swap"
         />
       </head>
-      <body className="bg-[#05010a] text-[#e2e8f0] antialiased min-h-screen selection:bg-purple-500 selection:text-white">
-        <AuthProvider>
-          {children}
-        </AuthProvider>
+      <body className="bg-[#03010A] text-[#e2e8f0] antialiased min-h-screen selection:bg-purple-500 selection:text-white relative">
+        <GlobalBackground />
+        <div className="relative z-10 min-h-screen flex flex-col">
+          <AuthProvider>
+            {children}
+          </AuthProvider>
+        </div>
       </body>
     </html>
   );
 }
+

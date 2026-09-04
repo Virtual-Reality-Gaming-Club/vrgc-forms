@@ -9,6 +9,7 @@ import {
 } from 'firebase/firestore';
 import { createPaymentInFirestore } from '@/lib/payments';
 import { PaymentItem } from '@/types/payment';
+import SpecularButton from './SpecularButton';
 
 const SEAT_LIMIT = 80;
 
@@ -428,13 +429,20 @@ export default function EventRegister({ externalUser, externalUserEmail, externa
         {/* Action Controls */}
         <div className="relative z-10 flex items-center gap-3 shrink-0">
           {canManageEvents && (
-            <button
+            <SpecularButton
+              size="sm"
+              radius={12}
+              tint="#f59e0b"
+              tintOpacity={0.25}
+              lineColor="#fbbf24"
+              baseColor="#78350f"
+              intensity={1.1}
               onClick={() => setShowCreateModal(true)}
-              className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-white text-xs font-extrabold shadow-[0_0_20px_rgba(245,158,11,0.4)] transition-all flex items-center gap-2"
+              className="font-extrabold text-white shadow-[0_0_20px_rgba(245,158,11,0.4)]"
             >
               <span className="material-symbols-outlined text-sm">add_circle</span>
               <span>Create Event (Admin)</span>
-            </button>
+            </SpecularButton>
           )}
         </div>
       </div>
@@ -602,11 +610,10 @@ export default function EventRegister({ externalUser, externalUserEmail, externa
                         <button
                           onClick={() => handleToggleRegistration(evt)}
                           title={evt.status === 'Closed' ? 'Start Registration' : 'Close Registration'}
-                          className={`w-full xs:w-auto inline-flex items-center justify-center gap-1 px-3 py-1.5 rounded-lg border text-[10px] font-extrabold transition-all active:scale-95 ${
-                            evt.status === 'Closed'
+                          className={`w-full xs:w-auto inline-flex items-center justify-center gap-1 px-3 py-1.5 rounded-lg border text-[10px] font-extrabold transition-all active:scale-95 ${evt.status === 'Closed'
                               ? 'bg-emerald-500/15 hover:bg-emerald-500/25 border-emerald-500/40 text-emerald-300 shadow-[0_0_10px_rgba(16,185,129,0.2)]'
                               : 'bg-rose-500/15 hover:bg-rose-500/25 border-rose-500/40 text-rose-300 shadow-[0_0_10px_rgba(244,63,94,0.2)]'
-                          }`}
+                            }`}
                         >
                           <span className="material-symbols-outlined text-xs">
                             {evt.status === 'Closed' ? 'play_arrow' : 'lock'}
@@ -649,21 +656,36 @@ export default function EventRegister({ externalUser, externalUserEmail, externa
                       <span>Registration Full</span>
                     </button>
                   ) : currentEmail ? (
-                    <button
+                    <SpecularButton
+                      size="sm"
+                      radius={12}
+                      tint="#9333ea"
+                      tintOpacity={0.4}
+                      lineColor="#c084fc"
+                      baseColor="#581c87"
+                      intensity={1.15}
+                      followMouse
                       onClick={() => setRegisteringEvent(evt)}
-                      className="w-full sm:w-auto justify-center px-6 py-3 sm:py-2.5 rounded-xl bg-gradient-to-r from-purple-600 to-fuchsia-600 hover:from-purple-500 hover:to-fuchsia-500 active:scale-95 text-white text-xs font-bold shadow-[0_0_20px_rgba(168,85,247,0.35)] transition-all flex items-center gap-2"
+                      className="w-full sm:w-auto font-bold text-white shadow-[0_0_20px_rgba(168,85,247,0.35)]"
                     >
                       <span>Register Now</span>
                       <span className="material-symbols-outlined text-sm">arrow_forward</span>
-                    </button>
+                    </SpecularButton>
                   ) : (
-                    <button
+                    <SpecularButton
+                      size="sm"
+                      radius={12}
+                      tint="#9333ea"
+                      tintOpacity={0.4}
+                      lineColor="#c084fc"
+                      baseColor="#581c87"
+                      intensity={1.15}
                       onClick={handleLogin}
-                      className="w-full sm:w-auto justify-center px-5 py-3 sm:py-2.5 rounded-xl bg-purple-600 hover:bg-purple-500 active:scale-95 text-white text-xs font-bold shadow-[0_0_15px_rgba(168,85,247,0.4)] transition-all flex items-center gap-1.5"
+                      className="w-full sm:w-auto font-bold text-white shadow-[0_0_15px_rgba(168,85,247,0.4)]"
                     >
                       <span className="material-symbols-outlined text-base">login</span>
                       <span>Sign In to Register</span>
-                    </button>
+                    </SpecularButton>
                   )}
                 </div>
               </div>
@@ -750,13 +772,20 @@ export default function EventRegister({ externalUser, externalUserEmail, externa
                 >
                   Cancel
                 </button>
-                <button
+                <SpecularButton
                   type="submit"
+                  size="sm"
+                  radius={12}
+                  tint="#9333ea"
+                  tintOpacity={0.4}
+                  lineColor="#c084fc"
+                  baseColor="#581c87"
+                  intensity={1.2}
                   disabled={isSubmittingReg}
-                  className="w-full sm:w-auto px-6 py-2.5 rounded-xl bg-gradient-to-r from-purple-600 to-fuchsia-600 hover:from-purple-500 hover:to-fuchsia-500 text-white font-extrabold shadow-[0_0_20px_rgba(168,85,247,0.4)] transition-all flex items-center justify-center gap-2 active:scale-95"
+                  className="w-full sm:w-auto font-extrabold text-white shadow-[0_0_20px_rgba(168,85,247,0.4)]"
                 >
                   {isSubmittingReg ? 'Confirming...' : 'Confirm Registration'}
-                </button>
+                </SpecularButton>
               </div>
             </form>
           </div>
@@ -771,7 +800,7 @@ export default function EventRegister({ externalUser, externalUserEmail, externa
 
         const q = registrantSearch.trim().toLowerCase();
         let filtered = allRegistrants;
-        
+
         if (q) {
           filtered = filtered.filter((r) =>
             r.full_name.toLowerCase().includes(q) ||
@@ -842,11 +871,10 @@ export default function EventRegister({ externalUser, externalUserEmail, externa
                       <button
                         key={filterOpt}
                         onClick={() => setPresenceFilter(filterOpt)}
-                        className={`px-3 py-1 rounded-lg text-[10px] font-extrabold transition-all flex items-center gap-1.5 ${
-                          isActive
+                        className={`px-3 py-1 rounded-lg text-[10px] font-extrabold transition-all flex items-center gap-1.5 ${isActive
                             ? 'bg-purple-600 text-white shadow-[0_0_12px_rgba(168,85,247,0.4)]'
                             : 'text-slate-400 hover:text-white hover:bg-white/5'
-                        }`}
+                          }`}
                       >
                         <span>{filterOpt}</span>
                         <span className={`px-1.5 py-0.2 rounded-full text-[9px] font-mono ${isActive ? 'bg-white/20 text-white' : 'bg-white/10 text-slate-400'}`}>
@@ -868,11 +896,10 @@ export default function EventRegister({ externalUser, externalUserEmail, externa
                   filtered.map((r, idx) => (
                     <div
                       key={r.docId}
-                      className={`flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-4 py-3 rounded-xl border transition-all ${
-                        r.is_present
+                      className={`flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-4 py-3 rounded-xl border transition-all ${r.is_present
                           ? 'bg-emerald-950/20 border-emerald-500/30'
                           : 'bg-white/5 border-white/10 hover:border-purple-500/30'
-                      }`}
+                        }`}
                     >
                       <div className="flex items-center gap-3 min-w-0">
                         <span className="text-[10px] font-mono text-slate-500 w-5 shrink-0">#{idx + 1}</span>
@@ -898,11 +925,10 @@ export default function EventRegister({ externalUser, externalUserEmail, externa
                           onClick={() => handleTogglePresence(r.docId, Boolean(r.is_present))}
                           disabled={togglingPresenceId === r.docId}
                           title={r.is_present ? 'Mark as Absent' : 'Mark as Present'}
-                          className={`px-3 py-1.5 rounded-lg text-[10px] font-extrabold transition-all flex items-center gap-1.5 shadow-sm active:scale-95 disabled:opacity-50 ${
-                            r.is_present
+                          className={`px-3 py-1.5 rounded-lg text-[10px] font-extrabold transition-all flex items-center gap-1.5 shadow-sm active:scale-95 disabled:opacity-50 ${r.is_present
                               ? 'bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-300 shadow-[0_0_10px_rgba(16,185,129,0.2)]'
                               : 'bg-white/10 hover:bg-emerald-500/20 border border-white/20 hover:border-emerald-500/40 text-slate-300 hover:text-emerald-300'
-                          }`}
+                            }`}
                         >
                           <span className="material-symbols-outlined text-xs">
                             {r.is_present ? 'check_box' : 'check_box_outline_blank'}
@@ -1168,14 +1194,21 @@ export default function EventRegister({ externalUser, externalUserEmail, externa
               >
                 Cancel
               </button>
-              <button
+              <SpecularButton
                 type="submit"
+                size="sm"
+                radius={12}
+                tint="#f59e0b"
+                tintOpacity={0.3}
+                lineColor="#fbbf24"
+                baseColor="#78350f"
+                intensity={1.2}
                 disabled={savingEdit}
-                className="px-6 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 text-white font-extrabold shadow-[0_0_20px_rgba(245,158,11,0.4)] transition-all flex items-center gap-2"
+                className="font-extrabold text-white shadow-[0_0_20px_rgba(245,158,11,0.4)]"
               >
                 <span className="material-symbols-outlined text-sm">save</span>
                 <span>{savingEdit ? 'Saving...' : 'Save Changes'}</span>
-              </button>
+              </SpecularButton>
             </div>
           </form>
         </div>

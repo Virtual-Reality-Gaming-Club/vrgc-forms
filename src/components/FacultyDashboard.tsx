@@ -14,7 +14,7 @@ interface FacultyDashboardProps {
 
 const FacultyDashboard: React.FC<FacultyDashboardProps> = ({
   onPageChange,
-  facultyName = 'Faculty Member',
+  facultyName = 'Faculty Mentor',
   facultyEmail = '',
 }) => {
   const [totalMembers, setTotalMembers] = useState<number>(0);
@@ -35,11 +35,11 @@ const FacultyDashboard: React.FC<FacultyDashboardProps> = ({
     const centerX = rect.width / 2;
     const centerY = rect.height / 2;
 
-    const rotateY = ((x - centerX) / centerX) * 12;
-    const rotateX = -((y - centerY) / centerY) * 12;
+    const rotateY = ((x - centerX) / centerX) * 8;
+    const rotateX = -((y - centerY) / centerY) * 8;
 
     setTransformStyle({
-      transform: `perspective(1000px) rotateX(${rotateX}deg) rotateY(${rotateY}deg) scale3d(1.03, 1.03, 1.03)`,
+      transform: `perspective(1000px) rotateX(${rotateX}deg) rotateY(${rotateY}deg) scale3d(1.02, 1.02, 1.02)`,
       transition: 'transform 0.1s ease-out',
     });
   };
@@ -107,173 +107,187 @@ const FacultyDashboard: React.FC<FacultyDashboardProps> = ({
   }, [facultyEmail]);
 
   return (
-    <div className="flex-grow min-h-[calc(100vh-117px)] overflow-y-auto p-4 md:p-8 bg-mesh relative text-left select-none">
-      <div className="max-w-6xl mx-auto space-y-10">
-        {/* Header Hero Section */}
-        <section className="flex flex-col md:flex-row items-center justify-between gap-8 pb-8 border-b border-purple-500/15 stagger-in">
-          <div className="space-y-3 max-w-2xl text-left w-full">
-            <div className="flex items-center gap-2">
-              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
-                <span className="material-symbols-outlined text-[13px]">school</span>
+    <div className="flex-grow min-h-[calc(100vh-117px)] overflow-y-auto p-3 sm:p-6 md:p-8 bg-transparent relative text-left select-none">
+      <div className="max-w-6xl mx-auto space-y-6 sm:space-y-8">
+        
+        {/* Header Hero Section - Strictly Solid Colors */}
+        <section className="bg-[#0c0514] border border-[#261238] rounded-2xl sm:rounded-3xl p-4 sm:p-6 md:p-8 shadow-[0_0_30px_rgba(0,0,0,0.5)] flex flex-col md:flex-row items-center justify-between gap-6">
+          <div className="space-y-2 sm:space-y-3 max-w-2xl text-left w-full">
+            {/* Badges strip */}
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-indigo-950 text-indigo-300 border border-indigo-700">
+                <span className="material-symbols-outlined text-[12px]">school</span>
                 FACULTY ADVISORY DESK
               </span>
-              <span className="font-code-sm text-xs text-purple-400 font-bold uppercase tracking-wider">
-                VRGC CHAPTER
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-[#1c1c1c] text-purple-300 border border-[#333333]">
+                VRGC CHAPTER • VIT BHOPAL
               </span>
             </div>
-            <h2 className="font-display-lg text-3xl md:text-4xl text-white font-extrabold tracking-tight">
+
+            {/* Personalized Name & Welcome */}
+            <h1 className="text-2xl sm:text-3xl md:text-4xl text-white font-black tracking-tight">
               Welcome, {facultyName}
-            </h2>
-            <p className="font-body-lg text-slate-400 text-sm md:text-base leading-relaxed">
-              Executive overview for Virtual Reality &amp; Gaming Club operations, member rosters, transparent dues, and future event authorizations.
+            </h1>
+
+            {/* Subtitle & Club Role */}
+            <p className="text-slate-300 text-xs sm:text-sm leading-relaxed">
+              Institutional governance desk for the Virtual Reality &amp; Gaming Club. Review student proposals, inspect transparent ledgers, and supervise chapter rosters.
             </p>
+
+            {/* Details Strip */}
+            <div className="pt-2 flex flex-wrap items-center gap-2 text-[11px] font-mono">
+              <span className="bg-[#140b22] px-2.5 py-1 rounded-md border border-[#331854] text-purple-300">
+                Email: <strong className="text-white">{facultyEmail || 'faculty@vitbhopal.ac.in'}</strong>
+              </span>
+              <span className="bg-[#140b22] px-2.5 py-1 rounded-md border border-[#331854] text-emerald-300 flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                Verified Academic Mentor
+              </span>
+            </div>
           </div>
 
-          {/* 3D Tilt Hero Graphic */}
+          {/* 3D Tilt Hero Logo Card - Solid Dark Theme */}
           <div
             ref={cardRef}
             onMouseMove={handleMouseMove}
             onMouseLeave={handleMouseLeave}
             style={transformStyle}
-            className="w-full md:w-80 h-44 rounded-2xl overflow-hidden border border-purple-500/30 flex items-center justify-center bg-gradient-to-br from-[#120824] via-[#0e0518] to-[#05010a] relative shadow-[0_0_40px_rgba(168,85,247,0.2)] flex-shrink-0 cursor-pointer select-none"
+            className="w-full md:w-72 h-32 sm:h-36 md:h-40 rounded-2xl overflow-hidden border border-[#2d1645] flex items-center justify-center bg-[#07010f] relative shadow-lg flex-shrink-0 cursor-pointer select-none"
           >
-            <img src="/vrgc-logo.png" alt="VRGC Hero Logo" className="w-full h-full object-cover opacity-85 pointer-events-none" />
-            <div className="absolute inset-0 bg-gradient-to-t from-[#05010a] via-transparent to-transparent pointer-events-none" />
-            <div className="absolute bottom-3 left-4 right-4 flex items-center justify-between text-[11px] font-bold text-purple-200">
-              <span className="bg-black/60 px-2 py-0.5 rounded backdrop-blur-md">FACULTY PORTAL</span>
-              <span className="text-emerald-400 flex items-center gap-1">
-                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" /> Verified Access
+            <img src="/vrgc-logo.png" alt="VRGC Hero Logo" className="w-full h-full object-cover opacity-80 pointer-events-none" />
+            <div className="absolute inset-0 bg-black/40 pointer-events-none" />
+            <div className="absolute bottom-2.5 left-3 right-3 flex items-center justify-between text-[10px] font-bold text-purple-200">
+              <span className="bg-[#120722] border border-purple-800 px-2 py-0.5 rounded text-white">
+                OFFICIAL PORTAL
+              </span>
+              <span className="text-emerald-400 bg-[#051a10] border border-emerald-800 px-2 py-0.5 rounded flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" /> Secure
               </span>
             </div>
           </div>
         </section>
 
-        {/* Quick KPI Stat Strip */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <div className="bg-[#12081f]/80 border border-purple-500/20 rounded-2xl p-5 backdrop-blur-xl">
-            <span className="font-label-caps text-[10px] text-purple-300 font-bold block mb-1">TOTAL CLUB MEMBERS</span>
-            <div className="text-2xl sm:text-3xl font-black text-white">
+        {/* Quick KPI Stat Strip - Compact & Responsive */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5 sm:gap-4">
+          <div className="bg-[#0e071a] border border-[#261238] rounded-xl sm:rounded-2xl p-3.5 sm:p-5 text-left">
+            <span className="font-label-caps text-[9px] sm:text-[10px] text-purple-300 font-bold block mb-1">
+              TOTAL CLUB MEMBERS
+            </span>
+            <div className="text-xl sm:text-2xl md:text-3xl font-black text-white">
               {loadingStats ? '—' : totalMembers}
             </div>
-            <span className="text-[11px] text-slate-400 mt-1 block">Active across all teams</span>
+            <span className="text-[10px] sm:text-[11px] text-slate-400 mt-1 block">Active across domains</span>
           </div>
 
-          <div className="bg-[#12081f]/80 border border-purple-500/20 rounded-2xl p-5 backdrop-blur-xl">
-            <span className="font-label-caps text-[10px] text-indigo-300 font-bold block mb-1">ACTIVE DOMAINS</span>
-            <div className="text-2xl sm:text-3xl font-black text-white">
+          <div className="bg-[#0e071a] border border-[#261238] rounded-xl sm:rounded-2xl p-3.5 sm:p-5 text-left">
+            <span className="font-label-caps text-[9px] sm:text-[10px] text-indigo-300 font-bold block mb-1">
+              ACTIVE DOMAINS
+            </span>
+            <div className="text-xl sm:text-2xl md:text-3xl font-black text-white">
               {loadingStats ? '—' : totalTeams}
             </div>
-            <span className="text-[11px] text-slate-400 mt-1 block">Specialized VRGC wings</span>
+            <span className="text-[10px] sm:text-[11px] text-slate-400 mt-1 block">Technical &amp; Creative</span>
           </div>
 
-          <div className="bg-[#12081f]/80 border border-purple-500/20 rounded-2xl p-5 backdrop-blur-xl">
-            <span className="font-label-caps text-[10px] text-amber-300 font-bold block mb-1">ACTION ITEMS</span>
-            <div className="text-2xl sm:text-3xl font-black text-amber-400">
+          <div className="bg-[#0e071a] border border-[#261238] rounded-xl sm:rounded-2xl p-3.5 sm:p-5 text-left">
+            <span className="font-label-caps text-[9px] sm:text-[10px] text-amber-300 font-bold block mb-1">
+              PENDING REVIEWS
+            </span>
+            <div className="text-xl sm:text-2xl md:text-3xl font-black text-amber-400">
               {loadingStats ? '—' : pendingEventCount}
             </div>
-            <span className="text-[11px] text-slate-400 mt-1 block">Pending event reviews</span>
+            <span className="text-[10px] sm:text-[11px] text-slate-400 mt-1 block">Actionable proposals</span>
           </div>
 
-          <div className="bg-[#12081f]/80 border border-purple-500/20 rounded-2xl p-5 backdrop-blur-xl">
-            <span className="font-label-caps text-[10px] text-emerald-300 font-bold block mb-1">FACULTY PAYMENTS</span>
-            <div className="text-2xl sm:text-3xl font-black text-emerald-400">
+          <div className="bg-[#0e071a] border border-[#261238] rounded-xl sm:rounded-2xl p-3.5 sm:p-5 text-left">
+            <span className="font-label-caps text-[9px] sm:text-[10px] text-emerald-300 font-bold block mb-1">
+              FACULTY PAYMENTS
+            </span>
+            <div className="text-xl sm:text-2xl md:text-3xl font-black text-emerald-400">
               {loadingStats ? '—' : approvedPaymentsCount}
             </div>
-            <span className="text-[11px] text-slate-400 mt-1 block">Published financial entries</span>
+            <span className="text-[10px] sm:text-[11px] text-slate-400 mt-1 block">Published entries</span>
           </div>
         </div>
 
-        {/* Faculty Sub-Categories Navigation Bento Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          {/* Card 1: Members Page */}
+        {/* Faculty Action Cards Grid - Solid Colors, Mobile Optimized */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5 sm:gap-5">
+          
+          {/* Card 1: Members Roster */}
           <button
             onClick={() => onPageChange('members')}
-            className="group relative flex flex-col items-start p-8 bg-[#150a24]/90 border border-purple-500/30 hover:border-purple-400 rounded-3xl glow-hover transition-all duration-300 text-left overflow-hidden h-[330px] w-full shadow-[0_0_30px_rgba(168,85,247,0.1)]"
+            className="group relative flex flex-col justify-between p-5 sm:p-6 bg-[#0e071a] hover:bg-[#130a24] border border-[#261238] hover:border-purple-500 rounded-2xl transition-all duration-200 text-left min-h-[200px] sm:min-h-[240px] shadow-sm hover:shadow-[0_0_20px_rgba(147,51,234,0.2)] cursor-pointer"
           >
-            <div className="absolute -right-4 -top-4 opacity-10 group-hover:opacity-20 transition-opacity">
-              <span className="material-symbols-outlined text-[160px] text-purple-400">groups</span>
-            </div>
-            <div className="mb-auto z-10">
-              <div className="w-14 h-14 rounded-2xl bg-purple-500/15 border border-purple-500/30 flex items-center justify-center mb-6 shadow-inner">
-                <span className="material-symbols-outlined text-purple-300 text-3xl">badge</span>
+            <div>
+              <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-xl bg-purple-950 border border-purple-800 flex items-center justify-center mb-4 text-purple-300">
+                <span className="material-symbols-outlined text-2xl sm:text-3xl">badge</span>
               </div>
-              <span className="font-label-caps text-[10px] text-purple-300 font-bold tracking-widest block mb-1">
+              <span className="font-label-caps text-[9px] text-purple-400 font-bold tracking-widest block mb-1">
                 TEAM DIRECTORY
               </span>
-              <h3 className="font-display-lg text-2xl text-white font-extrabold mb-2">
+              <h3 className="text-lg sm:text-xl text-white font-black mb-1.5">
                 Members Roster
               </h3>
-              <p className="text-slate-300 text-sm leading-relaxed">
-                Full roster of VRGC Club members categorized by team, co-presidents, coordinators, and domain leads with real-time filters.
+              <p className="text-slate-300 text-xs leading-relaxed">
+                Full roster of VRGC Club members categorized by team, coordinators, and leads with search &amp; filter.
               </p>
             </div>
-            <div className="mt-4 w-full flex items-center justify-between z-10 pt-4 border-t border-purple-500/20">
-              <span className="font-label-caps text-xs text-purple-300 font-bold group-hover:translate-x-2 transition-transform duration-300">
-                VIEW MEMBERS
-              </span>
-              <span className="material-symbols-outlined text-white">arrow_forward</span>
+            <div className="pt-3 mt-3 border-t border-[#261238] flex items-center justify-between w-full text-xs font-bold text-purple-300 group-hover:translate-x-1 transition-transform">
+              <span>VIEW MEMBERS</span>
+              <span className="material-symbols-outlined text-sm">arrow_forward</span>
             </div>
           </button>
 
-          {/* Card 2: Payments View */}
+          {/* Card 2: Faculty Payments View */}
           <button
             onClick={() => onPageChange('payments')}
-            className="group relative flex flex-col items-start p-8 bg-[#150a24]/90 border border-purple-500/30 hover:border-indigo-400 rounded-3xl glow-hover transition-all duration-300 text-left overflow-hidden h-[330px] w-full shadow-[0_0_30px_rgba(168,85,247,0.1)]"
+            className="group relative flex flex-col justify-between p-5 sm:p-6 bg-[#0e071a] hover:bg-[#130a24] border border-[#261238] hover:border-indigo-500 rounded-2xl transition-all duration-200 text-left min-h-[200px] sm:min-h-[240px] shadow-sm hover:shadow-[0_0_20px_rgba(99,102,241,0.2)] cursor-pointer"
           >
-            <div className="absolute -right-4 -top-4 opacity-10 group-hover:opacity-20 transition-opacity">
-              <span className="material-symbols-outlined text-[160px] text-indigo-400">account_balance</span>
-            </div>
-            <div className="mb-auto z-10">
-              <div className="w-14 h-14 rounded-2xl bg-indigo-500/15 border border-indigo-500/30 flex items-center justify-center mb-6 shadow-inner">
-                <span className="material-symbols-outlined text-indigo-300 text-3xl">payments</span>
+            <div>
+              <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-xl bg-indigo-950 border border-indigo-800 flex items-center justify-center mb-4 text-indigo-300">
+                <span className="material-symbols-outlined text-2xl sm:text-3xl">payments</span>
               </div>
-              <span className="font-label-caps text-[10px] text-indigo-300 font-bold tracking-widest block mb-1">
-                FINANCIAL LEDGER
+              <span className="font-label-caps text-[9px] text-indigo-400 font-bold tracking-widest block mb-1">
+                FINANCIAL AUDIT
               </span>
-              <h3 className="font-display-lg text-2xl text-white font-extrabold mb-2">
+              <h3 className="text-lg sm:text-xl text-white font-black mb-1.5">
                 Payments View
               </h3>
-              <p className="text-slate-300 text-sm leading-relaxed">
-                Transparent view of club dues, registration fees, and transactions authorized by Admin for faculty oversight.
+              <p className="text-slate-300 text-xs leading-relaxed">
+                Transparent view of club dues, registration fees, and transactions authorized for faculty oversight.
               </p>
             </div>
-            <div className="mt-4 w-full flex items-center justify-between z-10 pt-4 border-t border-purple-500/20">
-              <span className="font-label-caps text-xs text-indigo-300 font-bold group-hover:translate-x-2 transition-transform duration-300">
-                OPEN PAYMENTS
-              </span>
-              <span className="material-symbols-outlined text-white">arrow_forward</span>
+            <div className="pt-3 mt-3 border-t border-[#261238] flex items-center justify-between w-full text-xs font-bold text-indigo-300 group-hover:translate-x-1 transition-transform">
+              <span>OPEN PAYMENTS</span>
+              <span className="material-symbols-outlined text-sm">arrow_forward</span>
             </div>
           </button>
 
           {/* Card 3: Planned Future Events */}
           <button
             onClick={() => onPageChange('planned_events')}
-            className="group relative flex flex-col items-start p-8 bg-[#150a24]/90 border border-purple-500/30 hover:border-emerald-400 rounded-3xl glow-hover transition-all duration-300 text-left overflow-hidden h-[330px] w-full shadow-[0_0_30px_rgba(168,85,247,0.1)]"
+            className="group relative flex flex-col justify-between p-5 sm:p-6 bg-[#0e071a] hover:bg-[#130a24] border border-[#261238] hover:border-emerald-500 rounded-2xl transition-all duration-200 text-left min-h-[200px] sm:min-h-[240px] shadow-sm hover:shadow-[0_0_20px_rgba(16,185,129,0.2)] cursor-pointer sm:col-span-2 lg:col-span-1"
           >
-            <div className="absolute -right-4 -top-4 opacity-10 group-hover:opacity-20 transition-opacity">
-              <span className="material-symbols-outlined text-[160px] text-emerald-400">event_upcoming</span>
-            </div>
-            <div className="mb-auto z-10">
-              <div className="w-14 h-14 rounded-2xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center mb-6 shadow-inner">
-                <span className="material-symbols-outlined text-emerald-300 text-3xl">rate_review</span>
+            <div>
+              <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-xl bg-emerald-950 border border-emerald-800 flex items-center justify-center mb-4 text-emerald-300">
+                <span className="material-symbols-outlined text-2xl sm:text-3xl">rate_review</span>
               </div>
-              <span className="font-label-caps text-[10px] text-emerald-300 font-bold tracking-widest block mb-1">
+              <span className="font-label-caps text-[9px] text-emerald-400 font-bold tracking-widest block mb-1">
                 PROPOSAL REVIEW
               </span>
-              <h3 className="font-display-lg text-2xl text-white font-extrabold mb-2">
+              <h3 className="text-lg sm:text-xl text-white font-black mb-1.5">
                 Planned Future Events
               </h3>
-              <p className="text-slate-300 text-sm leading-relaxed">
-                Inspect tentative schedules, event proposals &amp; Drive assets. Grant official approval or record rejection notes.
+              <p className="text-slate-300 text-xs leading-relaxed">
+                Inspect tentative schedules, event proposals, Drive links, and grant official faculty authorization.
               </p>
             </div>
-            <div className="mt-4 w-full flex items-center justify-between z-10 pt-4 border-t border-purple-500/20">
-              <span className="font-label-caps text-xs text-emerald-300 font-bold group-hover:translate-x-2 transition-transform duration-300">
-                REVIEW EVENTS
-              </span>
-              <span className="material-symbols-outlined text-white">arrow_forward</span>
+            <div className="pt-3 mt-3 border-t border-[#261238] flex items-center justify-between w-full text-xs font-bold text-emerald-300 group-hover:translate-x-1 transition-transform">
+              <span>REVIEW PROPOSALS</span>
+              <span className="material-symbols-outlined text-sm">arrow_forward</span>
             </div>
           </button>
+
         </div>
       </div>
     </div>

@@ -6,6 +6,7 @@ import { signInWithPopup, signOut, onAuthStateChanged, User } from 'firebase/aut
 import { collection, onSnapshot, doc, deleteDoc, updateDoc, setDoc, getDoc, addDoc, getDocs, query, orderBy, limit } from 'firebase/firestore';
 import { supabase } from '../lib/supabase';
 import { CONFIG } from '../lib/config';
+import SpecularButton from './SpecularButton';
 
 interface IDCardProps {
   onRedirect: () => void;
@@ -174,7 +175,7 @@ const IDCard: React.FC<IDCardProps> = ({
       setCurrentUser(userToUse);
 
       const configAdmins = CONFIG.ADMIN_EMAILS.map(e => e.toLowerCase());
-      const adminStatus = configAdmins.includes(lowerEmail) || (externalIsAdmin ?? false);
+      const adminStatus = externalIsAdmin !== undefined ? externalIsAdmin : configAdmins.includes(lowerEmail);
       setIsAdmin(adminStatus);
 
       if (externalIsAuthorized !== undefined) {
@@ -203,11 +204,25 @@ const IDCard: React.FC<IDCardProps> = ({
 
     setLoadingData(true);
     const unsub = onSnapshot(collection(db, 'id_cards'), (snapshot) => {
-      const candidatesData: CandidateSubmission[] = [];
-      snapshot.forEach((doc) => {
-        candidatesData.push({ id: doc.id, ...doc.data() } as CandidateSubmission);
+      const candidatesMap = new Map<string, CandidateSubmission>();
+      snapshot.forEach((docSnap) => {
+        const data = docSnap.data() as CandidateSubmission;
+        const email = (data.email || docSnap.id || '').toLowerCase().trim();
+        if (email && email.includes('@')) {
+          const existing = candidatesMap.get(email);
+          if (!existing) {
+            candidatesMap.set(email, { id: docSnap.id, ...data });
+          } else {
+            const existingTime = new Date(existing.submittedAt || 0).getTime();
+            const currTime = new Date(data.submittedAt || 0).getTime();
+            if (currTime >= existingTime) {
+              candidatesMap.set(email, { id: docSnap.id, ...data });
+            }
+          }
+        }
       });
-      candidatesData.sort((a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime());
+      const candidatesData = Array.from(candidatesMap.values());
+      candidatesData.sort((a, b) => new Date(b.submittedAt || 0).getTime() - new Date(a.submittedAt || 0).getTime());
       setCandidates(candidatesData);
       setLoadingData(false);
     }, (error) => {
@@ -222,8 +237,15 @@ const IDCard: React.FC<IDCardProps> = ({
   useEffect(() => {
     if (!isAdmin) return;
     const unsub = onSnapshot(collection(db, 'members'), (snapshot) => {
-      const count = snapshot.size;
-      setTotalMembers(count);
+      const uniqueEmails = new Set<string>();
+      snapshot.forEach((docSnap) => {
+        const data = docSnap.data();
+        const email = (data.email || data.Email || docSnap.id || '').toLowerCase().trim();
+        if (email && email.includes('@')) {
+          uniqueEmails.add(email);
+        }
+      });
+      setTotalMembers(uniqueEmails.size > 0 ? uniqueEmails.size : snapshot.size);
     }, (error) => {
       console.warn("Firestore members subscription notice:", error);
     });
@@ -976,13 +998,20 @@ const IDCard: React.FC<IDCardProps> = ({
           </div>
 
           <div className="flex flex-wrap gap-4 self-start md:self-end z-20">
-            <button
+            <SpecularButton
+              size="xs"
+              radius={10}
+              tint="#e11d48"
+              tintOpacity={0.2}
+              lineColor="#fb7185"
+              baseColor="#881337"
+              intensity={1.1}
               onClick={handleLogout}
-              className="bg-red-500/10 hover:bg-red-500/20 text-red-500 border border-red-500/30 hover:border-red-500/50 px-5 py-2.5 rounded-full text-xs font-label-caps tracking-wider transition-all flex items-center gap-2 font-bold"
+              className="font-bold text-rose-400 font-label-caps tracking-wider"
             >
               <span className="material-symbols-outlined text-sm">logout</span>
               <span>LOGOUT</span>
-            </button>
+            </SpecularButton>
           </div>
         </header>
 

@@ -46,18 +46,6 @@ export const MAINTENANCE_CATEGORIES: MaintenanceCategory[] = [
     description: 'Faculty advisory review desk and event proposals',
     icon: 'event_upcoming',
   },
-  {
-    id: 'batch25',
-    label: 'Lobby 25 Member Form',
-    description: 'Batch 2025 onboarding entry portal',
-    icon: 'group_add',
-  },
-  {
-    id: 'batch24',
-    label: 'Lobby 24 Member Form',
-    description: 'Batch 2024 onboarding entry portal',
-    icon: 'group_add',
-  },
 ];
 
 export interface MaintenanceConfigState {

@@ -153,7 +153,7 @@ export default function AboutPage() {
   }, []);
 
   return (
-    <div className="min-h-screen bg-[#070212] text-white flex flex-col selection:bg-purple-500 selection:text-white relative overflow-x-hidden">
+    <div className="min-h-screen bg-transparent text-white flex flex-col selection:bg-purple-500 selection:text-white relative overflow-x-hidden">
       {/* Background Decorative Ambient Glows */}
       <div className="fixed top-0 left-1/2 -translate-x-1/2 w-full max-w-7xl h-[450px] bg-gradient-to-b from-purple-900/25 via-pink-950/15 to-transparent blur-[140px] pointer-events-none -z-10" />
       <div className="fixed -bottom-32 -left-32 w-96 h-96 bg-purple-900/20 blur-[130px] pointer-events-none -z-10" />

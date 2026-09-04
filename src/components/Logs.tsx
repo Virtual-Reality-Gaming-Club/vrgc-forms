@@ -133,8 +133,8 @@ const AdminLogsPanel: React.FC<AdminLogsPanelProps> = ({ isOpen, onClose }) => {
               key={opt}
               onClick={() => setFilter(opt)}
               className={`px-2 py-0.5 rounded-full text-[9px] font-black tracking-wider border whitespace-nowrap transition-all ${isActive
-                  ? 'bg-purple-500/25 text-purple-200 border-purple-400/50'
-                  : 'bg-white/5 text-slate-400 border-white/10 hover:border-white/20 hover:text-white'
+                ? 'bg-purple-500/25 text-purple-200 border-purple-400/50'
+                : 'bg-white/5 text-slate-400 border-white/10 hover:border-white/20 hover:text-white'
                 }`}
             >
               {opt === 'ALL' ? 'ALL' : (meta?.label ?? opt)}

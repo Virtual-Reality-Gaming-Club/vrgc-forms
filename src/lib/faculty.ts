@@ -171,6 +171,80 @@ export async function fetchAllFaculty(): Promise<FacultyMember[]> {
   }
 }
 
+/**
+ * Add / Create a faculty member in Firestore.
+ */
+export async function createFacultyMember(faculty: {
+  id?: string;
+  email: string;
+  name: string;
+  facultyId: string;
+  department: string;
+  designation: string;
+  phone?: string;
+}): Promise<boolean> {
+  try {
+    const cleanEmail = faculty.email.toLowerCase().trim();
+    if (!cleanEmail) throw new Error('Email is required');
+    const docRef = doc(db, FACULTY_COLLECTION, cleanEmail);
+    await setDoc(
+      docRef,
+      {
+        id: cleanEmail,
+        email: cleanEmail,
+        name: faculty.name.trim(),
+        facultyId: faculty.facultyId.trim(),
+        department: faculty.department.trim(),
+        designation: faculty.designation.trim(),
+        phone: faculty.phone?.trim() || '',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      },
+      { merge: true }
+    );
+    return true;
+  } catch (err) {
+    console.error('Error creating faculty member:', err);
+    return false;
+  }
+}
+
+/**
+ * Update an existing faculty member in Firestore.
+ */
+export async function updateFacultyMember(
+  facultyEmail: string,
+  updates: Partial<Omit<FacultyMember, 'id' | 'email' | 'created_at'>>
+): Promise<boolean> {
+  try {
+    const cleanEmail = facultyEmail.toLowerCase().trim();
+    const docRef = doc(db, FACULTY_COLLECTION, cleanEmail);
+    await updateDoc(docRef, {
+      ...updates,
+      updated_at: new Date().toISOString(),
+    });
+    return true;
+  } catch (err) {
+    console.error('Error updating faculty member:', err);
+    return false;
+  }
+}
+
+/**
+ * Delete a faculty member from Firestore.
+ */
+export async function deleteFacultyMember(facultyEmail: string): Promise<boolean> {
+  try {
+    const cleanEmail = facultyEmail.toLowerCase().trim();
+    const docRef = doc(db, FACULTY_COLLECTION, cleanEmail);
+    await deleteDoc(docRef);
+    return true;
+  } catch (err) {
+    console.error('Error deleting faculty member:', err);
+    return false;
+  }
+}
+
 // ─── Future Event Plans CRUD ──────────────────────────────────────────────────
 
 /**
