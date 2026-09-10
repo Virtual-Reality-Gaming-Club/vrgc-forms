@@ -1,7 +1,46 @@
 import { NextResponse } from 'next/server';
 import Razorpay from 'razorpay';
 import { db } from '@/lib/firebase';
-import { doc, getDoc, updateDoc, addDoc, collection, serverTimestamp, getDocs } from 'firebase/firestore';
+import {
+  doc,
+  getDoc,
+  updateDoc,
+  addDoc,
+  collection,
+  serverTimestamp,
+  getDocs,
+  query,
+  where,
+} from 'firebase/firestore';
+import { authenticateRequest } from '@/lib/server/auth';
+import { CONFIG } from '@/lib/config';
+
+async function isAuthorizedAdmin(email: string | null): Promise<boolean> {
+  if (!email) return false;
+  const normalized = email.toLowerCase().trim();
+
+  // 1. Authoritative server configuration lists
+  if (
+    CONFIG.ADMIN_EMAILS.includes(normalized) ||
+    CONFIG.SUPER_ADMIN_EMAILS.includes(normalized) ||
+    CONFIG.PAYMENT_ADMIN_EMAILS.includes(normalized)
+  ) {
+    return true;
+  }
+
+  // 2. Dynamic Firestore admin collections
+  try {
+    const adminDoc = await getDoc(doc(db, 'admins', normalized));
+    if (adminDoc.exists()) return true;
+
+    const superDoc = await getDoc(doc(db, 'super_admins', normalized));
+    if (superDoc.exists()) return true;
+  } catch (err) {
+    console.warn('Admin authorization check notice:', err);
+  }
+
+  return false;
+}
 
 async function logTransactionToFirestore(tx: {
   payment_id?: string;
@@ -66,7 +105,7 @@ async function logTransactionToFirestore(tx: {
   }
 }
 
-async function processRazorpaySync(targetPaymentId?: string) {
+async function processRazorpaySync(docs: Array<any>, isSingleTarget: boolean = false) {
   const keyId = (process.env.RAZORPAY_KEY_ID || '').trim();
   const keySecret = (process.env.RAZORPAY_KEY_SECRET || '').trim();
 
@@ -81,6 +120,8 @@ async function processRazorpaySync(targetPaymentId?: string) {
 
   let correctedCount = 0;
   const repairedDocs: string[] = [];
+  let singleDocFinalStatus: string | undefined = undefined;
+  let singleDocUpdated = false;
 
   // FETCH RECENT CAPTURED PAYMENTS DIRECTLY FROM RAZORPAY API (Count: 100)
   const allPaymentsRes = await razorpay.payments.all({ count: 100 });
@@ -88,20 +129,14 @@ async function processRazorpaySync(targetPaymentId?: string) {
     (p: any) => p.status === 'captured' || p.status === 'authorized'
   );
 
-  // Fetch all payment documents from Firestore
-  const paymentsCol = collection(db, 'payments');
-  const allDocsSnap = await getDocs(paymentsCol);
-
-  for (const pDoc of allDocsSnap.docs) {
+  for (const pDoc of docs) {
     const pData = pDoc.data();
     const docId = pDoc.id;
 
-    // Skip if targetPaymentId is specified and doesn't match
-    if (targetPaymentId && docId !== targetPaymentId) {
-      continue;
-    }
-
     if (pData.status === 'Paid') {
+      if (isSingleTarget) {
+        singleDocFinalStatus = 'Paid';
+      }
       continue; // Already verified & paid, skip
     }
 
@@ -112,6 +147,9 @@ async function processRazorpaySync(targetPaymentId?: string) {
 
     // Multimodal Matching: Check captured payments against Firestore document
     const matchingTx = capturedPayments.find((tx: any) => {
+      const txEmail = (tx.email || '').toLowerCase().trim();
+      const txNotesEmail = (tx.notes?.userEmail || '').toLowerCase().trim();
+
       // 1. Direct Document ID Match in Notes
       if (tx.notes?.paymentId && String(tx.notes.paymentId).trim() === docId) {
         return true;
@@ -123,8 +161,8 @@ async function processRazorpaySync(targetPaymentId?: string) {
       // 3. Member Email and Amount Match
       if (
         docEmail &&
-        tx.email &&
-        String(tx.email).toLowerCase().trim() === docEmail &&
+        txEmail &&
+        txEmail === docEmail &&
         Number(tx.amount) === docAmountPaise
       ) {
         return true;
@@ -132,19 +170,25 @@ async function processRazorpaySync(targetPaymentId?: string) {
       // 4. Notes userEmail and Amount Match
       if (
         docEmail &&
-        tx.notes?.userEmail &&
-        String(tx.notes.userEmail).toLowerCase().trim() === docEmail &&
+        txNotesEmail &&
+        txNotesEmail === docEmail &&
         Number(tx.amount) === docAmountPaise
       ) {
         return true;
       }
-      // 5. Candidate Name and Amount Match
+      // 5. Candidate Name and Amount Match (Safeguard: transaction must not contradict member email)
       if (
         docCandidateName &&
         tx.notes?.candidateName &&
         String(tx.notes.candidateName).toLowerCase().trim() === docCandidateName &&
         Number(tx.amount) === docAmountPaise
       ) {
+        if (txEmail && docEmail && txEmail !== docEmail) {
+          return false;
+        }
+        if (txNotesEmail && docEmail && txNotesEmail !== docEmail) {
+          return false;
+        }
         return true;
       }
       return false;
@@ -184,7 +228,7 @@ async function processRazorpaySync(targetPaymentId?: string) {
         ? `Razorpay (WALLET: ${wallet})`
         : `Razorpay (${rawMethod})`;
 
-      const paidAtTime = matchingTx.created_at
+      const paidAtTime = matchingTx?.created_at
         ? new Date(matchingTx.created_at * 1000).toISOString()
         : new Date().toISOString();
 
@@ -226,6 +270,10 @@ async function processRazorpaySync(targetPaymentId?: string) {
 
       correctedCount++;
       repairedDocs.push(docId);
+      if (isSingleTarget) {
+        singleDocFinalStatus = 'Paid';
+        singleDocUpdated = true;
+      }
     } else if (pData.status === 'Processing') {
       // Security Check: No captured/authorized payment was found on Razorpay.
       // Evaluate if all order payment attempts failed or if the 12-minute processing session timed out.
@@ -281,23 +329,97 @@ async function processRazorpaySync(targetPaymentId?: string) {
 
         correctedCount++;
         repairedDocs.push(docId);
+        if (isSingleTarget) {
+          singleDocFinalStatus = 'Failed';
+          singleDocUpdated = true;
+        }
+      } else if (isSingleTarget) {
+        singleDocFinalStatus = 'Processing';
       }
+    } else if (isSingleTarget) {
+      singleDocFinalStatus = pData.status || 'Pending';
     }
   }
 
-  return {
+  const result: any = {
     success: true,
     correctedCount,
     repairedDocs,
     message: `Scanned Razorpay captured payments and corrected ${correctedCount} Firestore record(s) with exact Razorpay details.`,
   };
+
+  if (isSingleTarget) {
+    result.status = singleDocFinalStatus;
+    result.updated = singleDocUpdated;
+  }
+
+  return result;
 }
 
 export async function POST(request: Request) {
   try {
+    // 1. Cryptographically verify Firebase ID token
+    const { user, errorResponse } = await authenticateRequest(request);
+    if (errorResponse) {
+      return errorResponse;
+    }
+
     const body = await request.json().catch(() => ({}));
     const { paymentId } = body;
-    const result = await processRazorpaySync(paymentId);
+
+    const callerEmail = (user.email || '').toLowerCase().trim();
+    const callerUid = user.uid;
+    const isAdmin = await isAuthorizedAdmin(callerEmail);
+
+    if (paymentId) {
+      // Single payment target check
+      const paymentDocRef = doc(db, 'payments', String(paymentId));
+      const paymentDocSnap = await getDoc(paymentDocRef);
+
+      if (!paymentDocSnap.exists()) {
+        return NextResponse.json(
+          { success: false, error: 'Invoice or payment record not found in database.' },
+          { status: 404 }
+        );
+      }
+
+      const pData = paymentDocSnap.data();
+      const docEmail = (pData.user_email || '').toLowerCase().trim();
+      const docUserId = pData.user_id ? String(pData.user_id).trim() : null;
+
+      const isOwner = Boolean(
+        (docEmail && docEmail === callerEmail) ||
+        (docUserId && docUserId === callerUid)
+      );
+
+      if (!isOwner && !isAdmin) {
+        return NextResponse.json(
+          { success: false, error: "Forbidden: You are not authorized to check or update another user's payment." },
+          { status: 403 }
+        );
+      }
+
+      const result = await processRazorpaySync([paymentDocSnap], true);
+      return NextResponse.json(result);
+    }
+
+    // Broad sync (no specific paymentId provided)
+    let docsToProcess: any[] = [];
+    if (isAdmin) {
+      // Authoritative admin: process full collection
+      const allDocsSnap = await getDocs(collection(db, 'payments'));
+      docsToProcess = allDocsSnap.docs;
+    } else {
+      // Normal authenticated user: scope strictly to payments owned by caller
+      const userPaymentsQuery = query(
+        collection(db, 'payments'),
+        where('user_email', '==', callerEmail)
+      );
+      const userDocsSnap = await getDocs(userPaymentsQuery);
+      docsToProcess = userDocsSnap.docs;
+    }
+
+    const result = await processRazorpaySync(docsToProcess, false);
     return NextResponse.json(result);
   } catch (error: any) {
     console.error('Error in POST check-payment-status API:', error);
@@ -308,9 +430,63 @@ export async function POST(request: Request) {
   }
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
-    const result = await processRazorpaySync();
+    // 1. Cryptographically verify Firebase ID token
+    const { user, errorResponse } = await authenticateRequest(request);
+    if (errorResponse) {
+      return errorResponse;
+    }
+
+    const { searchParams } = new URL(request.url);
+    const paymentId = searchParams.get('paymentId');
+
+    const callerEmail = (user.email || '').toLowerCase().trim();
+    const callerUid = user.uid;
+    const isAdmin = await isAuthorizedAdmin(callerEmail);
+
+    if (paymentId) {
+      // Single payment target check
+      const paymentDocRef = doc(db, 'payments', String(paymentId));
+      const paymentDocSnap = await getDoc(paymentDocRef);
+
+      if (!paymentDocSnap.exists()) {
+        return NextResponse.json(
+          { success: false, error: 'Invoice or payment record not found in database.' },
+          { status: 404 }
+        );
+      }
+
+      const pData = paymentDocSnap.data();
+      const docEmail = (pData.user_email || '').toLowerCase().trim();
+      const docUserId = pData.user_id ? String(pData.user_id).trim() : null;
+
+      const isOwner = Boolean(
+        (docEmail && docEmail === callerEmail) ||
+        (docUserId && docUserId === callerUid)
+      );
+
+      if (!isOwner && !isAdmin) {
+        return NextResponse.json(
+          { success: false, error: "Forbidden: You are not authorized to check or update another user's payment." },
+          { status: 403 }
+        );
+      }
+
+      const result = await processRazorpaySync([paymentDocSnap], true);
+      return NextResponse.json(result);
+    }
+
+    // Broad sync on GET requires admin privileges (prevents payment enumeration across users)
+    if (!isAdmin) {
+      return NextResponse.json(
+        { success: false, error: 'Forbidden: Full payment status synchronization requires admin privileges.' },
+        { status: 403 }
+      );
+    }
+
+    const allDocsSnap = await getDocs(collection(db, 'payments'));
+    const result = await processRazorpaySync(allDocsSnap.docs, false);
     return NextResponse.json(result);
   } catch (error: any) {
     console.error('Error in GET check-payment-status API:', error);

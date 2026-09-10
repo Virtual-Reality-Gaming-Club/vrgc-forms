@@ -20,18 +20,44 @@
 # production
 /build
 
-# misc
+# misc & system
 .DS_Store
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+desktop.ini
 *.pem
+*.key
+*.p12
+*.pfx
 
-# debug
+# debug & logs
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
+firebase-debug.log*
+firestore-debug.log*
+ui-debug.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+!.env.example
+!.env.local.example
+
+# Firebase & Google Cloud credentials / service accounts
+*serviceAccount*.json
+*service-account*.json
+*-firebase-adminsdk-*.json
+serviceAccountKey.json
+google-services.json
+
+# IDEs & editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
 
 # vercel
 .vercel
@@ -40,9 +66,12 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# private data & csv files
+# private data, csv & spreadsheet files
 public/members.csv
 public/admins.csv
 *.csv
 !public/*.example.csv
+*.xlsx
+*.xls
+
 

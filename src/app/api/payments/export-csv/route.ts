@@ -1,23 +1,28 @@
 import { NextResponse } from 'next/server';
+import crypto from 'crypto';
 import { db } from '@/lib/firebase';
 import { collection, getDocs, query, where } from 'firebase/firestore';
 import { CONFIG } from '@/lib/config';
+import { authenticateRequest } from '@/lib/server/auth';
 
-function getEmailFromBearerToken(authHeader: string | null): string | null {
-  if (!authHeader || !authHeader.startsWith('Bearer ')) return null;
-  const token = authHeader.substring(7).trim();
-  if (!token) return null;
+function isAuthorizedAdminEmail(email: string | null): boolean {
+  if (!email) return false;
+  const normalized = email.toLowerCase().trim();
+  return (
+    CONFIG.ADMIN_EMAILS.includes(normalized) ||
+    CONFIG.SUPER_ADMIN_EMAILS.includes(normalized) ||
+    CONFIG.PAYMENT_ADMIN_EMAILS.includes(normalized)
+  );
+}
+
+function verifyExportSecret(adminKey: string | null): boolean {
+  const exportSecret = process.env.ADMIN_EXPORT_SECRET;
+  if (!exportSecret || !adminKey) return false;
+  if (adminKey.length !== exportSecret.length) return false;
   try {
-    const parts = token.split('.');
-    if (parts.length !== 3) return null;
-    const payloadJson = Buffer.from(parts[1], 'base64').toString('utf-8');
-    const payload = JSON.parse(payloadJson);
-    if (payload.exp && payload.exp * 1000 < Date.now()) {
-      return null;
-    }
-    return payload.email ? String(payload.email).toLowerCase() : null;
+    return crypto.timingSafeEqual(Buffer.from(adminKey), Buffer.from(exportSecret));
   } catch {
-    return null;
+    return false;
   }
 }
 
@@ -26,22 +31,25 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const titleFilter = searchParams.get('title');
     const adminKey = searchParams.get('key') || request.headers.get('x-admin-key');
-    const authHeader = request.headers.get('authorization');
 
-    // Strict admin authorization check - NO public key fallbacks
-    const exportSecret = process.env.ADMIN_EXPORT_SECRET;
-    const isAuthorizedSecret = Boolean(exportSecret && adminKey && adminKey === exportSecret);
+    // 1. Check server-side export secret (for automated backups/scripts)
+    const isAuthorizedSecret = verifyExportSecret(adminKey);
 
-    const tokenEmail = getEmailFromBearerToken(authHeader);
-    const isAuthorizedAdminToken = Boolean(
-      tokenEmail && CONFIG.ADMIN_EMAILS.includes(tokenEmail)
-    );
+    if (!isAuthorizedSecret) {
+      // 2. Cryptographically verify Firebase ID token via server auth helper
+      const { user, errorResponse } = await authenticateRequest(request);
+      if (errorResponse) {
+        return errorResponse;
+      }
 
-    if (!isAuthorizedSecret && !isAuthorizedAdminToken) {
-      return NextResponse.json(
-        { error: 'Unauthorized: Access to payment exports requires admin authorization.' },
-        { status: 401 }
-      );
+      // 3. Verify that the authenticated user's email has admin authorization
+      const isAuthorizedAdmin = isAuthorizedAdminEmail(user.email);
+      if (!isAuthorizedAdmin) {
+        return NextResponse.json(
+          { error: 'Forbidden: Access to payment exports requires admin authorization.' },
+          { status: 403 }
+        );
+      }
     }
 
     const colRef = collection(db, 'payments');

@@ -1,8 +1,21 @@
 import { NextResponse } from 'next/server';
 import { db } from '@/lib/firebase';
-import { doc, updateDoc, writeBatch, getDocs, query, collection, where, limit } from 'firebase/firestore';
+import {
+  doc,
+  getDoc,
+  updateDoc,
+  writeBatch,
+  getDocs,
+  query,
+  collection,
+  where,
+  limit,
+} from 'firebase/firestore';
+import { authenticateRequest } from '@/lib/server/auth';
 
-export async function POST(req: Request) {
+const TWELVE_HOURS_MS = 12 * 60 * 60 * 1000;
+
+async function handleLeaveSession(req: Request) {
   try {
     const body = await req.json().catch(() => ({}));
     const sessionId = body?.sessionId;
@@ -11,18 +24,44 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: false, error: 'Missing sessionId' }, { status: 400 });
     }
 
+    // 1. Authenticate caller via Firebase ID token
+    const { user, errorResponse } = await authenticateRequest(req);
+    if (errorResponse) {
+      return errorResponse;
+    }
+
+    // 2. Look up the existing session to enforce ownership
+    const sessionRef = doc(db, 'audit_sessions', sessionId);
+    const sessionSnap = await getDoc(sessionRef);
+
+    if (!sessionSnap.exists()) {
+      return NextResponse.json({ ok: false, error: 'Session not found' }, { status: 404 });
+    }
+
+    const sessionData = sessionSnap.data();
+    const sessionEmail = (sessionData?.userEmail || '').toLowerCase().trim();
+    const callerEmail = (user.email || '').toLowerCase().trim();
+
+    // 3. Verify that the authenticated caller owns this session
+    if (!sessionEmail || sessionEmail !== callerEmail) {
+      return NextResponse.json(
+        { ok: false, error: "Forbidden: You do not have permission to modify another user's session." },
+        { status: 403 }
+      );
+    }
+
     const nowIso = body?.leftAt || new Date().toISOString();
 
-    // 1. Mark this session as offline immediately in Firestore
-    await updateDoc(doc(db, 'audit_sessions', sessionId), {
+    // 4. Mark this session as offline immediately in Firestore
+    await updateDoc(sessionRef, {
       status: 'offline',
       leftAt: nowIso,
     }).catch((err) => {
-      console.warn('[AuditLeave] Could not update session:', err);
+      console.warn('[AuditLeave] Could not update session status:', err);
     });
 
-    // 2. Opportunistically purge any sessions older than 12 hours from the database
-    const twelveHoursAgoIso = new Date(Date.now() - 12 * 60 * 60 * 1000).toISOString();
+    // 5. Opportunistically purge any sessions older than 12 hours from the database
+    const twelveHoursAgoIso = new Date(Date.now() - TWELVE_HOURS_MS).toISOString();
     getDocs(
       query(
         collection(db, 'audit_sessions'),
@@ -39,7 +78,15 @@ export async function POST(req: Request) {
 
     return NextResponse.json({ ok: true, sessionId, status: 'offline' });
   } catch (err) {
-    console.warn('[AuditLeave] Error handling leave beacon:', err);
+    console.warn('[AuditLeave] Error handling leave request:', err);
     return NextResponse.json({ ok: false }, { status: 500 });
   }
+}
+
+export async function POST(req: Request) {
+  return handleLeaveSession(req);
+}
+
+export async function DELETE(req: Request) {
+  return handleLeaveSession(req);
 }

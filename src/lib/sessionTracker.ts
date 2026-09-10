@@ -1,4 +1,5 @@
 import { db } from '@/lib/firebase';
+import { getAuthHeaders } from '@/lib/auth-client';
 import {
   collection,
   doc,
@@ -188,18 +189,23 @@ export async function finalizeSession(): Promise<void> {
 
     const dataPayload = JSON.stringify({ sessionId, leftAt: nowIso });
 
-    // 1. sendBeacon - non-blocking, guaranteed to be delivered even on browser kill/close
-    if (typeof navigator !== 'undefined' && navigator.sendBeacon) {
-      const blob = new Blob([dataPayload], { type: 'application/json' });
-      navigator.sendBeacon('/api/audit/leave', blob);
-    } else {
-      // 2. fetch with keepalive: true
+    const authHeaders = await getAuthHeaders().catch(() => ({}));
+
+    // 1. fetch with keepalive: true and Authorization headers for authenticated server validation
+    if (typeof fetch !== 'undefined') {
       fetch('/api/audit/leave', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...authHeaders,
+        },
         body: dataPayload,
         keepalive: true,
       }).catch(() => {});
+    } else if (typeof navigator !== 'undefined' && navigator.sendBeacon) {
+      // 2. Fallback to sendBeacon if fetch is unavailable
+      const blob = new Blob([dataPayload], { type: 'application/json' });
+      navigator.sendBeacon('/api/audit/leave', blob);
     }
 
     // 3. Client Firestore update attempt

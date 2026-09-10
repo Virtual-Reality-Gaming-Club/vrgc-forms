@@ -1,11 +1,12 @@
 import { NextResponse } from 'next/server';
 import { db } from '@/lib/firebase';
 import { doc, getDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
+import { authenticateRequest } from '@/lib/server/auth';
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json();
-    const { currency = 'INR', receipt, paymentId, title, userEmail } = body;
+    const body = await request.json().catch(() => ({}));
+    const { currency = 'INR', receipt, paymentId, title } = body;
 
     if (!paymentId) {
       return NextResponse.json(
@@ -14,7 +15,13 @@ export async function POST(request: Request) {
       );
     }
 
-    // Fetch actual payment document from Firestore to prevent client amount tampering
+    // 1. Cryptographically verify Firebase ID token in Authorization header
+    const { user, errorResponse } = await authenticateRequest(request);
+    if (errorResponse) {
+      return errorResponse;
+    }
+
+    // 2. Fetch actual payment document from Firestore to prevent client tampering
     const paymentDocRef = doc(db, 'payments', String(paymentId));
     const paymentDocSnap = await getDoc(paymentDocRef);
 
@@ -27,7 +34,24 @@ export async function POST(request: Request) {
 
     const paymentData = paymentDocSnap.data();
 
-    // Prevent duplicate order creation if already paid
+    // 3. Verify payment ownership against the cryptographically verified caller
+    const paymentEmail = (paymentData.user_email || '').toLowerCase().trim();
+    const callerEmail = (user.email || '').toLowerCase().trim();
+    const paymentUserId = paymentData.user_id ? String(paymentData.user_id).trim() : null;
+    const callerUid = user.uid;
+
+    const isOwner = Boolean(
+      (paymentEmail && paymentEmail === callerEmail) ||
+      (paymentUserId && paymentUserId === callerUid)
+    );
+    if (!isOwner) {
+      return NextResponse.json(
+        { success: false, error: "Forbidden: You are not authorized to create a payment order for another user's invoice." },
+        { status: 403 }
+      );
+    }
+
+    // 4. Prevent duplicate order creation if already paid
     if (paymentData.status === 'Paid') {
       return NextResponse.json(
         { success: false, error: 'This payment record has already been paid and verified.' },
@@ -35,7 +59,7 @@ export async function POST(request: Request) {
       );
     }
 
-    // Prevent Razorpay order creation for expired invoices
+    // 5. Prevent Razorpay order creation for expired invoices
     if (paymentData.due_date && paymentData.status !== 'Paid') {
       const dueMs = new Date(paymentData.due_date).getTime();
       if (!isNaN(dueMs) && Date.now() > dueMs) {
@@ -46,6 +70,7 @@ export async function POST(request: Request) {
       }
     }
 
+    // 6. Authoritative amount strictly derived from the server payment record
     const actualAmount = Number(paymentData.amount);
     if (!actualAmount || isNaN(actualAmount) || actualAmount < 1) {
       return NextResponse.json(
@@ -91,18 +116,18 @@ export async function POST(request: Request) {
 
     const options = {
       amount: amountInPaise,
-      currency: currency || paymentData.currency || 'INR',
+      currency: paymentData.currency || currency || 'INR',
       receipt: safeReceipt,
       notes: {
         paymentId: String(paymentId),
-        userEmail: userEmail ? String(userEmail) : (paymentData.user_email || ''),
-        title: title ? String(title) : (paymentData.title || ''),
+        userEmail: callerEmail,
+        title: String(paymentData.title || title || ''),
       },
     };
 
     const order = await instance.orders.create(options);
 
-    // Update payment status to 'Processing' in Firestore payments collection
+    // 7. Update payment status to 'Processing' in Firestore only after authorization and order creation succeed
     try {
       await updateDoc(paymentDocRef, {
         razorpay_order_id: order.id,
@@ -131,4 +156,5 @@ export async function POST(request: Request) {
     );
   }
 }
+
 

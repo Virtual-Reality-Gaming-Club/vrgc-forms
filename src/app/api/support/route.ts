@@ -1,8 +1,36 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/firebase";
-import { doc, setDoc, deleteDoc, collection, query, where, getDocs, writeBatch } from "firebase/firestore";
+import { doc, getDoc, setDoc, deleteDoc, collection, query, where, getDocs, writeBatch } from "firebase/firestore";
+import { CONFIG } from "@/lib/config";
+import { authenticateRequest } from "@/lib/server/auth";
 
 const TWELVE_HOURS_MS = 12 * 60 * 60 * 1000;
+
+async function isAuthorizedToManageTickets(email: string | null): Promise<boolean> {
+  if (!email) return false;
+  const normalized = email.toLowerCase().trim();
+
+  // 1. Authoritative server-side configuration lists (Admin & Super Admin)
+  if (
+    CONFIG.ADMIN_EMAILS.includes(normalized) ||
+    CONFIG.SUPER_ADMIN_EMAILS.includes(normalized)
+  ) {
+    return true;
+  }
+
+  // 2. Dynamic Firestore admins / super_admins collections
+  try {
+    const adminDoc = await getDoc(doc(db, "admins", normalized));
+    if (adminDoc.exists()) return true;
+
+    const superDoc = await getDoc(doc(db, "super_admins", normalized));
+    if (superDoc.exists()) return true;
+  } catch (err) {
+    console.warn("[Support API] Admin authorization check notice:", err);
+  }
+
+  return false;
+}
 
 export async function POST(req: Request) {
   let ticketId = "VRGC-SUP-PENDING";
@@ -139,6 +167,7 @@ Automated message sent via VRGC Forms Technical Support Desk
 
 /**
  * DELETE endpoint to manually delete a support ticket from Firebase by ticketId.
+ * Requires authenticated Administrator or Super Administrator credentials.
  */
 export async function DELETE(req: Request) {
   try {
@@ -147,6 +176,21 @@ export async function DELETE(req: Request) {
 
     if (!ticketId) {
       return NextResponse.json({ error: "Missing ticketId parameter" }, { status: 400 });
+    }
+
+    // 1. Cryptographically verify Firebase ID token in Authorization header
+    const { user, errorResponse } = await authenticateRequest(req);
+    if (errorResponse) {
+      return errorResponse;
+    }
+
+    // 2. Authorize caller identity against authoritative admin lists
+    const isAuthorized = await isAuthorizedToManageTickets(user.email);
+    if (!isAuthorized) {
+      return NextResponse.json(
+        { error: "Forbidden: Only authorized administrators can delete support tickets." },
+        { status: 403 }
+      );
     }
 
     // Delete direct doc

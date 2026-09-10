@@ -29,6 +29,7 @@ import {
 } from '@/lib/payments';
 import { logAdminAction } from '@/lib/adminLogs';
 import { authDb as db } from '@/lib/firebase';
+import { getAuthHeaders } from '@/lib/auth-client';
 import { collection, query, where, onSnapshot, getDocs } from 'firebase/firestore';
 import { User } from 'firebase/auth';
 import {
@@ -1119,9 +1120,13 @@ const Payments: React.FC<PaymentsProps> = ({
         return;
       }
 
+      const authHeaders = await getAuthHeaders();
       const res = await fetch('/api/create-order', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...authHeaders,
+        },
         body: JSON.stringify({
           paymentId: payment.id,
           amount: payment.amount,

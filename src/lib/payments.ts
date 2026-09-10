@@ -1,4 +1,5 @@
 import { authDb as db } from './firebase';
+import { getAuthHeaders } from './auth-client';
 import {
   collection,
   addDoc,
@@ -120,9 +121,13 @@ export async function syncPaymentStatusWithRazorpay(
   syncAll: boolean = false
 ): Promise<{ success: boolean; status?: string; updated?: boolean; syncedCount?: number; correctedCount?: number }> {
   try {
+    const authHeaders = await getAuthHeaders();
     const res = await fetch('/api/check-payment-status', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...authHeaders,
+      },
       body: JSON.stringify({
         paymentId,
         razorpay_order_id: razorpayOrderId,
