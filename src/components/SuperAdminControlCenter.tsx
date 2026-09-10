@@ -16,14 +16,26 @@ import {
   createDefaultPagePermissionsMap,
 } from '@/lib/permissions';
 import { db } from '@/lib/firebase';
-import { collection, getDocs, doc, setDoc, deleteDoc, query, where, onSnapshot, orderBy, limit } from 'firebase/firestore';
+import { collection, getDocs, doc, setDoc, deleteDoc, query, where, onSnapshot, orderBy, limit, writeBatch } from 'firebase/firestore';
 import { fetchAllFaculty, deleteFacultyMember, createFacultyMember, updateFacultyMember } from '@/lib/faculty';
 import { FacultyMember } from '@/types/faculty';
 import { CONFIG } from '@/lib/config';
 import {
   SessionRecord,
+  cleanupStaleAuditSessions,
+  deleteAuditSessionById,
 } from '@/lib/sessionTracker';
 import { getSuperAdminEmails } from '@/lib/superAdminsBridge';
+import {
+  SupportFaq,
+  FAQ_CATEGORIES,
+  subscribeSupportFaqs,
+  createSupportFaq,
+  updateSupportFaq,
+  deleteSupportFaq,
+  reorderSupportFaqs,
+  seedDefaultSupportFaqs,
+} from '@/lib/supportFaqs';
 
 interface SuperAdminControlCenterProps {
   onRedirect: () => void;
@@ -44,7 +56,7 @@ const SuperAdminControlCenter: React.FC<SuperAdminControlCenterProps> = ({
   onRedirect,
   currentUserEmail,
 }) => {
-  const [activeTab, setActiveTab] = useState<'permissions' | 'roles' | 'metadata' | 'faculty' | 'audit'>('permissions');
+  const [activeTab, setActiveTab] = useState<'permissions' | 'roles' | 'metadata' | 'faculty' | 'audit' | 'faqs'>('permissions');
   const [selectedMobileRole, setSelectedMobileRole] = useState<string>('Members');
   const [mobileViewMode, setMobileViewMode] = useState<'by_role' | 'by_portal'>('by_role');
   const [selectedMobilePortal, setSelectedMobilePortal] = useState<PageId>('members');
@@ -110,10 +122,27 @@ const SuperAdminControlCenter: React.FC<SuperAdminControlCenterProps> = ({
 
   // Confirmation modal
   const [deleteConfirm, setDeleteConfirm] = useState<{
-    type: 'admin' | 'faculty' | 'role' | 'domain' | 'position';
+    type: 'admin' | 'faculty' | 'role' | 'domain' | 'position' | 'session' | 'faq';
     id: string;
     label: string;
   } | null>(null);
+
+  // ─── 6. Ticket FAQs Governance State ─────────────────────────────────────
+  const [faqs, setFaqs] = useState<SupportFaq[]>([]);
+  const [loadingFaqs, setLoadingFaqs] = useState<boolean>(true);
+  const [faqSearch, setFaqSearch] = useState<string>('');
+  const [faqCategoryFilter, setFaqCategoryFilter] = useState<string>('all');
+  const [isFaqModalOpen, setIsFaqModalOpen] = useState<boolean>(false);
+  const [editingFaq, setEditingFaq] = useState<SupportFaq | null>(null);
+  const [faqFormData, setFaqFormData] = useState({
+    question: '',
+    answer: '',
+    category: 'general',
+    isActive: true,
+  });
+  const [submittingFaq, setSubmittingFaq] = useState<boolean>(false);
+  const [isSeedingFaqs, setIsSeedingFaqs] = useState<boolean>(false);
+  const [faqActionMsg, setFaqActionMsg] = useState<string>('');
 
   // ─── 5. Visitor Presence & Sessions Audit State ──────────────────────────
   const [sessions, setSessions] = useState<SessionRecord[]>([]);
@@ -124,6 +153,110 @@ const SuperAdminControlCenter: React.FC<SuperAdminControlCenterProps> = ({
   const [sessionsFetched, setSessionsFetched] = useState<boolean>(false);
   const [isRefreshingSessions, setIsRefreshingSessions] = useState<boolean>(false);
 
+  // Purge / Delete Audit Logs by Scheduled Time Range State
+  const [isPurgeModalOpen, setIsPurgeModalOpen] = useState<boolean>(false);
+  const [purgePreset, setPurgePreset] = useState<'all' | '1h' | '3h' | '6h' | 'custom'>('all');
+  const [purgeStartDate, setPurgeStartDate] = useState<string>('');
+  const [purgeEndDate, setPurgeEndDate] = useState<string>('');
+  const [isPurgingLogs, setIsPurgingLogs] = useState<boolean>(false);
+  const [purgeSuccessMessage, setPurgeSuccessMessage] = useState<string>('');
+
+  const formatToLocalInput = (d: Date) => {
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  };
+
+  const handleSelectPurgePreset = (preset: 'all' | '1h' | '3h' | '6h' | 'custom') => {
+    setPurgePreset(preset);
+    const now = new Date();
+    if (preset === '1h') {
+      setPurgeStartDate(formatToLocalInput(new Date(Date.now() - 12 * 3600 * 1000)));
+      setPurgeEndDate(formatToLocalInput(new Date(Date.now() - 3600 * 1000)));
+    } else if (preset === '3h') {
+      setPurgeStartDate(formatToLocalInput(new Date(Date.now() - 12 * 3600 * 1000)));
+      setPurgeEndDate(formatToLocalInput(new Date(Date.now() - 3 * 3600 * 1000)));
+    } else if (preset === '6h') {
+      setPurgeStartDate(formatToLocalInput(new Date(Date.now() - 12 * 3600 * 1000)));
+      setPurgeEndDate(formatToLocalInput(new Date(Date.now() - 6 * 3600 * 1000)));
+    } else if (preset === 'all') {
+      setPurgeStartDate(formatToLocalInput(new Date(Date.now() - 12 * 3600 * 1000)));
+      setPurgeEndDate(formatToLocalInput(now));
+    }
+  };
+
+  const handleExecutePurgeLogs = async () => {
+    if (!purgeStartDate && !purgeEndDate) {
+      alert('Please select a start and/or end time for the deletion range.');
+      return;
+    }
+
+    setIsPurgingLogs(true);
+    try {
+      const fromDate = purgeStartDate ? new Date(purgeStartDate) : new Date(0);
+      const toDate = purgeEndDate ? new Date(purgeEndDate) : new Date();
+      const fromIso = fromDate.toISOString();
+      const toIso = toDate.toISOString();
+      const fromMs = fromDate.getTime();
+      const toMs = toDate.getTime();
+
+      // 1. Gather all matching session IDs from frontend state
+      const idsToDelete = new Set<string>();
+      sessions.forEach((s) => {
+        const t = new Date(s.enteredAt).getTime();
+        if (!isNaN(t) && t >= fromMs && t <= toMs) {
+          idsToDelete.add(s.id);
+        }
+      });
+
+      // 2. Query Firestore directly for any sessions in range
+      try {
+        const q = query(
+          collection(db, 'audit_sessions'),
+          where('enteredAt', '>=', fromIso),
+          where('enteredAt', '<=', toIso),
+          limit(400)
+        );
+        const snap = await getDocs(q);
+        snap.forEach((d) => idsToDelete.add(d.id));
+      } catch (qErr) {
+        console.warn('[AuditPurge] Firestore query notice:', qErr);
+      }
+
+      // 3. Batch delete from Firestore database
+      if (idsToDelete.size > 0) {
+        const batch = writeBatch(db);
+        idsToDelete.forEach((id) => {
+          batch.delete(doc(db, 'audit_sessions', id));
+        });
+        await batch.commit();
+      }
+
+      // 4. Immediately update website frontend state
+      setSessions((prev) => prev.filter((s) => !idsToDelete.has(s.id)));
+
+      const count = idsToDelete.size;
+      setPurgeSuccessMessage(`Successfully deleted ${count} audit session log(s) from Firebase & website!`);
+      setTimeout(() => setPurgeSuccessMessage(''), 4000);
+      setIsPurgeModalOpen(false);
+    } catch (err: any) {
+      console.error('[AuditPurge] Error:', err);
+      alert('Failed to delete audit logs: ' + (err?.message || 'Unknown error'));
+    } finally {
+      setIsPurgingLogs(false);
+    }
+  };
+
+  const handleDeleteSingleSession = async (sessionId: string) => {
+    try {
+      await deleteAuditSessionById(sessionId);
+      setSessions((prev) => prev.filter((s) => s.id !== sessionId));
+      setPurgeSuccessMessage('Session log removed from Firebase & website.');
+      setTimeout(() => setPurgeSuccessMessage(''), 3000);
+    } catch (err: any) {
+      alert('Failed to delete session: ' + (err?.message || 'Unknown error'));
+    }
+  };
+
   // Fetch audit sessions on demand (Minimum Firebase Reads — Spark Free Tier Friendly)
   const fetchAuditSessions = useCallback(async (forceRefresh = false) => {
     if (sessionsFetched && !forceRefresh) return;
@@ -131,7 +264,7 @@ const SuperAdminControlCenter: React.FC<SuperAdminControlCenterProps> = ({
     if (!sessionsFetched) setLoadingSessions(true);
 
     try {
-      // Limit to 50 most recent sessions to save 75% read quotas
+      // Limit to 50 most recent sessions to save read quotas
       const q = query(
         collection(db, 'audit_sessions'),
         orderBy('enteredAt', 'desc'),
@@ -139,11 +272,32 @@ const SuperAdminControlCenter: React.FC<SuperAdminControlCenterProps> = ({
       );
       const snap = await getDocs(q);
       const list: SessionRecord[] = [];
+      const staleDocRefs: any[] = [];
+      const nowMs = Date.now();
+      const twelveHoursMs = 12 * 60 * 60 * 1000;
+
       snap.forEach((d) => {
-        list.push({ id: d.id, ...(d.data() as Omit<SessionRecord, 'id'>) });
+        const data = d.data() as Omit<SessionRecord, 'id'>;
+        const enteredMs = new Date(data.enteredAt).getTime();
+        // Sessions older than 12 hours: automatically pruned from DB and excluded from frontend
+        if (!isNaN(enteredMs) && (nowMs - enteredMs) > twelveHoursMs) {
+          staleDocRefs.push(d.ref);
+        } else {
+          list.push({ id: d.id, ...data });
+        }
       });
+
       setSessions(list);
       setSessionsFetched(true);
+
+      // Automatically batch-delete stale records older than 12 hours from Firestore
+      if (staleDocRefs.length > 0) {
+        const batch = writeBatch(db);
+        staleDocRefs.forEach((ref) => batch.delete(ref));
+        await batch.commit().catch((err) => console.warn('[AuditSessions] Batch delete error:', err));
+      }
+      // Also trigger TTL cleanup for any other lingering sessions older than 12 hours
+      cleanupStaleAuditSessions().catch(() => {});
     } catch (err) {
       console.warn('[AuditSessions] Fetch error:', err);
     } finally {
@@ -161,12 +315,16 @@ const SuperAdminControlCenter: React.FC<SuperAdminControlCenterProps> = ({
 
   // Helper to determine if a session is currently active/online
   const isSessionOnline = (s: SessionRecord): boolean => {
-    if (s.status !== 'online') return false;
+    if (s.status !== 'online' || s.leftAt) return false;
+    const nowMs = Date.now();
     const enteredMs = new Date(s.enteredAt).getTime();
-    if (!isNaN(enteredMs) && Date.now() - enteredMs > 12 * 3600 * 1000) {
+    if (!isNaN(enteredMs) && (nowMs - enteredMs) > 12 * 3600 * 1000) {
       return false;
     }
-    return true;
+    const lastActiveMs = s.lastActiveAt ? new Date(s.lastActiveAt).getTime() : enteredMs;
+    if (isNaN(lastActiveMs)) return false;
+    // Considered online if activity ping occurred within the last 4 minutes
+    return (nowMs - lastActiveMs) < 4 * 60 * 1000;
   };
 
   const resolveSessionDisplayRole = (s: SessionRecord): string => {
@@ -441,6 +599,7 @@ const SuperAdminControlCenter: React.FC<SuperAdminControlCenterProps> = ({
     pageId: PageId,
     level: 'none' | 'view' | 'edit'
   ) => {
+    const isBinary = pageId === 'tickets' || pageId === 'maintenance';
     setPermissions((prev) => {
       const current = prev.tiers[tierKey]?.[pageId] || { canView: false, canEdit: false, bypassMaintenance: false };
       return {
@@ -452,7 +611,7 @@ const SuperAdminControlCenter: React.FC<SuperAdminControlCenterProps> = ({
             [pageId]: {
               ...current,
               canView: level !== 'none',
-              canEdit: level === 'edit',
+              canEdit: isBinary ? level !== 'none' : level === 'edit',
               bypassMaintenance: level === 'none' ? false : current.bypassMaintenance,
             },
           },
@@ -466,6 +625,7 @@ const SuperAdminControlCenter: React.FC<SuperAdminControlCenterProps> = ({
     pageId: PageId,
     level: 'none' | 'view' | 'edit'
   ) => {
+    const isBinary = pageId === 'tickets' || pageId === 'maintenance';
     setPermissions((prev) => {
       const currentRoleMap = prev.roles[roleName] || createDefaultPagePermissionsMap(true, false, false);
       const currentPagePerm = currentRoleMap[pageId] || { canView: false, canEdit: false, bypassMaintenance: false };
@@ -478,7 +638,7 @@ const SuperAdminControlCenter: React.FC<SuperAdminControlCenterProps> = ({
             [pageId]: {
               ...currentPagePerm,
               canView: level !== 'none',
-              canEdit: level === 'edit',
+              canEdit: isBinary ? level !== 'none' : level === 'edit',
               bypassMaintenance: level === 'none' ? false : currentPagePerm.bypassMaintenance,
             },
           },
@@ -500,11 +660,12 @@ const SuperAdminControlCenter: React.FC<SuperAdminControlCenterProps> = ({
         const currentTier = (prev.tiers[target] || {}) as Record<PageId, PagePermission>;
         const updatedTier = { ...currentTier } as Record<PageId, PagePermission>;
         ALL_PAGE_IDS.forEach((p) => {
+          const isBinary = p.id === 'tickets' || p.id === 'maintenance';
           const cur = updatedTier[p.id] || { canView: false, canEdit: false, bypassMaintenance: false };
           updatedTier[p.id] = {
             ...cur,
             canView,
-            canEdit,
+            canEdit: isBinary ? canView : canEdit,
             bypassMaintenance: preset === 'lock_all' ? false : cur.bypassMaintenance,
           };
         });
@@ -519,11 +680,12 @@ const SuperAdminControlCenter: React.FC<SuperAdminControlCenterProps> = ({
         const currentRole = (prev.roles[target] || {}) as Record<PageId, PagePermission>;
         const updatedRole = { ...currentRole } as Record<PageId, PagePermission>;
         ALL_PAGE_IDS.forEach((p) => {
+          const isBinary = p.id === 'tickets' || p.id === 'maintenance';
           const cur = updatedRole[p.id] || { canView: false, canEdit: false, bypassMaintenance: false };
           updatedRole[p.id] = {
             ...cur,
             canView,
-            canEdit,
+            canEdit: isBinary ? canView : canEdit,
             bypassMaintenance: preset === 'lock_all' ? false : cur.bypassMaintenance,
           };
         });
@@ -535,19 +697,6 @@ const SuperAdminControlCenter: React.FC<SuperAdminControlCenterProps> = ({
           },
         };
       }
-    });
-  };
-
-  const handleToggleMetadataRole = (roleName: string) => {
-    setPermissions((prev) => {
-      const exists = prev.allowedMetadataRoles.includes(roleName);
-      const updated = exists
-        ? prev.allowedMetadataRoles.filter((r) => r !== roleName)
-        : [...prev.allowedMetadataRoles, roleName];
-      return {
-        ...prev,
-        allowedMetadataRoles: updated,
-      };
     });
   };
 
@@ -690,6 +839,15 @@ const SuperAdminControlCenter: React.FC<SuperAdminControlCenterProps> = ({
   const handleUpdateAdminRole = async (adminEmail: string, newRole: string) => {
     try {
       const cleanEmail = adminEmail.toLowerCase().trim();
+      const isTargetSuperAdmin =
+        superAdminEmails.map((e) => e.toLowerCase().trim()).includes(cleanEmail) ||
+        admins.some((a) => a.email.toLowerCase() === cleanEmail && (a.isSuperAdmin || a.role === 'Super Administrator'));
+
+      if (isTargetSuperAdmin) {
+        alert('Operation Denied: The role of a Super Administrator is immutable and cannot be changed.');
+        return;
+      }
+
       const nowIso = new Date().toISOString();
 
       // Immediate optimistic update
@@ -734,6 +892,15 @@ const SuperAdminControlCenter: React.FC<SuperAdminControlCenterProps> = ({
   const handleDropAdmin = async (adminEmail: string) => {
     try {
       const cleanEmail = adminEmail.toLowerCase().trim();
+      const isTargetSuperAdmin =
+        superAdminEmails.map((e) => e.toLowerCase().trim()).includes(cleanEmail) ||
+        admins.some((a) => a.email.toLowerCase() === cleanEmail && (a.isSuperAdmin || a.role === 'Super Administrator'));
+
+      if (isTargetSuperAdmin) {
+        alert('Operation Denied: Super Administrators cannot drop another Super Administrator as all Super Admins share equal authority.');
+        return;
+      }
+
       await deleteDoc(doc(db, 'admins', cleanEmail));
       await deleteDoc(doc(db, 'roles', cleanEmail));
 
@@ -945,6 +1112,152 @@ const SuperAdminControlCenter: React.FC<SuperAdminControlCenterProps> = ({
     }
   };
 
+  // ─── Support FAQs Handlers ────────────────────────────────────────────────
+  useEffect(() => {
+    const unsub = subscribeSupportFaqs((list) => {
+      setFaqs(list);
+      setLoadingFaqs(false);
+    });
+    return () => unsub();
+  }, []);
+
+  const openAddFaqModal = () => {
+    setEditingFaq(null);
+    setFaqFormData({
+      question: '',
+      answer: '',
+      category: 'general',
+      isActive: true,
+    });
+    setIsFaqModalOpen(true);
+  };
+
+  const openEditFaqModal = (faq: SupportFaq) => {
+    setEditingFaq(faq);
+    setFaqFormData({
+      question: faq.question,
+      answer: faq.answer,
+      category: faq.category || 'general',
+      isActive: faq.isActive !== false,
+    });
+    setIsFaqModalOpen(true);
+  };
+
+  const handleSaveFaq = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!faqFormData.question.trim() || !faqFormData.answer.trim()) {
+      alert('Both question and answer are required.');
+      return;
+    }
+    setSubmittingFaq(true);
+    try {
+      if (editingFaq) {
+        await updateSupportFaq(
+          editingFaq.id,
+          {
+            question: faqFormData.question.trim(),
+            answer: faqFormData.answer.trim(),
+            category: faqFormData.category,
+            isActive: faqFormData.isActive,
+          },
+          currentUserEmail
+        );
+        setFaqActionMsg('FAQ updated successfully!');
+      } else {
+        const nextOrder = faqs.length > 0 ? Math.max(...faqs.map((f) => f.order || 0)) + 1 : 1;
+        await createSupportFaq(
+          {
+            question: faqFormData.question.trim(),
+            answer: faqFormData.answer.trim(),
+            category: faqFormData.category,
+            order: nextOrder,
+            isActive: faqFormData.isActive,
+          },
+          currentUserEmail
+        );
+        setFaqActionMsg('New FAQ created successfully!');
+      }
+      setIsFaqModalOpen(false);
+      setEditingFaq(null);
+      setTimeout(() => setFaqActionMsg(''), 4000);
+    } catch (err: any) {
+      console.error('Error saving FAQ:', err);
+      alert('Failed to save FAQ: ' + err.message);
+    } finally {
+      setSubmittingFaq(false);
+    }
+  };
+
+  const handleDeleteFaq = async (faqId: string) => {
+    setFaqs((prev) => prev.filter((f) => f.id !== faqId));
+    try {
+      await deleteSupportFaq(faqId);
+      setFaqActionMsg('FAQ removed from database.');
+      setTimeout(() => setFaqActionMsg(''), 4000);
+    } catch (err: any) {
+      console.error('Error deleting FAQ:', err);
+      alert('Failed to delete FAQ: ' + err.message);
+    }
+  };
+
+  const handleToggleFaqActive = async (faq: SupportFaq) => {
+    const nextActive = !faq.isActive;
+    const nextStatus = nextActive ? 'active' : 'hidden';
+    setFaqs((prev) =>
+      prev.map((f) => (f.id === faq.id ? { ...f, isActive: nextActive, status: nextStatus } : f))
+    );
+    try {
+      await updateSupportFaq(faq.id, { isActive: nextActive, status: nextStatus }, currentUserEmail);
+      setFaqActionMsg(nextActive ? 'FAQ is now active and visible.' : 'FAQ hidden from members.');
+      setTimeout(() => setFaqActionMsg(''), 3000);
+    } catch (err: any) {
+      console.error('Error toggling FAQ status:', err);
+      alert('Failed to update FAQ status: ' + err.message);
+    }
+  };
+
+  const handleMoveFaq = async (index: number, direction: 'up' | 'down') => {
+    if ((direction === 'up' && index === 0) || (direction === 'down' && index === faqs.length - 1)) {
+      return;
+    }
+    const targetIndex = direction === 'up' ? index - 1 : index + 1;
+    const newFaqs = [...faqs];
+    const [moved] = newFaqs.splice(index, 1);
+    newFaqs.splice(targetIndex, 0, moved);
+    setFaqs(newFaqs);
+    try {
+      await reorderSupportFaqs(newFaqs);
+    } catch (err: any) {
+      console.error('Error reordering FAQs:', err);
+    }
+  };
+
+  const handleSeedFaqs = async () => {
+    setIsSeedingFaqs(true);
+    setFaqActionMsg('');
+    try {
+      const seeded = await seedDefaultSupportFaqs(currentUserEmail);
+      setFaqs(seeded);
+      setFaqActionMsg('Standard VRGC FAQs successfully saved to Firebase!');
+      setTimeout(() => setFaqActionMsg(''), 4000);
+    } catch (err: any) {
+      console.error('Error seeding FAQs:', err);
+      alert('Failed to seed FAQs: ' + err.message);
+    } finally {
+      setIsSeedingFaqs(false);
+    }
+  };
+
+  const filteredFaqs = faqs.filter((faq) => {
+    const q = faqSearch.toLowerCase();
+    const matchesSearch =
+      faq.question.toLowerCase().includes(q) ||
+      faq.answer.toLowerCase().includes(q);
+    const matchesCategory =
+      faqCategoryFilter === 'all' || faq.category === faqCategoryFilter;
+    return matchesSearch && matchesCategory;
+  });
+
   // Filter lists
   const filteredAdmins = admins.filter((a) => {
     const q = adminSearch.toLowerCase();
@@ -974,8 +1287,62 @@ const SuperAdminControlCenter: React.FC<SuperAdminControlCenterProps> = ({
     perm: PagePermission,
     onSetLevel: (level: 'none' | 'view' | 'edit') => void,
     onToggleBypass: () => void,
-    options?: { compact?: boolean; openUpward?: boolean }
+    options?: { compact?: boolean; openUpward?: boolean; isBinary?: boolean }
   ) => {
+    // Binary Visibility Mode: Direct 1-tap toggle for portals like Resolve Tickets & Maintenance Desk
+    if (options?.isBinary) {
+      const isAllowed = perm.canView;
+      return (
+        <div className="inline-flex items-center gap-1.5 relative">
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onSetLevel(isAllowed ? 'none' : 'view');
+            }}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-bold transition-all cursor-pointer select-none ${
+              isAllowed
+                ? 'bg-emerald-950/70 border-emerald-500/60 text-emerald-200 hover:bg-emerald-900/60 hover:border-emerald-400 shadow-[0_0_12px_rgba(16,185,129,0.18)]'
+                : 'bg-rose-950/70 border-rose-600/50 text-rose-300 hover:bg-rose-900/60 hover:border-rose-400'
+            } ${options?.compact ? 'text-[11px] py-1 px-2' : ''}`}
+            title={isAllowed ? 'Click to revoke access (No Access)' : 'Click to grant view access (View Allowed)'}
+          >
+            <span className="material-symbols-outlined text-sm shrink-0">
+              {isAllowed ? 'visibility' : 'visibility_off'}
+            </span>
+            <span className="whitespace-nowrap font-bold">
+              {isAllowed ? 'View Allowed' : 'No Access'}
+            </span>
+            <span className={`w-1.5 h-1.5 rounded-full ${isAllowed ? 'bg-emerald-400 animate-pulse' : 'bg-rose-500'} ml-0.5 shrink-0`} />
+          </button>
+
+          {/* Bypass Maintenance Quick Toggle Chip */}
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleBypass();
+            }}
+            className={`flex items-center gap-1 rounded-xl border font-mono font-bold transition-all cursor-pointer ${
+              perm.bypassMaintenance
+                ? 'bg-amber-950/80 border-amber-500 text-amber-300 shadow-[0_0_12px_rgba(245,158,11,0.3)] hover:bg-amber-900/80'
+                : 'bg-[#10071f] border-[#2b1642] text-slate-500 hover:text-slate-300 hover:border-slate-700'
+            } ${options?.compact ? 'px-2 py-1 text-[10px]' : 'px-2.5 py-1.5 text-[11px]'}`}
+            title={
+              perm.bypassMaintenance
+                ? 'Bypass Active: Can access during maintenance'
+                : 'Click to allow bypassing maintenance mode'
+            }
+          >
+            <span className="material-symbols-outlined text-xs">
+              {perm.bypassMaintenance ? 'verified_user' : 'shield'}
+            </span>
+            <span className={options?.compact ? 'hidden sm:inline' : 'inline'}>Bypass</span>
+          </button>
+        </div>
+      );
+    }
+
     const isLocked = !perm.canView;
     const isEdit = perm.canView && perm.canEdit;
     const isViewOnly = perm.canView && !perm.canEdit;
@@ -1163,77 +1530,75 @@ const SuperAdminControlCenter: React.FC<SuperAdminControlCenterProps> = ({
           </button>
         </header>
 
-        {/* Tab Navigation Strip - Smooth Touch Horizontal Scroll */}
-        <div className="flex border-b border-[#231238] gap-1 sm:gap-2 overflow-x-auto no-scrollbar flex-nowrap scroll-smooth pb-1 w-full max-w-full">
+        {/* Tab Navigation Strip - Zero Scroll Responsive Grid */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-1.5 p-1.5 bg-[#090312] border border-[#231238] rounded-2xl w-full max-w-full shadow-inner">
           <button
             onClick={() => setActiveTab('permissions')}
-            className={`px-3 sm:px-5 py-2.5 rounded-t-xl text-xs font-black tracking-wider uppercase flex items-center gap-2 transition-all shrink-0 border-b-2 cursor-pointer ${activeTab === 'permissions'
-              ? 'border-purple-500 text-white bg-[#140b24]'
-              : 'border-transparent text-slate-400 hover:text-white hover:bg-white/5'
+            className={`px-2 sm:px-3 py-2.5 rounded-xl text-[11px] sm:text-xs font-black tracking-wider uppercase flex items-center justify-center gap-1.5 transition-all cursor-pointer border ${activeTab === 'permissions'
+              ? 'bg-purple-600 text-white shadow-[0_0_15px_rgba(168,85,247,0.4)] border-purple-400/60'
+              : 'bg-[#130924] text-slate-400 hover:text-white hover:bg-white/5 border-purple-950/40'
               }`}
           >
-            <span className="material-symbols-outlined text-base">rule</span>
-            Permissions Matrix
+            <span className="material-symbols-outlined text-sm sm:text-base">rule</span>
+            <span className="truncate">Permissions</span>
           </button>
 
           <button
             onClick={() => setActiveTab('roles')}
-            className={`px-3 sm:px-5 py-2.5 rounded-t-xl text-xs font-black tracking-wider uppercase flex items-center gap-2 transition-all shrink-0 border-b-2 cursor-pointer ${activeTab === 'roles'
-              ? 'border-purple-500 text-white bg-[#140b24]'
-              : 'border-transparent text-slate-400 hover:text-white hover:bg-white/5'
+            className={`px-2 sm:px-3 py-2.5 rounded-xl text-[11px] sm:text-xs font-black tracking-wider uppercase flex items-center justify-center gap-1.5 transition-all cursor-pointer border ${activeTab === 'roles'
+              ? 'bg-purple-600 text-white shadow-[0_0_15px_rgba(168,85,247,0.4)] border-purple-400/60'
+              : 'bg-[#130924] text-slate-400 hover:text-white hover:bg-white/5 border-purple-950/40'
               }`}
           >
-            <span className="material-symbols-outlined text-base">badge</span>
-            Roles &amp; Admins ({admins.length})
+            <span className="material-symbols-outlined text-sm sm:text-base">badge</span>
+            <span className="truncate">Admins ({admins.length})</span>
           </button>
 
           <button
             onClick={() => setActiveTab('metadata')}
-            className={`px-3 sm:px-5 py-2.5 rounded-t-xl text-xs font-black tracking-wider uppercase flex items-center gap-2 transition-all shrink-0 border-b-2 cursor-pointer ${activeTab === 'metadata'
-              ? 'border-purple-500 text-white bg-[#140b24]'
-              : 'border-transparent text-slate-400 hover:text-white hover:bg-white/5'
+            className={`px-2 sm:px-3 py-2.5 rounded-xl text-[11px] sm:text-xs font-black tracking-wider uppercase flex items-center justify-center gap-1.5 transition-all cursor-pointer border ${activeTab === 'metadata'
+              ? 'bg-purple-600 text-white shadow-[0_0_15px_rgba(168,85,247,0.4)] border-purple-400/60'
+              : 'bg-[#130924] text-slate-400 hover:text-white hover:bg-white/5 border-purple-950/40'
               }`}
           >
-            <span className="material-symbols-outlined text-base">category</span>
-            Domains &amp; Positions ({clubMetadata.domains.length + clubMetadata.positions.length})
+            <span className="material-symbols-outlined text-sm sm:text-base">category</span>
+            <span className="truncate">Domains ({clubMetadata.domains.length + clubMetadata.positions.length})</span>
           </button>
 
           <button
             onClick={() => setActiveTab('faculty')}
-            className={`px-3 sm:px-5 py-2.5 rounded-t-xl text-xs font-black tracking-wider uppercase flex items-center gap-2 transition-all shrink-0 border-b-2 cursor-pointer ${activeTab === 'faculty'
-              ? 'border-purple-500 text-white bg-[#140b24]'
-              : 'border-transparent text-slate-400 hover:text-white hover:bg-white/5'
+            className={`px-2 sm:px-3 py-2.5 rounded-xl text-[11px] sm:text-xs font-black tracking-wider uppercase flex items-center justify-center gap-1.5 transition-all cursor-pointer border ${activeTab === 'faculty'
+              ? 'bg-purple-600 text-white shadow-[0_0_15px_rgba(168,85,247,0.4)] border-purple-400/60'
+              : 'bg-[#130924] text-slate-400 hover:text-white hover:bg-white/5 border-purple-950/40'
               }`}
           >
-            <span className="material-symbols-outlined text-base">school</span>
-            Faculty Directory ({facultyList.length})
+            <span className="material-symbols-outlined text-sm sm:text-base">school</span>
+            <span className="truncate">Faculty ({facultyList.length})</span>
           </button>
 
           <button
             onClick={() => setActiveTab('audit')}
-            className={`px-3 sm:px-5 py-2.5 rounded-t-xl text-xs font-black tracking-wider uppercase flex items-center gap-2 transition-all shrink-0 border-b-2 cursor-pointer ${activeTab === 'audit'
-              ? 'border-purple-500 text-white bg-[#140b24]'
-              : 'border-transparent text-slate-400 hover:text-white hover:bg-white/5'
+            className={`px-2 sm:px-3 py-2.5 rounded-xl text-[11px] sm:text-xs font-black tracking-wider uppercase flex items-center justify-center gap-1.5 transition-all cursor-pointer border ${activeTab === 'audit'
+              ? 'bg-purple-600 text-white shadow-[0_0_15px_rgba(168,85,247,0.4)] border-purple-400/60'
+              : 'bg-[#130924] text-slate-400 hover:text-white hover:bg-white/5 border-purple-950/40'
               }`}
           >
-            <span className="material-symbols-outlined text-base">visibility</span>
-            <span>Presence &amp; Audit</span>
-            {sessionsFetched ? (
-              onlineCount > 0 ? (
-                <span className="px-1.5 py-0.5 rounded-full text-[9px] font-extrabold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 flex items-center gap-1">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                  {onlineCount} Online
-                </span>
-              ) : (
-                <span className="px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-purple-900/60 text-purple-300 border border-purple-700/50">
-                  {sessions.length}
-                </span>
-              )
-            ) : (
-              <span className="px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-purple-900/40 text-purple-300/70 border border-purple-700/30">
-                Audit
-              </span>
+            <span className="material-symbols-outlined text-sm sm:text-base">visibility</span>
+            <span className="truncate">Presence &amp; Audit</span>
+            {sessionsFetched && onlineCount > 0 && (
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0" />
             )}
+          </button>
+
+          <button
+            onClick={() => setActiveTab('faqs')}
+            className={`px-2 sm:px-3 py-2.5 rounded-xl text-[11px] sm:text-xs font-black tracking-wider uppercase flex items-center justify-center gap-1.5 transition-all cursor-pointer border ${activeTab === 'faqs'
+              ? 'bg-purple-600 text-white shadow-[0_0_15px_rgba(168,85,247,0.4)] border-purple-400/60'
+              : 'bg-[#130924] text-slate-400 hover:text-white hover:bg-white/5 border-purple-950/40'
+              }`}
+          >
+            <span className="material-symbols-outlined text-sm sm:text-base">quiz</span>
+            <span className="truncate">Ticket FAQs ({faqs.length})</span>
           </button>
         </div>
 
@@ -1273,9 +1638,15 @@ const SuperAdminControlCenter: React.FC<SuperAdminControlCenterProps> = ({
 
             {/* How Permissions Work Explanatory Card */}
             <div className="p-4 bg-[#090214] border border-[#2b1442] rounded-2xl space-y-3">
-              <div className="flex items-center gap-2 text-xs font-black text-purple-300 uppercase tracking-wider">
-                <span className="material-symbols-outlined text-purple-400 text-base">info</span>
-                <span>How Portal Permissions &amp; Admin Desks Work</span>
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <div className="flex items-center gap-2 text-xs font-black text-purple-300 uppercase tracking-wider">
+                  <span className="material-symbols-outlined text-purple-400 text-base">info</span>
+                  <span>How Portal Permissions &amp; Admin Desks Work</span>
+                </div>
+                <span className="text-[10px] font-mono font-bold px-2.5 py-1 rounded-full bg-purple-950/80 text-purple-300 border border-purple-800/60 flex items-center gap-1.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
+                  Maintenance &amp; Tickets use 1-Tap Binary Visibility
+                </span>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-1">
                 <div className="p-3 bg-[#140b24] border border-[#2b1442] rounded-xl space-y-1">
@@ -1310,424 +1681,373 @@ const SuperAdminControlCenter: React.FC<SuperAdminControlCenterProps> = ({
               </div>
             </div>
 
-            {/* Mobile & Tablet Role-by-Role Card View (Zero Excessive Scrolling) */}
-            <div className="xl:hidden space-y-4">
+            {/* Unified Master-Detail Permissions Governance (Zero Horizontal Scrollbar, Zero Clutter) */}
+            <div className="space-y-4">
               {/* Header with View Mode Switcher */}
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 bg-[#0e071c] border border-purple-500/25 rounded-2xl shadow-md">
                 <div className="text-xs font-bold text-white flex items-center gap-2">
-                  <div className="w-7 h-7 rounded-lg bg-purple-500/20 border border-purple-500/30 flex items-center justify-center text-purple-300">
+                  <div className="w-8 h-8 rounded-xl bg-purple-500/20 border border-purple-500/30 flex items-center justify-center text-purple-300 shrink-0">
                     <span className="material-symbols-outlined text-base">tune</span>
                   </div>
                   <div>
-                    <div>Mobile Access Manager</div>
-                    <div className="text-[10px] text-slate-400 font-normal">Switch tabs to configure without scrolling</div>
+                    <div className="font-extrabold uppercase tracking-wide">Governance Access Configurator</div>
+                    <div className="text-[10px] text-slate-400 font-normal">Configure granular permissions without horizontal scrolling</div>
                   </div>
                 </div>
+
                 {/* View Mode Toggle: By Role vs By Portal */}
-                <div className="inline-flex rounded-xl bg-black/50 p-1 border border-white/10 text-[11px] font-bold font-mono self-start sm:self-auto">
+                <div className="inline-flex rounded-xl bg-black/60 p-1 border border-white/10 text-xs font-bold font-mono self-start sm:self-auto">
                   <button
                     type="button"
                     onClick={() => setMobileViewMode('by_role')}
-                    className={`px-3 py-1 rounded-lg transition-all cursor-pointer ${mobileViewMode === 'by_role'
-                      ? 'bg-purple-600 text-white shadow-[0_0_10px_rgba(168,85,247,0.4)]'
+                    className={`px-3.5 py-1.5 rounded-lg transition-all cursor-pointer flex items-center gap-1.5 ${mobileViewMode === 'by_role'
+                      ? 'bg-purple-600 text-white shadow-[0_0_12px_rgba(168,85,247,0.4)] font-extrabold'
                       : 'text-slate-400 hover:text-white'
                       }`}
                   >
-                    By Role
+                    <span className="material-symbols-outlined text-sm">badge</span>
+                    <span>Configure by Role</span>
                   </button>
                   <button
                     type="button"
                     onClick={() => setMobileViewMode('by_portal')}
-                    className={`px-3 py-1 rounded-lg transition-all cursor-pointer ${mobileViewMode === 'by_portal'
-                      ? 'bg-purple-600 text-white shadow-[0_0_10px_rgba(168,85,247,0.4)]'
+                    className={`px-3.5 py-1.5 rounded-lg transition-all cursor-pointer flex items-center gap-1.5 ${mobileViewMode === 'by_portal'
+                      ? 'bg-purple-600 text-white shadow-[0_0_12px_rgba(168,85,247,0.4)] font-extrabold'
                       : 'text-slate-400 hover:text-white'
                       }`}
                   >
-                    By Portal
+                    <span className="material-symbols-outlined text-sm">view_quilt</span>
+                    <span>Configure by Portal</span>
                   </button>
                 </div>
               </div>
 
               {/* Mode A: Configure by Role */}
               {mobileViewMode === 'by_role' && (
-                <div className="space-y-3">
-                  {/* Sticky Scrollable Role Pills */}
-                  <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-1 w-full max-w-full">
-                    {[
-                      { id: 'Members', label: 'Members', icon: 'groups' },
-                      { id: 'Faculty', label: 'Faculty', icon: 'school' },
-                      ...allRolesList.map((r) => ({ id: r, label: r, icon: 'shield_person' })),
-                    ].map((roleItem) => (
-                      <button
-                        key={roleItem.id}
-                        type="button"
-                        onClick={() => setSelectedMobileRole(roleItem.id)}
-                        className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all cursor-pointer flex items-center gap-1.5 ${selectedMobileRole === roleItem.id
-                          ? 'bg-purple-600 text-white shadow-[0_0_12px_rgba(168,85,247,0.4)] border border-purple-400/50'
-                          : 'bg-[#140b24] border border-[#2b1642] text-slate-400 hover:text-white'
-                          }`}
-                      >
-                        <span className="material-symbols-outlined text-sm">{roleItem.icon}</span>
-                        <span>{roleItem.label}</span>
-                      </button>
-                    ))}
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+                  {/* Left Column: Role Selector Sidebar */}
+                  <div className="lg:col-span-4 xl:col-span-3 space-y-2">
+                    <div className="p-3 bg-[#0e071c] border border-purple-500/20 rounded-2xl space-y-2">
+                      <div className="text-[10px] font-mono uppercase tracking-widest text-purple-400 font-bold px-1 flex items-center justify-between">
+                        <span>ROLES &amp; ACCESS TIERS</span>
+                        <span className="text-slate-500">
+                          {2 + allRolesList.length} Total
+                        </span>
+                      </div>
+                      <div className="space-y-1.5 flex flex-row lg:flex-col overflow-x-auto lg:overflow-x-visible pb-1 lg:pb-0 custom-scrollbar">
+                        {[
+                          { id: 'Members', label: 'Chapter Members', tier: 'members' as const, sub: 'Student Tier', dot: 'bg-cyan-400' },
+                          { id: 'Faculty', label: 'Faculty Advisory', tier: 'faculty' as const, sub: 'Academic Mentors', dot: 'bg-indigo-400' },
+                          ...allRolesList.map((r) => ({
+                            id: r,
+                            label: r,
+                            tier: null,
+                            sub: ['Admin', 'Payment Admin', 'Technical'].includes(r) ? 'Core Administrative' : 'Custom Role',
+                            dot: 'bg-purple-500',
+                          })),
+                        ].map((rItem) => {
+                          const isSelected = selectedMobileRole === rItem.id;
+                          const activeCount = ALL_PAGE_IDS.filter((p) => {
+                            const perm = rItem.tier === 'members'
+                              ? permissions.tiers.members?.[p.id]
+                              : rItem.tier === 'faculty'
+                                ? permissions.tiers.faculty?.[p.id]
+                                : permissions.roles[rItem.id]?.[p.id];
+                            return perm?.canView;
+                          }).length;
+
+                          return (
+                            <button
+                              key={rItem.id}
+                              type="button"
+                              onClick={() => setSelectedMobileRole(rItem.id)}
+                              className={`w-full text-left p-3 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-2.5 shrink-0 lg:shrink ${isSelected
+                                ? 'bg-purple-900/50 border-purple-500 shadow-[0_0_15px_rgba(168,85,247,0.25)] text-white'
+                                : 'bg-[#140b24] border-[#2b1642] text-slate-300 hover:border-purple-500/40 hover:text-white'
+                                }`}
+                            >
+                              <div className="flex items-center gap-2.5 min-w-0">
+                                <span className={`w-2.5 h-2.5 rounded-full ${rItem.dot} shrink-0`} />
+                                <div className="min-w-0">
+                                  <div className="font-extrabold text-xs truncate">{rItem.label}</div>
+                                  <div className="text-[10px] text-slate-400 font-mono truncate">{rItem.sub}</div>
+                                </div>
+                              </div>
+                              <span className={`text-[10px] font-mono px-2 py-0.5 rounded-full font-bold shrink-0 ${isSelected ? 'bg-purple-950 text-purple-200 border border-purple-400/50' : 'bg-black/40 text-slate-400'
+                                }`}>
+                                {activeCount}/{ALL_PAGE_IDS.length}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
                   </div>
 
-                  {/* Active Role Card: Shows ONLY this role's 5 portals in compact horizontal rows */}
-                  {(() => {
-                    const roleId = selectedMobileRole;
-                    const isMembers = roleId === 'Members';
-                    const isFaculty = roleId === 'Faculty';
-                    const title = isMembers ? 'Chapter Members' : isFaculty ? 'Faculty Advisory' : roleId;
-                    const sub = isMembers
-                      ? 'Authenticated Student Tier'
-                      : isFaculty
-                        ? 'Academic Mentors Tier'
-                        : ['Admin', 'Payment Admin', 'Technical'].includes(roleId)
-                          ? 'Core Administrative Role'
-                          : 'Custom Role';
-                    const dotColor = isMembers ? 'bg-cyan-400' : isFaculty ? 'bg-indigo-400' : 'bg-purple-500';
+                  {/* Right Column: 10 Portal Cards Grid for Selected Role */}
+                  <div className="lg:col-span-8 xl:col-span-9 space-y-4">
+                    {(() => {
+                      const roleId = selectedMobileRole;
+                      const isMembers = roleId === 'Members';
+                      const isFaculty = roleId === 'Faculty';
+                      const title = isMembers ? 'Chapter Members' : isFaculty ? 'Faculty Advisory' : roleId;
+                      const sub = isMembers
+                        ? 'Authenticated Student Tier'
+                        : isFaculty
+                          ? 'Academic Mentors Tier'
+                          : ['Admin', 'Payment Admin', 'Technical'].includes(roleId)
+                            ? 'Core Administrative Role'
+                            : 'Custom Role';
+                      const dotColor = isMembers ? 'bg-cyan-400' : isFaculty ? 'bg-indigo-400' : 'bg-purple-500';
 
-                    return (
-                      <div className="p-4 rounded-2xl bg-[#0e071c] border border-purple-500/30 space-y-3 shadow-lg">
-                        {/* Role Header with Quick Presets */}
-                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 border-b border-white/10 pb-3">
-                          <div className="flex items-center gap-2">
-                            <span className={`w-3 h-3 rounded-full ${dotColor} shrink-0`} />
-                            <div>
-                              <h4 className="font-black text-white text-sm">{title}</h4>
-                              <span className="text-[10px] text-slate-400 font-mono">{sub}</span>
+                      return (
+                        <div className="space-y-4">
+                          {/* Role Header Banner with 1-Tap Batch Presets */}
+                          <div className="p-4 rounded-2xl bg-[#0e071c] border border-purple-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-lg">
+                            <div className="flex items-center gap-2.5">
+                              <span className={`w-3.5 h-3.5 rounded-full ${dotColor} shrink-0`} />
+                              <div>
+                                <h3 className="font-black text-white text-sm sm:text-base">{title}</h3>
+                                <span className="text-xs text-slate-400 font-mono">{sub}</span>
+                              </div>
+                            </div>
+
+                            {/* Presets */}
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleApplyRolePreset(isMembers ? 'members' : isFaculty ? 'faculty' : roleId, 'view_all')
+                                }
+                                className="px-2.5 py-1 rounded-lg text-[11px] font-mono font-bold bg-purple-900/40 border border-purple-500/30 text-purple-300 hover:bg-purple-900/80 cursor-pointer transition-colors"
+                                title="Grant View Only on all portals"
+                              >
+                                View All ({ALL_PAGE_IDS.length})
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleApplyRolePreset(isMembers ? 'members' : isFaculty ? 'faculty' : roleId, 'edit_all')
+                                }
+                                className="px-2.5 py-1 rounded-lg text-[11px] font-mono font-bold bg-emerald-950/40 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-950/80 cursor-pointer transition-colors"
+                                title="Grant Full Write Authority on all portals"
+                              >
+                                Full All ({ALL_PAGE_IDS.length})
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleApplyRolePreset(isMembers ? 'members' : isFaculty ? 'faculty' : roleId, 'lock_all')
+                                }
+                                className="px-2.5 py-1 rounded-lg text-[11px] font-mono font-bold bg-black/40 border border-white/10 text-slate-400 hover:text-rose-300 hover:border-rose-500/40 cursor-pointer transition-colors"
+                                title="Lock all portals for this role"
+                              >
+                                Lock All
+                              </button>
                             </div>
                           </div>
 
-                          {/* 1-Tap Role Presets */}
-                          <div className="flex items-center gap-1.5 flex-wrap">
-                            <button
-                              type="button"
-                              onClick={() =>
-                                handleApplyRolePreset(isMembers ? 'members' : isFaculty ? 'faculty' : roleId, 'view_all')
-                              }
-                              className="px-2 py-1 rounded-lg text-[10px] font-mono font-bold bg-purple-900/40 border border-purple-500/30 text-purple-300 hover:bg-purple-900/80 cursor-pointer transition-colors"
-                              title="Grant View Only on all 5 portals"
-                            >
-                              View All
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() =>
-                                handleApplyRolePreset(isMembers ? 'members' : isFaculty ? 'faculty' : roleId, 'edit_all')
-                              }
-                              className="px-2 py-1 rounded-lg text-[10px] font-mono font-bold bg-emerald-950/40 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-950/80 cursor-pointer transition-colors"
-                              title="Grant Full Edit on all 5 portals"
-                            >
-                              Full All
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() =>
-                                handleApplyRolePreset(isMembers ? 'members' : isFaculty ? 'faculty' : roleId, 'lock_all')
-                              }
-                              className="px-2 py-1 rounded-lg text-[10px] font-mono font-bold bg-black/40 border border-white/10 text-slate-400 hover:text-rose-300 hover:border-rose-500/40 cursor-pointer transition-colors"
-                              title="Lock all 5 portals for this role"
-                            >
-                              Lock All
-                            </button>
-                          </div>
-                        </div>
+                          {/* 10 Portal Cards Grid (Zero Horizontal Scroll!) */}
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+                            {ALL_PAGE_IDS.map((p) => {
+                              const perm: PagePermission = isMembers
+                                ? permissions.tiers.members?.[p.id] || { canView: false, canEdit: false, bypassMaintenance: false }
+                                : isFaculty
+                                  ? permissions.tiers.faculty?.[p.id] || { canView: false, canEdit: false, bypassMaintenance: false }
+                                  : permissions.roles[roleId]?.[p.id] || { canView: false, canEdit: false, bypassMaintenance: false };
 
-                        {/* 5 Compact Portal Rows (Zero vertical scrolling needed!) */}
-                        <div className="space-y-2">
-                          {ALL_PAGE_IDS.map((p) => {
-                            const perm: PagePermission = isMembers
-                              ? permissions.tiers.members?.[p.id] || { canView: false, canEdit: false, bypassMaintenance: false }
-                              : isFaculty
-                                ? permissions.tiers.faculty?.[p.id] || { canView: false, canEdit: false, bypassMaintenance: false }
-                                : permissions.roles[roleId]?.[p.id] || { canView: false, canEdit: false, bypassMaintenance: false };
+                              const setLevel = (level: 'none' | 'view' | 'edit') => {
+                                if (isMembers) handleSetTierAccessLevel('members', p.id, level);
+                                else if (isFaculty) handleSetTierAccessLevel('faculty', p.id, level);
+                                else handleSetRoleAccessLevel(roleId, p.id, level);
+                              };
 
-                            const setLevel = (level: 'none' | 'view' | 'edit') => {
-                              if (isMembers) handleSetTierAccessLevel('members', p.id, level);
-                              else if (isFaculty) handleSetTierAccessLevel('faculty', p.id, level);
-                              else handleSetRoleAccessLevel(roleId, p.id, level);
-                            };
+                              const toggleBypass = () => {
+                                if (isMembers) handleToggleTierPermission('members', p.id, 'bypassMaintenance');
+                                else if (isFaculty) handleToggleTierPermission('faculty', p.id, 'bypassMaintenance');
+                                else handleToggleRolePermission(roleId, p.id, 'bypassMaintenance');
+                              };
 
-                            const toggleBypass = () => {
-                              if (isMembers) handleToggleTierPermission('members', p.id, 'bypassMaintenance');
-                              else if (isFaculty) handleToggleTierPermission('faculty', p.id, 'bypassMaintenance');
-                              else handleToggleRolePermission(roleId, p.id, 'bypassMaintenance');
-                            };
+                              const cellId = `matrix_${roleId}_${p.id}`;
 
-                            const cellId = `mobile_${roleId}_${p.id}`;
+                              return (
+                                <div
+                                  key={p.id}
+                                  className="p-3.5 sm:p-4 rounded-2xl bg-[#0e071c] border border-[#2b1642] hover:border-purple-500/40 transition-all space-y-3 shadow-md"
+                                >
+                                  <div className="flex items-start justify-between gap-2">
+                                    <div className="flex items-center gap-2.5 min-w-0">
+                                      <div className="w-8 h-8 rounded-xl bg-purple-500/15 border border-purple-500/30 flex items-center justify-center text-purple-300 shrink-0">
+                                        <span className="material-symbols-outlined text-base">{p.icon}</span>
+                                      </div>
+                                      <div className="min-w-0">
+                                        <h4 className="font-extrabold text-white text-xs sm:text-sm truncate">{p.label}</h4>
+                                        <span className="text-[10px] text-slate-400 font-mono block truncate">
+                                          {!perm.canView
+                                            ? 'Access Denied'
+                                            : (p.id === 'tickets' || p.id === 'maintenance')
+                                              ? 'View Allowed'
+                                              : perm.canEdit
+                                                ? 'Full Write Authority'
+                                                : 'Read-Only Viewer'}
+                                        </span>
+                                      </div>
+                                    </div>
 
-                            return (
-                              <div
-                                key={p.id}
-                                className="p-2.5 sm:p-3 rounded-xl bg-[#140b24] border border-[#2b1642] flex items-center justify-between gap-2 hover:border-purple-500/30 transition-all"
-                              >
-                                <div className="flex items-center gap-2.5 min-w-0">
-                                  <span className="material-symbols-outlined text-purple-400 text-base shrink-0">{p.icon}</span>
-                                  <div className="min-w-0">
-                                    <span className="font-extrabold text-white text-xs truncate block">{p.label}</span>
-                                    <span className="text-[9px] font-mono text-slate-400 block truncate">
-                                      {!perm.canView ? 'Locked' : perm.canEdit ? 'Full Write Authority' : 'Member Read-Only'}
-                                    </span>
+                                    {/* Permission Dropdown + Bypass Toggle */}
+                                    <div className="shrink-0">
+                                      {renderPermissionControl(cellId, perm, setLevel, toggleBypass, {
+                                        compact: false,
+                                        isBinary: p.id === 'tickets' || p.id === 'maintenance',
+                                      })}
+                                    </div>
                                   </div>
                                 </div>
-
-                                <div className="shrink-0">
-                                  {renderPermissionControl(cellId, perm, setLevel, toggleBypass, { compact: true })}
-                                </div>
-                              </div>
-                            );
-                          })}
+                              );
+                            })}
+                          </div>
                         </div>
-                      </div>
-                    );
-                  })()}
+                      );
+                    })()}
+                  </div>
                 </div>
               )}
 
               {/* Mode B: Configure by Portal */}
               {mobileViewMode === 'by_portal' && (
-                <div className="space-y-3">
-                  {/* Portal Selection Tabs */}
-                  <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-1 w-full max-w-full">
-                    {ALL_PAGE_IDS.map((p) => (
-                      <button
-                        key={p.id}
-                        type="button"
-                        onClick={() => setSelectedMobilePortal(p.id)}
-                        className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all cursor-pointer flex items-center gap-1.5 ${selectedMobilePortal === p.id
-                          ? 'bg-purple-600 text-white shadow-[0_0_12px_rgba(168,85,247,0.4)] border border-purple-400/50'
-                          : 'bg-[#140b24] border border-[#2b1642] text-slate-400 hover:text-white'
-                          }`}
-                      >
-                        <span className="material-symbols-outlined text-sm">{p.icon}</span>
-                        <span>{p.label}</span>
-                      </button>
-                    ))}
-                  </div>
-
-                  {/* Active Portal Card: Shows all roles for that portal in compact rows */}
-                  {(() => {
-                    const portal = ALL_PAGE_IDS.find((p) => p.id === selectedMobilePortal) || ALL_PAGE_IDS[0];
-                    const roleItems = [
-                      { id: 'Members', label: 'Chapter Members', tier: 'members' as const, sub: 'Authenticated Student Tier', dot: 'bg-cyan-400' },
-                      { id: 'Faculty', label: 'Faculty Advisory', tier: 'faculty' as const, sub: 'Academic Mentors Tier', dot: 'bg-indigo-400' },
-                      ...allRolesList.map((r) => ({
-                        id: r,
-                        label: r,
-                        tier: null,
-                        sub: ['Admin', 'Payment Admin', 'Technical'].includes(r) ? 'Core Administrative Role' : 'Custom Role',
-                        dot: 'bg-purple-500',
-                      })),
-                    ];
-
-                    return (
-                      <div className="p-4 rounded-2xl bg-[#0e071c] border border-purple-500/30 space-y-3 shadow-lg">
-                        <div className="flex items-center justify-between border-b border-white/10 pb-3">
-                          <div className="flex items-center gap-2.5">
-                            <span className="material-symbols-outlined text-purple-400 text-xl">{portal.icon}</span>
-                            <div>
-                              <h4 className="font-black text-white text-sm">{portal.label}</h4>
-                              <span className="text-[10px] text-slate-400 font-mono">Role Access Governance</span>
-                            </div>
-                          </div>
-                          <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-purple-950 text-purple-300 border border-purple-600/40">
-                            {roleItems.length} Roles
-                          </span>
-                        </div>
-
-                        <div className="space-y-2">
-                          {roleItems.map((r) => {
-                            const perm: PagePermission =
-                              r.tier === 'members'
-                                ? permissions.tiers.members?.[portal.id] || { canView: false, canEdit: false, bypassMaintenance: false }
-                                : r.tier === 'faculty'
-                                  ? permissions.tiers.faculty?.[portal.id] || { canView: false, canEdit: false, bypassMaintenance: false }
-                                  : permissions.roles[r.id]?.[portal.id] || { canView: false, canEdit: false, bypassMaintenance: false };
-
-                            const setLevel = (level: 'none' | 'view' | 'edit') => {
-                              if (r.tier === 'members') handleSetTierAccessLevel('members', portal.id, level);
-                              else if (r.tier === 'faculty') handleSetTierAccessLevel('faculty', portal.id, level);
-                              else handleSetRoleAccessLevel(r.id, portal.id, level);
-                            };
-
-                            const toggleBypass = () => {
-                              if (r.tier === 'members') handleToggleTierPermission('members', portal.id, 'bypassMaintenance');
-                              else if (r.tier === 'faculty') handleToggleTierPermission('faculty', portal.id, 'bypassMaintenance');
-                              else handleToggleRolePermission(r.id, portal.id, 'bypassMaintenance');
-                            };
-
-                            const cellId = `portal_${portal.id}_${r.id}`;
-
-                            return (
-                              <div
-                                key={r.id}
-                                className="p-2.5 sm:p-3 rounded-xl bg-[#140b24] border border-[#2b1642] flex items-center justify-between gap-2 hover:border-purple-500/30 transition-all"
-                              >
-                                <div className="flex items-center gap-2.5 min-w-0">
-                                  <span className={`w-2.5 h-2.5 rounded-full ${r.dot} shrink-0`} />
-                                  <div className="min-w-0">
-                                    <span className="font-extrabold text-white text-xs truncate block">{r.label}</span>
-                                    <span className="text-[9px] font-mono text-slate-400 block truncate">{r.sub}</span>
-                                  </div>
-                                </div>
-
-                                <div className="shrink-0">
-                                  {renderPermissionControl(cellId, perm, setLevel, toggleBypass, { compact: true })}
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+                  {/* Left Column: Portal Selector Sidebar */}
+                  <div className="lg:col-span-4 xl:col-span-3 space-y-2">
+                    <div className="p-3 bg-[#0e071c] border border-purple-500/20 rounded-2xl space-y-2">
+                      <div className="text-[10px] font-mono uppercase tracking-widest text-purple-400 font-bold px-1 flex items-center justify-between">
+                        <span>SYSTEM PORTALS</span>
+                        <span className="text-slate-500">{ALL_PAGE_IDS.length} Total</span>
                       </div>
-                    );
-                  })()}
-                </div>
-              )}
-            </div>
-
-            {/* Matrix Table (Desktop only, hidden on mobile & tablet) */}
-            <div className="hidden xl:block bg-[#0c0517] border border-[#2b1642] rounded-2xl overflow-hidden shadow-lg overflow-x-auto custom-scrollbar">
-              <table className="w-full text-left text-xs min-w-[880px]">
-                <thead className="bg-[#140b24] border-b border-[#2b1642] text-slate-300 font-bold uppercase tracking-wider text-[10px]">
-                  <tr>
-                    <th className="p-4 w-52">Role / Access Tier</th>
-                    {ALL_PAGE_IDS.map((p) => (
-                      <th
-                        key={p.id}
-                        className="p-3 text-center"
-                        title={`Configure access for ${p.label}`}
-                      >
-                        <div className="flex flex-col items-center gap-0.5">
-                          <span className="material-symbols-outlined text-sm text-purple-400">{p.icon}</span>
-                          <span className="font-extrabold text-white">{p.label}</span>
-                        </div>
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-[#1e0f33]">
-
-                  {/* Row: Members Tier */}
-                  <tr className="bg-[#0e071c] hover:bg-[#150a29] transition-colors">
-                    <td className="p-4">
-                      <div className="font-black text-white flex items-center gap-2">
-                        <span className="w-2.5 h-2.5 rounded-full bg-cyan-400" />
-                        <span>Chapter Members</span>
-                      </div>
-                      <div className="text-[10px] text-slate-400 font-mono">Authenticated Student Tier</div>
-                    </td>
-                    {ALL_PAGE_IDS.map((p) => {
-                      const perm = permissions.tiers.members?.[p.id] || { canView: false, canEdit: false, bypassMaintenance: false };
-                      return (
-                        <td key={p.id} className="p-3 text-center">
-                          {renderPermissionControl(
-                            `desktop_members_${p.id}`,
-                            perm,
-                            (level) => handleSetTierAccessLevel('members', p.id, level),
-                            () => handleToggleTierPermission('members', p.id, 'bypassMaintenance'),
-                            { openUpward: false }
-                          )}
-                        </td>
-                      );
-                    })}
-                  </tr>
-
-                  {/* Row: Faculty Tier */}
-                  <tr className="bg-[#0e071c] hover:bg-[#150a29] transition-colors">
-                    <td className="p-4">
-                      <div className="font-black text-white flex items-center gap-2">
-                        <span className="w-2.5 h-2.5 rounded-full bg-indigo-400" />
-                        <span>Faculty Advisory</span>
-                      </div>
-                      <div className="text-[10px] text-slate-400 font-mono">Academic Mentors Tier</div>
-                    </td>
-                    {ALL_PAGE_IDS.map((p) => {
-                      const perm = permissions.tiers.faculty?.[p.id] || { canView: false, canEdit: false, bypassMaintenance: false };
-                      return (
-                        <td key={p.id} className="p-3 text-center">
-                          {renderPermissionControl(
-                            `desktop_faculty_${p.id}`,
-                            perm,
-                            (level) => handleSetTierAccessLevel('faculty', p.id, level),
-                            () => handleToggleTierPermission('faculty', p.id, 'bypassMaintenance'),
-                            { openUpward: false }
-                          )}
-                        </td>
-                      );
-                    })}
-                  </tr>
-
-                  {/* Rows: All Roles (System + Custom) */}
-                  {allRolesList.map((roleName, rIdx) => {
-                    const isNearBottom = rIdx >= allRolesList.length - 2;
-                    return (
-                      <tr key={roleName} className="hover:bg-[#150a29] transition-colors">
-                        <td className="p-4">
-                          <div className="font-black text-purple-300 flex items-center gap-2">
-                            <span className="w-2.5 h-2.5 rounded-full bg-purple-500" />
-                            <span>{roleName}</span>
-                          </div>
-                          <div className="text-[10px] text-slate-400 font-mono">
-                            {['Admin', 'Payment Admin', 'Technical'].includes(roleName)
-                              ? 'Core Administrative Role'
-                              : 'Custom Role'}
-                          </div>
-                        </td>
+                      <div className="space-y-1.5 flex flex-row lg:flex-col overflow-x-auto lg:overflow-x-visible pb-1 lg:pb-0 custom-scrollbar">
                         {ALL_PAGE_IDS.map((p) => {
-                          const perm = permissions.roles[roleName]?.[p.id] || { canView: false, canEdit: false, bypassMaintenance: false };
+                          const isSelected = selectedMobilePortal === p.id;
                           return (
-                            <td key={p.id} className="p-3 text-center">
-                              {renderPermissionControl(
-                                `desktop_${roleName}_${p.id}`,
-                                perm,
-                                (level) => handleSetRoleAccessLevel(roleName, p.id, level),
-                                () => handleToggleRolePermission(roleName, p.id, 'bypassMaintenance'),
-                                { openUpward: isNearBottom }
-                              )}
-                            </td>
+                            <button
+                              key={p.id}
+                              type="button"
+                              onClick={() => setSelectedMobilePortal(p.id)}
+                              className={`w-full text-left p-3 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-2.5 shrink-0 lg:shrink ${isSelected
+                                ? 'bg-purple-600 border-purple-400 shadow-[0_0_15px_rgba(168,85,247,0.35)] text-white font-extrabold'
+                                : 'bg-[#140b24] border-[#2b1642] text-slate-300 hover:border-purple-500/40 hover:text-white'
+                                }`}
+                            >
+                              <div className="flex items-center gap-2.5 min-w-0">
+                                <span className="material-symbols-outlined text-base shrink-0">{p.icon}</span>
+                                <span className="text-xs truncate">{p.label}</span>
+                              </div>
+                            </button>
                           );
                         })}
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+                      </div>
+                    </div>
+                  </div>
 
-            {/* Sub-section: Metadata Delegation Permissions */}
-            <div className="p-5 bg-[#0e071a] border border-[#261238] rounded-2xl space-y-3">
-              <h3 className="text-xs font-black text-white uppercase tracking-wider flex items-center gap-2">
-                <span className="material-symbols-outlined text-purple-400 text-sm">settings_suggest</span>
-                <span>Delegated Club Metadata Management</span>
-              </h3>
-              <p className="text-xs text-slate-300">
-                Super Admin can permit designated roles to add, edit, or modify Primary Domains and Member Positions directly in the Members Roster form.
-              </p>
+                  {/* Right Column: Role Cards Grid for Selected Portal */}
+                  <div className="lg:col-span-8 xl:col-span-9 space-y-4">
+                    {(() => {
+                      const portal = ALL_PAGE_IDS.find((p) => p.id === selectedMobilePortal) || ALL_PAGE_IDS[0];
+                      const roleItems = [
+                        { id: 'Members', label: 'Chapter Members', tier: 'members' as const, sub: 'Authenticated Student Tier', dot: 'bg-cyan-400' },
+                        { id: 'Faculty', label: 'Faculty Advisory', tier: 'faculty' as const, sub: 'Academic Mentors Tier', dot: 'bg-indigo-400' },
+                        ...allRolesList.map((r) => ({
+                          id: r,
+                          label: r,
+                          tier: null,
+                          sub: ['Admin', 'Payment Admin', 'Technical'].includes(r) ? 'Core Administrative Role' : 'Custom Role',
+                          dot: 'bg-purple-500',
+                        })),
+                      ];
 
-              <div className="flex flex-wrap items-center gap-3 pt-2">
-                {allRolesList.map((roleName) => {
-                  const isAllowed = permissions.allowedMetadataRoles.includes(roleName);
-                  return (
-                    <label
-                      key={roleName}
-                      className={`flex items-center gap-2 px-3 py-2 rounded-xl border text-xs font-bold transition-colors cursor-pointer ${isAllowed
-                        ? 'bg-purple-900/60 border-purple-500 text-white'
-                        : 'bg-[#150a24] border-purple-900/30 text-slate-400 hover:text-white'
-                        }`}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={isAllowed}
-                        onChange={() => handleToggleMetadataRole(roleName)}
-                        className="accent-purple-600 rounded cursor-pointer"
-                      />
-                      <span>{roleName} can manage Domains &amp; Roles</span>
-                    </label>
-                  );
-                })}
-              </div>
+                      return (
+                        <div className="space-y-4">
+                          {/* Portal Header Banner */}
+                          <div className="p-4 rounded-2xl bg-[#0e071c] border border-purple-500/30 flex items-center justify-between gap-3 shadow-lg">
+                            <div className="flex items-center gap-2.5">
+                              <div className="w-9 h-9 rounded-xl bg-purple-500/20 border border-purple-500/30 flex items-center justify-center text-purple-300">
+                                <span className="material-symbols-outlined text-lg">{portal.icon}</span>
+                              </div>
+                              <div>
+                                <h3 className="font-black text-white text-base">{portal.label}</h3>
+                                <span className="text-xs text-slate-400 font-mono">
+                                  {(portal.id === 'tickets' || portal.id === 'maintenance')
+                                    ? 'Binary Visibility Governance (View Allowed vs No Access)'
+                                    : 'Role Access Governance'}
+                                </span>
+                              </div>
+                            </div>
+                            <span className="text-[10px] font-mono font-bold px-2.5 py-1 rounded-full bg-purple-950 text-purple-300 border border-purple-600/40">
+                              {roleItems.length} Roles
+                            </span>
+                          </div>
+
+                          {/* Role Cards Grid (Zero Horizontal Scroll!) */}
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+                            {roleItems.map((r) => {
+                              const perm: PagePermission =
+                                r.tier === 'members'
+                                  ? permissions.tiers.members?.[portal.id] || { canView: false, canEdit: false, bypassMaintenance: false }
+                                  : r.tier === 'faculty'
+                                    ? permissions.tiers.faculty?.[portal.id] || { canView: false, canEdit: false, bypassMaintenance: false }
+                                    : permissions.roles[r.id]?.[portal.id] || { canView: false, canEdit: false, bypassMaintenance: false };
+
+                              const setLevel = (level: 'none' | 'view' | 'edit') => {
+                                if (r.tier === 'members') handleSetTierAccessLevel('members', portal.id, level);
+                                else if (r.tier === 'faculty') handleSetTierAccessLevel('faculty', portal.id, level);
+                                else handleSetRoleAccessLevel(r.id, portal.id, level);
+                              };
+
+                              const toggleBypass = () => {
+                                if (r.tier === 'members') handleToggleTierPermission('members', portal.id, 'bypassMaintenance');
+                                else if (r.tier === 'faculty') handleToggleTierPermission('faculty', portal.id, 'bypassMaintenance');
+                                else handleToggleRolePermission(r.id, portal.id, 'bypassMaintenance');
+                              };
+
+                              const cellId = `portal_grid_${portal.id}_${r.id}`;
+
+                              return (
+                                <div
+                                  key={r.id}
+                                  className="p-3.5 sm:p-4 rounded-2xl bg-[#0e071c] border border-[#2b1642] hover:border-purple-500/40 transition-all space-y-3 shadow-md"
+                                >
+                                  <div className="flex items-start justify-between gap-2">
+                                    <div className="flex items-center gap-2.5 min-w-0">
+                                      <span className={`w-2.5 h-2.5 rounded-full ${r.dot} shrink-0`} />
+                                      <div className="min-w-0">
+                                        <h4 className="font-extrabold text-white text-xs sm:text-sm truncate">{r.label}</h4>
+                                        <span className="text-[10px] text-slate-400 font-mono block truncate">
+                                          {!perm.canView
+                                            ? 'Access Denied'
+                                            : (portal.id === 'tickets' || portal.id === 'maintenance')
+                                              ? 'View Allowed'
+                                              : perm.canEdit
+                                                ? 'Full Write Authority'
+                                                : 'Read-Only Viewer'} • {r.sub}
+                                        </span>
+                                      </div>
+                                    </div>
+
+                                    <div className="shrink-0">
+                                      {renderPermissionControl(cellId, perm, setLevel, toggleBypass, {
+                                        compact: false,
+                                        isBinary: portal.id === 'tickets' || portal.id === 'maintenance',
+                                      })}
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                </div>
+              )}
             </div>
 
           </div>
@@ -1980,7 +2300,12 @@ const SuperAdminControlCenter: React.FC<SuperAdminControlCenterProps> = ({
                             Added by: <strong className="text-slate-300">{formatAddedBy(adm.addedBy)}</strong>
                           </span>
                           {isCurrent ? (
-                            <span className="text-[10px] font-semibold text-slate-500 italic">Current Session</span>
+                            <span className="text-[10px] font-semibold text-purple-400 italic">Current Session (You)</span>
+                          ) : adm.isSuperAdmin || adm.role === 'Super Administrator' ? (
+                            <span className="px-2.5 py-1 bg-purple-950/40 text-purple-300 text-[10px] font-bold rounded border border-purple-700/50 flex items-center gap-1">
+                              <span className="material-symbols-outlined text-xs">shield</span>
+                              <span>Protected Super Admin</span>
+                            </span>
                           ) : (
                             <button
                               onClick={() =>
@@ -2080,7 +2405,12 @@ const SuperAdminControlCenter: React.FC<SuperAdminControlCenterProps> = ({
                             </td>
                             <td className="p-3.5 text-right">
                               {isCurrent ? (
-                                <span className="text-[10px] font-semibold text-slate-500 italic">Current Session</span>
+                                <span className="text-[10px] font-semibold text-purple-400 italic">Current Session (You)</span>
+                              ) : adm.isSuperAdmin || adm.role === 'Super Administrator' ? (
+                                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-purple-950/50 text-purple-300 text-[10px] font-bold border border-purple-700/50" title="Super Administrators hold equal authority and cannot drop each other">
+                                  <span className="material-symbols-outlined text-xs">shield</span>
+                                  <span>Protected</span>
+                                </span>
                               ) : (
                                 <button
                                   onClick={() =>
@@ -2550,7 +2880,7 @@ const SuperAdminControlCenter: React.FC<SuperAdminControlCenterProps> = ({
                 </p>
               </div>
 
-              <div className="flex items-center gap-2 shrink-0">
+              <div className="flex items-center gap-2 shrink-0 flex-wrap">
                 <button
                   type="button"
                   onClick={() => fetchAuditSessions(true)}
@@ -2563,8 +2893,28 @@ const SuperAdminControlCenter: React.FC<SuperAdminControlCenterProps> = ({
                   </span>
                   <span>{isRefreshingSessions ? 'Refreshing...' : 'Refresh'}</span>
                 </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    handleSelectPurgePreset('all');
+                    setIsPurgeModalOpen(true);
+                  }}
+                  className="px-3 py-2 bg-rose-950/50 hover:bg-rose-900/70 border border-rose-600/40 text-rose-300 text-xs font-bold rounded-xl flex items-center gap-1.5 transition-colors cursor-pointer"
+                  title="Permanently delete audit sessions for a scheduled or custom time window"
+                >
+                  <span className="material-symbols-outlined text-sm">delete_sweep</span>
+                  <span>Delete Logs</span>
+                </button>
               </div>
             </div>
+
+            {purgeSuccessMessage && (
+              <div className="p-3.5 bg-emerald-950/70 border border-emerald-500/50 rounded-2xl text-emerald-300 text-xs font-bold flex items-center gap-2 animate-in fade-in shadow-lg">
+                <span className="material-symbols-outlined text-base text-emerald-400">check_circle</span>
+                <span>{purgeSuccessMessage}</span>
+              </div>
+            )}
 
             {/* 4 Summary Analytics Metric Cards */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
@@ -2764,7 +3114,7 @@ const SuperAdminControlCenter: React.FC<SuperAdminControlCenterProps> = ({
                           </div>
                         </div>
 
-                        <div className="shrink-0">
+                        <div className="shrink-0 flex items-center gap-1.5">
                           {isOnline ? (
                             <span className="px-2 py-0.5 rounded-full text-[9px] font-extrabold bg-emerald-500/20 text-emerald-300 border border-emerald-500/50 flex items-center gap-1 animate-pulse">
                               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
@@ -2775,6 +3125,20 @@ const SuperAdminControlCenter: React.FC<SuperAdminControlCenterProps> = ({
                               OFFLINE
                             </span>
                           )}
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setDeleteConfirm({
+                                type: 'session',
+                                id: s.id,
+                                label: `${s.userName || 'Visitor'} session from ${formatAuditDateTime(s.enteredAt)}`,
+                              })
+                            }
+                            className="p-1 rounded-lg text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 transition-colors cursor-pointer"
+                            title="Delete this session record permanently"
+                          >
+                            <span className="material-symbols-outlined text-sm">delete</span>
+                          </button>
                         </div>
                       </div>
 
@@ -2935,27 +3299,44 @@ const SuperAdminControlCenter: React.FC<SuperAdminControlCenterProps> = ({
                             <div className="text-[10px] text-slate-400 font-mono uppercase mt-0.5">{s.deviceType}</div>
                           </td>
 
-                          {/* 4. Online Status */}
+                          {/* 4. Online Status & Actions */}
                           <td className="p-3.5">
-                            {isOnline ? (
-                              <div>
-                                <span className="px-2.5 py-1 rounded-full text-[10px] font-extrabold bg-emerald-500/20 text-emerald-300 border border-emerald-500/50 inline-flex items-center gap-1.5 shadow-[0_0_12px_rgba(16,185,129,0.2)]">
-                                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                                  Online Now
-                                </span>
-                                <div className="text-[10px] text-emerald-400/80 font-mono mt-0.5">Active on website</div>
-                              </div>
-                            ) : (
-                              <div>
-                                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#1e112e] text-slate-400 border border-[#3b1f5c] inline-flex items-center gap-1.5">
-                                  <span className="w-1.5 h-1.5 rounded-full bg-slate-500" />
-                                  Offline
-                                </span>
-                                <div className="text-[10px] text-slate-400 font-mono mt-0.5">
-                                  {s.leftAt ? `Left ${formatAuditRelativeTime(s.leftAt)}` : 'Session closed'}
+                            <div className="flex items-center justify-between gap-3">
+                              {isOnline ? (
+                                <div>
+                                  <span className="px-2.5 py-1 rounded-full text-[10px] font-extrabold bg-emerald-500/20 text-emerald-300 border border-emerald-500/50 inline-flex items-center gap-1.5 shadow-[0_0_12px_rgba(16,185,129,0.2)]">
+                                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                                    Online Now
+                                  </span>
+                                  <div className="text-[10px] text-emerald-400/80 font-mono mt-0.5">Active on website</div>
                                 </div>
-                              </div>
-                            )}
+                              ) : (
+                                <div>
+                                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#1e112e] text-slate-400 border border-[#3b1f5c] inline-flex items-center gap-1.5">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-slate-500" />
+                                    Offline
+                                  </span>
+                                  <div className="text-[10px] text-slate-400 font-mono mt-0.5">
+                                    {s.leftAt ? `Left ${formatAuditRelativeTime(s.leftAt)}` : 'Session closed'}
+                                  </div>
+                                </div>
+                              )}
+
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setDeleteConfirm({
+                                    type: 'session',
+                                    id: s.id,
+                                    label: `${s.userName || 'Visitor'} session from ${formatAuditDateTime(s.enteredAt)}`,
+                                  })
+                                }
+                                className="p-1.5 rounded-lg text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 transition-colors cursor-pointer"
+                                title="Delete this session record permanently"
+                              >
+                                <span className="material-symbols-outlined text-base">delete</span>
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       );
@@ -2963,6 +3344,555 @@ const SuperAdminControlCenter: React.FC<SuperAdminControlCenterProps> = ({
                   )}
                 </tbody>
               </table>
+            </div>
+          </div>
+        )}
+
+        {/* ════════════════════════════════════════════════════════════════════ */}
+        {/* TAB 6: TICKET FAQS GOVERNANCE                                      */}
+        {/* ════════════════════════════════════════════════════════════════════ */}
+        {activeTab === 'faqs' && (
+          <div className="space-y-6">
+
+            {/* Action & Overview Bar */}
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 p-4 sm:p-5 bg-[#0e071a] border border-[#261238] rounded-2xl shadow-lg">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <span className="p-1.5 rounded-lg bg-purple-500/20 text-purple-300">
+                    <span className="material-symbols-outlined text-lg">quiz</span>
+                  </span>
+                  <h2 className="text-base font-black text-white uppercase tracking-tight">
+                    Ticket FAQs &amp; Self-Service Knowledge Base
+                  </h2>
+                </div>
+                <p className="text-xs text-slate-400">
+                  Manage the FAQ items displayed to members above the ticket dispatching form on the Resolve Tickets page.
+                </p>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2.5">
+                {faqActionMsg && (
+                  <span className="px-3 py-1.5 rounded-xl bg-emerald-950 border border-emerald-500/60 text-emerald-300 text-xs font-bold animate-in fade-in">
+                    {faqActionMsg}
+                  </span>
+                )}
+                <button
+                  type="button"
+                  disabled={isSeedingFaqs}
+                  onClick={handleSeedFaqs}
+                  className="px-3.5 py-2 bg-[#170c29] hover:bg-[#251540] disabled:opacity-50 border border-purple-800/60 text-purple-300 hover:text-white text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center gap-1.5"
+                  title="Populate or restore standard VRGC FAQs into Firestore"
+                >
+                  {isSeedingFaqs ? (
+                    <>
+                      <span className="w-3.5 h-3.5 border-2 border-purple-400/30 border-t-purple-400 rounded-full animate-spin" />
+                      <span>Seeding to Firebase...</span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="material-symbols-outlined text-sm">auto_awesome</span>
+                      <span>Seed Standard FAQs</span>
+                    </>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={openAddFaqModal}
+                  className="px-4 py-2 bg-gradient-to-r from-purple-600 via-fuchsia-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 text-white text-xs font-black uppercase tracking-wider rounded-xl shadow-[0_0_15px_rgba(168,85,247,0.35)] transition-all cursor-pointer flex items-center gap-1.5"
+                >
+                  <span className="material-symbols-outlined text-base">add_circle</span>
+                  <span>Add New FAQ</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Filter & Search Toolbar */}
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 p-3.5 bg-[#0c0417] border border-[#231238] rounded-2xl">
+              <div className="relative flex-1 max-w-md">
+                <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">
+                  search
+                </span>
+                <input
+                  type="text"
+                  placeholder="Search FAQ questions or solutions..."
+                  value={faqSearch}
+                  onChange={(e) => setFaqSearch(e.target.value)}
+                  className="w-full pl-9 pr-3 py-2 bg-[#140b24] border border-[#2e154a] rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none focus:border-purple-500 transition-colors font-sans"
+                />
+              </div>
+
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] font-mono text-slate-400 font-bold uppercase hidden sm:inline">
+                  Category:
+                </span>
+                <select
+                  value={faqCategoryFilter}
+                  onChange={(e) => setFaqCategoryFilter(e.target.value)}
+                  className="px-3 py-2 bg-[#140b24] border border-[#2e154a] rounded-xl text-xs text-white focus:outline-none focus:border-purple-500 transition-colors cursor-pointer"
+                >
+                  <option value="all">All Categories ({faqs.length})</option>
+                  {FAQ_CATEGORIES.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.label} ({faqs.filter((f) => f.category === c.id).length})
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            {/* FAQ List Cards */}
+            {loadingFaqs ? (
+              <div className="p-12 text-center text-slate-400 bg-[#0c0417] border border-[#231238] rounded-2xl space-y-2">
+                <div className="w-6 h-6 border-2 border-purple-500/30 border-t-purple-500 rounded-full animate-spin mx-auto" />
+                <p className="text-xs font-mono">Syncing Support FAQs from Firestore...</p>
+              </div>
+            ) : filteredFaqs.length === 0 ? (
+              <div className="p-12 text-center bg-[#0c0417] border border-[#231238] rounded-2xl space-y-3">
+                <div className="w-12 h-12 rounded-2xl bg-purple-950/60 border border-purple-500/40 text-purple-300 flex items-center justify-center mx-auto">
+                  <span className="material-symbols-outlined text-2xl">help_outline</span>
+                </div>
+                <h3 className="text-sm font-bold text-white uppercase tracking-wider">No FAQs Found</h3>
+                <p className="text-xs text-slate-400 max-w-sm mx-auto">
+                  {faqSearch || faqCategoryFilter !== 'all'
+                    ? 'No questions match your current search or category filter.'
+                    : 'No FAQs have been added to Firestore yet. Add your first FAQ or seed standard defaults.'}
+                </p>
+                <div className="pt-2 flex justify-center gap-2">
+                  <button
+                    type="button"
+                    onClick={openAddFaqModal}
+                    className="px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold rounded-xl transition-all cursor-pointer"
+                  >
+                    Add FAQ
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isSeedingFaqs}
+                    onClick={handleSeedFaqs}
+                    className="px-4 py-2 bg-[#170c29] border border-purple-800 disabled:opacity-50 text-purple-300 hover:text-white text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center gap-1.5"
+                  >
+                    {isSeedingFaqs && (
+                      <span className="w-3.5 h-3.5 border-2 border-purple-400/30 border-t-purple-400 rounded-full animate-spin" />
+                    )}
+                    <span>{isSeedingFaqs ? 'Seeding...' : 'Seed Standard FAQs'}</span>
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {filteredFaqs.map((faq, idx) => {
+                  const cat = FAQ_CATEGORIES.find((c) => c.id === faq.category) || {
+                    id: 'general',
+                    label: 'General Inquiry',
+                    color: 'fuchsia',
+                  };
+                  return (
+                    <div
+                      key={faq.id}
+                      className={`p-4 sm:p-5 rounded-2xl border transition-all ${
+                        faq.isActive !== false
+                          ? 'bg-[#0e071c] border-purple-500/30 hover:border-purple-500/60 shadow-[0_0_20px_rgba(147,51,234,0.06)]'
+                          : 'bg-[#090312]/70 border-slate-800 opacity-60'
+                      }`}
+                    >
+                      <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-4">
+                        {/* Order & Content */}
+                        <div className="flex items-start gap-3 min-w-0">
+                          {/* Order Badges and Reorder Controls */}
+                          <div className="flex flex-col items-center gap-1 shrink-0">
+                            <span className="w-7 h-7 rounded-lg bg-purple-950/80 border border-purple-600/50 text-purple-300 font-mono text-xs font-black flex items-center justify-center">
+                              #{idx + 1}
+                            </span>
+                            <div className="flex flex-col gap-0.5">
+                              <button
+                                type="button"
+                                disabled={idx === 0}
+                                onClick={() => handleMoveFaq(idx, 'up')}
+                                className="w-6 h-5 rounded bg-white/5 hover:bg-white/10 disabled:opacity-20 text-slate-400 hover:text-white flex items-center justify-center text-[10px] cursor-pointer"
+                                title="Move FAQ up"
+                              >
+                                ▲
+                              </button>
+                              <button
+                                type="button"
+                                disabled={idx === filteredFaqs.length - 1}
+                                onClick={() => handleMoveFaq(idx, 'down')}
+                                className="w-6 h-5 rounded bg-white/5 hover:bg-white/10 disabled:opacity-20 text-slate-400 hover:text-white flex items-center justify-center text-[10px] cursor-pointer"
+                                title="Move FAQ down"
+                              >
+                                ▼
+                              </button>
+                            </div>
+                          </div>
+
+                          <div className="space-y-2 min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="px-2 py-0.5 rounded-md text-[10px] font-black uppercase tracking-wider bg-purple-900/60 text-purple-200 border border-purple-600/40">
+                                {cat.label}
+                              </span>
+                              {faq.isActive !== false ? (
+                                <span className="px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider bg-emerald-950 text-emerald-300 border border-emerald-600/40 flex items-center gap-1">
+                                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                                  Active &amp; Visible
+                                </span>
+                              ) : (
+                                <span className="px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider bg-slate-900 text-slate-400 border border-slate-700">
+                                  Hidden / Draft
+                                </span>
+                              )}
+                              {faq.updatedBy && (
+                                <span className="text-[10px] font-mono text-slate-500 hidden sm:inline truncate">
+                                  by {faq.updatedBy}
+                                </span>
+                              )}
+                            </div>
+
+                            <h3 className="text-sm sm:text-base font-bold text-white tracking-tight leading-snug">
+                              {faq.question}
+                            </h3>
+
+                            <p className="text-xs text-slate-300 leading-relaxed bg-[#140a24]/80 p-3 rounded-xl border border-purple-900/30">
+                              {faq.answer}
+                            </p>
+                          </div>
+                        </div>
+
+                        {/* Action Controls */}
+                        <div className="flex items-center gap-1.5 shrink-0 self-end lg:self-start pt-2 lg:pt-0">
+                          <button
+                            type="button"
+                            onClick={() => handleToggleFaqActive(faq)}
+                            className={`px-2.5 py-1.5 rounded-xl border text-[11px] font-bold transition-all cursor-pointer flex items-center gap-1 ${
+                              faq.isActive !== false
+                                ? 'bg-emerald-950/60 text-emerald-300 border-emerald-700/50 hover:bg-emerald-900/60'
+                                : 'bg-slate-900 text-slate-400 border-slate-700 hover:text-white'
+                            }`}
+                            title={faq.isActive !== false ? 'Click to hide from members' : 'Click to make visible to members'}
+                          >
+                            <span className="material-symbols-outlined text-sm">
+                              {faq.isActive !== false ? 'visibility' : 'visibility_off'}
+                            </span>
+                            <span>{faq.isActive !== false ? 'Hide' : 'Show'}</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => openEditFaqModal(faq)}
+                            className="p-2 rounded-xl bg-purple-900/40 hover:bg-purple-900/80 border border-purple-500/40 text-purple-200 text-xs font-bold transition-all cursor-pointer flex items-center gap-1"
+                            title="Edit this FAQ"
+                          >
+                            <span className="material-symbols-outlined text-sm">edit</span>
+                            <span className="hidden sm:inline">Edit</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setDeleteConfirm({
+                                type: 'faq',
+                                id: faq.id,
+                                label: `FAQ: "${faq.question}"`,
+                              })
+                            }
+                            className="p-2 rounded-xl bg-rose-950/40 hover:bg-rose-900/60 border border-rose-600/40 text-rose-300 text-xs font-bold transition-all cursor-pointer"
+                            title="Delete this FAQ"
+                          >
+                            <span className="material-symbols-outlined text-sm">delete</span>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── Add / Edit Support FAQ Modal ── */}
+        {isFaqModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/85 backdrop-blur-sm select-none animate-in fade-in duration-150">
+            <div className="max-w-lg w-full bg-[#10061d] border border-purple-500/40 rounded-3xl p-5 sm:p-7 space-y-5 shadow-2xl mx-2 text-left">
+              {/* Header */}
+              <div className="flex items-start justify-between gap-3 border-b border-purple-500/20 pb-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-11 h-11 rounded-2xl bg-purple-500/20 border border-purple-500/40 flex items-center justify-center text-purple-300 shrink-0">
+                    <span className="material-symbols-outlined text-2xl">
+                      {editingFaq ? 'edit_note' : 'add_circle'}
+                    </span>
+                  </div>
+                  <div>
+                    <h3 className="text-base sm:text-lg font-black text-white uppercase tracking-tight">
+                      {editingFaq ? 'Edit Support FAQ' : 'Add New Support FAQ'}
+                    </h3>
+                    <p className="text-xs text-slate-400 mt-0.5">
+                      Configure quick solutions for the Resolve Tickets &amp; Support page
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => !submittingFaq && setIsFaqModalOpen(false)}
+                  className="p-1.5 rounded-xl text-slate-400 hover:text-white hover:bg-white/5 transition-colors cursor-pointer"
+                >
+                  <span className="material-symbols-outlined text-lg">close</span>
+                </button>
+              </div>
+
+              {/* Form */}
+              <form onSubmit={handleSaveFaq} className="space-y-4">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-slate-300 uppercase tracking-wider block">
+                    Question <span className="text-rose-400">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. How do I verify my payment status?"
+                    value={faqFormData.question}
+                    onChange={(e) => setFaqFormData({ ...faqFormData, question: e.target.value })}
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-[#150a24] border border-[#2e154a] focus:border-purple-500 focus:outline-none text-xs text-white placeholder-slate-500 transition-colors"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-slate-300 uppercase tracking-wider block">
+                    Category <span className="text-rose-400">*</span>
+                  </label>
+                  <select
+                    value={faqFormData.category}
+                    onChange={(e) => setFaqFormData({ ...faqFormData, category: e.target.value })}
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-[#150a24] border border-[#2e154a] focus:border-purple-500 focus:outline-none text-xs text-white transition-colors cursor-pointer"
+                  >
+                    {FAQ_CATEGORIES.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between text-xs">
+                    <label className="font-bold text-slate-300 uppercase tracking-wider">
+                      Detailed Answer / Solution <span className="text-rose-400">*</span>
+                    </label>
+                    <span className="text-[10px] font-mono text-slate-400">
+                      {faqFormData.answer.length}/1000
+                    </span>
+                  </div>
+                  <textarea
+                    required
+                    rows={4}
+                    maxLength={1000}
+                    placeholder="Write the clear solution, instructions, or links to guide members..."
+                    value={faqFormData.answer}
+                    onChange={(e) => setFaqFormData({ ...faqFormData, answer: e.target.value })}
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-[#150a24] border border-[#2e154a] focus:border-purple-500 focus:outline-none text-xs text-white placeholder-slate-500 transition-colors custom-scrollbar"
+                  />
+                </div>
+
+                <div className="flex items-center gap-2 pt-1">
+                  <input
+                    type="checkbox"
+                    id="faq-is-active"
+                    checked={faqFormData.isActive}
+                    onChange={(e) => setFaqFormData({ ...faqFormData, isActive: e.target.checked })}
+                    className="w-4 h-4 rounded bg-[#140b24] border-purple-700 text-purple-600 focus:ring-purple-500 cursor-pointer"
+                  />
+                  <label htmlFor="faq-is-active" className="text-xs font-medium text-slate-300 cursor-pointer select-none">
+                    Active &amp; visible immediately to members on Resolve Tickets page
+                  </label>
+                </div>
+
+                {/* Footer Buttons */}
+                <div className="flex flex-col sm:flex-row items-center justify-end gap-2.5 pt-4 border-t border-purple-500/20">
+                  <button
+                    type="button"
+                    disabled={submittingFaq}
+                    onClick={() => setIsFaqModalOpen(false)}
+                    className="w-full sm:w-auto px-4 py-2.5 bg-[#1e1035] hover:bg-[#2c184d] text-slate-300 text-xs font-bold rounded-xl transition-colors cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={submittingFaq}
+                    className="w-full sm:w-auto px-5 py-2.5 bg-gradient-to-r from-purple-600 to-fuchsia-600 hover:from-purple-500 hover:to-fuchsia-500 disabled:opacity-50 text-white text-xs font-black tracking-wider uppercase rounded-xl transition-all cursor-pointer flex items-center justify-center gap-2 shadow-[0_0_15px_rgba(168,85,247,0.3)]"
+                  >
+                    {submittingFaq ? (
+                      <>
+                        <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                        <span>Saving to Firebase...</span>
+                      </>
+                    ) : (
+                      <>
+                        <span className="material-symbols-outlined text-sm">save</span>
+                        <span>{editingFaq ? 'Update FAQ' : 'Save New FAQ'}</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* ── Purge Audit Logs by Scheduled Time Range Modal ── */}
+        {isPurgeModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/85 backdrop-blur-sm select-none animate-in fade-in duration-150">
+            <div className="max-w-lg w-full bg-[#10061d] border border-rose-500/40 rounded-3xl p-5 sm:p-7 space-y-5 shadow-2xl mx-2 text-left">
+              {/* Header */}
+              <div className="flex items-start justify-between gap-3 border-b border-purple-500/20 pb-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-11 h-11 rounded-2xl bg-rose-500/20 border border-rose-500/40 flex items-center justify-center text-rose-400 shrink-0">
+                    <span className="material-symbols-outlined text-2xl">delete_sweep</span>
+                  </div>
+                  <div>
+                    <h3 className="text-base sm:text-lg font-black text-white uppercase tracking-tight">
+                      Delete Audit Session Logs
+                    </h3>
+                    <p className="text-xs text-slate-400 mt-0.5">
+                      Permanently wipe visitor tracking records from Firebase &amp; Dashboard
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => !isPurgingLogs && setIsPurgeModalOpen(false)}
+                  className="p-1.5 rounded-xl text-slate-400 hover:text-white hover:bg-white/5 transition-colors cursor-pointer"
+                >
+                  <span className="material-symbols-outlined text-lg">close</span>
+                </button>
+              </div>
+
+              {/* Quick Presets */}
+              <div className="space-y-2">
+                <label className="text-[11px] font-mono font-bold uppercase tracking-wider text-purple-300 block">
+                  Quick Time Range Presets
+                </label>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  {[
+                    { id: 'all', label: 'All Logs (12h)' },
+                    { id: '1h', label: 'Older than 1h' },
+                    { id: '3h', label: 'Older than 3h' },
+                    { id: '6h', label: 'Older than 6h' },
+                  ].map((p) => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      onClick={() => handleSelectPurgePreset(p.id as any)}
+                      className={`px-3 py-2 rounded-xl text-xs font-bold border transition-all cursor-pointer text-center ${
+                        purgePreset === p.id
+                          ? 'bg-rose-950/70 border-rose-500 text-rose-200 shadow-[0_0_12px_rgba(244,63,94,0.3)]'
+                          : 'bg-[#170c29] border-purple-900/40 text-slate-300 hover:border-purple-500/50 hover:text-white'
+                      }`}
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Scheduled Range Datetime Pickers */}
+              <div className="p-4 rounded-2xl bg-[#0a0314] border border-[#2b1442] space-y-3">
+                <div className="text-[11px] font-mono font-bold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
+                  <span className="material-symbols-outlined text-sm text-rose-400">schedule</span>
+                  <span>Scheduled Time Window (In Between)</span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-mono text-slate-400 uppercase font-bold">
+                      Start Time (From):
+                    </label>
+                    <input
+                      type="datetime-local"
+                      value={purgeStartDate}
+                      onChange={(e) => {
+                        setPurgePreset('custom');
+                        setPurgeStartDate(e.target.value);
+                      }}
+                      className="w-full px-3 py-2 rounded-xl bg-[#140b24] border border-purple-900/60 text-xs font-mono text-white focus:outline-none focus:border-rose-500 transition-colors"
+                    />
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-mono text-slate-400 uppercase font-bold">
+                      End Time (To):
+                    </label>
+                    <input
+                      type="datetime-local"
+                      value={purgeEndDate}
+                      onChange={(e) => {
+                        setPurgePreset('custom');
+                        setPurgeEndDate(e.target.value);
+                      }}
+                      className="w-full px-3 py-2 rounded-xl bg-[#140b24] border border-purple-900/60 text-xs font-mono text-white focus:outline-none focus:border-rose-500 transition-colors"
+                    />
+                  </div>
+                </div>
+
+                <p className="text-[11px] text-slate-400 leading-relaxed pt-1">
+                  Only visitor presence sessions entered <strong className="text-white">between these two timestamps</strong> will be targeted.
+                </p>
+              </div>
+
+              {/* Real-Time Preview Banner */}
+              {(() => {
+                const fromMs = purgeStartDate ? new Date(purgeStartDate).getTime() : 0;
+                const toMs = purgeEndDate ? new Date(purgeEndDate).getTime() : Infinity;
+                const matched = sessions.filter((s) => {
+                  const t = new Date(s.enteredAt).getTime();
+                  return !isNaN(t) && t >= fromMs && t <= toMs;
+                }).length;
+
+                return (
+                  <div className="p-3.5 rounded-xl bg-rose-950/30 border border-rose-500/30 flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2">
+                      <span className="material-symbols-outlined text-rose-400 text-lg">info</span>
+                      <span className="text-xs text-rose-200">
+                        Matches <strong className="text-white font-mono font-black">{matched}</strong> visible session log(s) in this dashboard
+                      </span>
+                    </div>
+                    <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded bg-rose-900/50 text-rose-300 border border-rose-500/30">
+                      Target: {matched}
+                    </span>
+                  </div>
+                );
+              })()}
+
+              {/* Action Buttons */}
+              <div className="flex flex-col-reverse sm:flex-row items-center justify-end gap-2.5 pt-2 border-t border-purple-500/20">
+                <button
+                  type="button"
+                  disabled={isPurgingLogs}
+                  onClick={() => setIsPurgeModalOpen(false)}
+                  className="w-full sm:w-auto px-4 py-2.5 bg-[#1e1035] hover:bg-[#2c184d] text-slate-300 text-xs font-bold rounded-xl transition-colors cursor-pointer disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={isPurgingLogs || (!purgeStartDate && !purgeEndDate)}
+                  onClick={handleExecutePurgeLogs}
+                  className="w-full sm:w-auto px-5 py-2.5 bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white text-xs font-black tracking-wider uppercase rounded-xl transition-all cursor-pointer flex items-center justify-center gap-2 shadow-[0_0_15px_rgba(244,63,94,0.3)]"
+                >
+                  {isPurgingLogs ? (
+                    <>
+                      <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                      <span>Deleting from Firebase...</span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="material-symbols-outlined text-sm">delete_forever</span>
+                      <span>Permanently Delete Logs</span>
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
           </div>
         )}
@@ -2994,6 +3924,9 @@ const SuperAdminControlCenter: React.FC<SuperAdminControlCenterProps> = ({
                     else if (deleteConfirm.type === 'role') handleDeleteCustomRole(deleteConfirm.id);
                     else if (deleteConfirm.type === 'domain') handleDeleteDomain(deleteConfirm.id);
                     else if (deleteConfirm.type === 'position') handleDeletePosition(deleteConfirm.id);
+                    else if (deleteConfirm.type === 'session') handleDeleteSingleSession(deleteConfirm.id);
+                    else if (deleteConfirm.type === 'faq') handleDeleteFaq(deleteConfirm.id);
+                    setDeleteConfirm(null);
                   }}
                   className="px-4 py-1.5 bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold rounded-lg transition-colors cursor-pointer"
                 >

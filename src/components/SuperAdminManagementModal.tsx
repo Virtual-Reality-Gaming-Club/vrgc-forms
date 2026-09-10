@@ -284,6 +284,15 @@ const SuperAdminManagementModal: React.FC<SuperAdminManagementModalProps> = ({
   const handleUpdateAdminRole = async (adminEmail: string, newRole: string) => {
     try {
       const cleanEmail = adminEmail.toLowerCase().trim();
+      const isTargetSuperAdmin =
+        superAdminEmails.map((e) => e.toLowerCase().trim()).includes(cleanEmail) ||
+        admins.some((a) => a.email.toLowerCase() === cleanEmail && (a.isSuperAdmin || a.role === 'Super Administrator'));
+
+      if (isTargetSuperAdmin) {
+        alert('Operation Denied: The role of a Super Administrator is immutable and cannot be changed.');
+        return;
+      }
+
       const nowIso = new Date().toISOString();
 
       // Immediate optimistic update
@@ -327,6 +336,15 @@ const SuperAdminManagementModal: React.FC<SuperAdminManagementModalProps> = ({
   const handleDropAdmin = async (adminId: string) => {
     try {
       const cleanEmail = adminId.toLowerCase().trim();
+      const isTargetSuperAdmin =
+        superAdminEmails.map((e) => e.toLowerCase().trim()).includes(cleanEmail) ||
+        admins.some((a) => a.email.toLowerCase() === cleanEmail && (a.isSuperAdmin || a.role === 'Super Administrator'));
+
+      if (isTargetSuperAdmin) {
+        alert('Operation Denied: Super Administrators cannot drop another Super Administrator as all Super Admins share equal authority.');
+        return;
+      }
+
       await deleteDoc(doc(db, 'admins', cleanEmail));
       await deleteDoc(doc(db, 'roles', cleanEmail));
 
@@ -677,7 +695,7 @@ const SuperAdminManagementModal: React.FC<SuperAdminManagementModalProps> = ({
 
                         <div className="flex items-center justify-between gap-2 p-2 rounded-lg bg-[#181818] border border-[#262626] text-xs">
                           <span className="text-[10px] text-slate-400 uppercase font-mono font-bold shrink-0">ROLE:</span>
-                          {adm.role === 'Super Administrator' ? (
+                          {adm.isSuperAdmin || adm.role === 'Super Administrator' ? (
                             <span className="font-bold text-purple-300 text-xs">Super Admin</span>
                           ) : (
                             <select
@@ -701,6 +719,11 @@ const SuperAdminManagementModal: React.FC<SuperAdminManagementModalProps> = ({
                           </span>
                           {isCurrent ? (
                             <span className="text-[10px] font-semibold text-slate-500 italic">Current Session</span>
+                          ) : adm.isSuperAdmin || adm.role === 'Super Administrator' ? (
+                            <span className="px-2.5 py-1 bg-purple-950/40 text-purple-300 text-[10px] font-bold rounded border border-purple-700/50 flex items-center gap-1">
+                              <span className="material-symbols-outlined text-xs">shield</span>
+                              <span>Protected Super Admin</span>
+                            </span>
                           ) : (
                             <button
                               onClick={() =>
@@ -760,7 +783,7 @@ const SuperAdminManagementModal: React.FC<SuperAdminManagementModalProps> = ({
                               <div className="text-[11px] text-slate-400 font-mono">{adm.email}</div>
                             </td>
                             <td className="p-3.5 text-slate-300">
-                              {adm.role === 'Super Administrator' ? (
+                              {adm.isSuperAdmin || adm.role === 'Super Administrator' ? (
                                 <span className="font-bold text-purple-300">Super Admin</span>
                               ) : (
                                 <select
@@ -778,7 +801,7 @@ const SuperAdminManagementModal: React.FC<SuperAdminManagementModalProps> = ({
                               )}
                             </td>
                             <td className="p-3.5">
-                              {adm.role === 'Super Administrator' ? (
+                              {adm.isSuperAdmin || adm.role === 'Super Administrator' ? (
                                 <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-purple-900/60 text-purple-300 border border-purple-600">
                                   SUPER ADMIN
                                 </span>
@@ -800,6 +823,11 @@ const SuperAdminManagementModal: React.FC<SuperAdminManagementModalProps> = ({
                             <td className="p-3.5 text-right">
                               {isCurrent ? (
                                 <span className="text-[10px] font-semibold text-slate-500 italic">Current Session</span>
+                              ) : adm.isSuperAdmin || adm.role === 'Super Administrator' ? (
+                                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-purple-950/50 text-purple-300 text-[10px] font-bold border border-purple-700/50" title="Super Administrators hold equal authority and cannot drop each other">
+                                  <span className="material-symbols-outlined text-xs">shield</span>
+                                  <span>Protected</span>
+                                </span>
                               ) : (
                                 <button
                                   onClick={() =>

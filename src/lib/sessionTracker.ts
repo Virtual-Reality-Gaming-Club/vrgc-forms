@@ -22,6 +22,7 @@ export interface SessionRecord {
   isLoggedIn: boolean;
   enteredAt: string; // ISO string
   leftAt: string | null; // ISO string or null if currently online
+  lastActiveAt?: string; // ISO string of recent activity (heartbeat)
   status: 'online' | 'offline';
   device: string; // e.g. "Windows • Chrome"
   deviceType: 'desktop' | 'mobile' | 'tablet';
@@ -134,6 +135,7 @@ export async function initOrResumeSession(
       isLoggedIn,
       enteredAt,
       leftAt: null,
+      lastActiveAt: enteredAt,
       status: 'online',
       device,
       deviceType,
@@ -151,8 +153,26 @@ export async function initOrResumeSession(
   }
 }
 
+// ─── Touch Session Activity (Heartbeat every 3 minutes while active) ──────────
+
+export async function touchSessionActivity(): Promise<void> {
+  if (typeof window === 'undefined') return;
+  try {
+    const sessionId = sessionStorage.getItem(SESSION_STORAGE_KEY);
+    if (!sessionId) return;
+    const nowIso = new Date().toISOString();
+    await setDoc(
+      doc(db, 'audit_sessions', sessionId),
+      { lastActiveAt: nowIso },
+      { merge: true }
+    );
+  } catch {
+    // quiet
+  }
+}
+
 // ─── Session Finalization (User Offline / Tab Closed) ──────────────────────────
-// Ensures exactly 1 write on browser unload
+// Uses sendBeacon / keepalive fetch for guaranteed execution on tab close
 
 let hasFinalizedThisTab = false;
 
@@ -166,16 +186,88 @@ export async function finalizeSession(): Promise<void> {
     hasFinalizedThisTab = true;
     const nowIso = new Date().toISOString();
 
-    const payload: Partial<SessionRecord> = {
-      leftAt: nowIso,
-      status: 'offline',
-    };
+    const dataPayload = JSON.stringify({ sessionId, leftAt: nowIso });
 
-    await setDoc(doc(db, 'audit_sessions', sessionId), payload, { merge: true });
+    // 1. sendBeacon - non-blocking, guaranteed to be delivered even on browser kill/close
+    if (typeof navigator !== 'undefined' && navigator.sendBeacon) {
+      const blob = new Blob([dataPayload], { type: 'application/json' });
+      navigator.sendBeacon('/api/audit/leave', blob);
+    } else {
+      // 2. fetch with keepalive: true
+      fetch('/api/audit/leave', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: dataPayload,
+        keepalive: true,
+      }).catch(() => {});
+    }
+
+    // 3. Client Firestore update attempt
+    setDoc(
+      doc(db, 'audit_sessions', sessionId),
+      { leftAt: nowIso, status: 'offline' },
+      { merge: true }
+    ).catch(() => {});
+
     sessionStorage.removeItem(SESSION_SYNCED_KEY);
   } catch (err) {
     console.warn('[SessionTracker] Finalize session error:', err);
   }
+}
+
+// ─── Stale Sessions Auto-Deletion (TTL 12 Hours) ───────────────────────────────
+// Automatically deletes sessions older than 12 hours from the Firestore database
+
+export async function cleanupStaleAuditSessions(maxAgeMs = 12 * 60 * 60 * 1000): Promise<number> {
+  try {
+    const thresholdIso = new Date(Date.now() - maxAgeMs).toISOString();
+    const staleQuery = query(
+      collection(db, 'audit_sessions'),
+      where('enteredAt', '<=', thresholdIso),
+      limit(50)
+    );
+    const snap = await getDocs(staleQuery);
+    if (!snap.empty) {
+      const batch = writeBatch(db);
+      snap.docs.forEach((d) => batch.delete(d.ref));
+      await batch.commit();
+      return snap.size;
+    }
+  } catch (err) {
+    console.warn('[SessionTracker] Stale sessions cleanup error:', err);
+  }
+  return 0;
+}
+
+// ─── Delete Sessions by Scheduled / Custom Time Range ──────────────────────────
+export async function deleteAuditSessionsByRange(
+  fromIso: string,
+  toIso: string
+): Promise<number> {
+  try {
+    const q = query(
+      collection(db, 'audit_sessions'),
+      where('enteredAt', '>=', fromIso),
+      where('enteredAt', '<=', toIso),
+      limit(400)
+    );
+    const snap = await getDocs(q);
+    if (!snap.empty) {
+      const batch = writeBatch(db);
+      snap.docs.forEach((d) => batch.delete(d.ref));
+      await batch.commit();
+      return snap.size;
+    }
+  } catch (err) {
+    console.warn('[SessionTracker] Delete by range error:', err);
+    throw err;
+  }
+  return 0;
+}
+
+// ─── Delete Single Audit Session ──────────────────────────────────────────────
+export async function deleteAuditSessionById(sessionId: string): Promise<void> {
+  await deleteDoc(doc(db, 'audit_sessions', sessionId));
 }
 
 // ─── Format Duration Helper ───────────────────────────────────────────────────

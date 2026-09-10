@@ -45,6 +45,9 @@ export const metadata: Metadata = {
     shortcut: "/icon.svg",
     apple: "/icon.svg",
   },
+  other: {
+    'google-adsense-account': 'ca-pub-9955321741781874',
+  },
 };
 
 export default function RootLayout({
@@ -59,6 +62,7 @@ export default function RootLayout({
       suppressHydrationWarning
     >
       <head>
+        <meta name="google-adsense-account" content="ca-pub-9955321741781874" />
         <link rel="icon" type="image/svg+xml" href="/icon.svg" />
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
@@ -70,7 +74,10 @@ export default function RootLayout({
           href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0&display=swap"
         />
       </head>
-      <body className="bg-[#03010A] text-[#e2e8f0] antialiased min-h-screen selection:bg-purple-500 selection:text-white relative overflow-x-clip max-w-full w-full">
+      <body
+        suppressHydrationWarning
+        className="bg-[#03010A] text-[#e2e8f0] antialiased min-h-screen selection:bg-purple-500 selection:text-white relative overflow-x-clip max-w-full w-full"
+      >
         <GlobalBackground />
         <div className="relative z-10 min-h-screen flex flex-col w-full max-w-full overflow-x-clip">
           <AuthProvider>

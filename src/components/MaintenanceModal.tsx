@@ -30,12 +30,6 @@ export const MAINTENANCE_CATEGORIES: MaintenanceCategory[] = [
     icon: 'share',
   },
   {
-    id: 'register',
-    label: 'Event Registration',
-    description: 'Public and member event booking and ticket registrations',
-    icon: 'how_to_reg',
-  },
-  {
     id: 'members',
     label: 'Members Roster',
     description: 'Chapter directory, domain subdivisions, and crew roster',

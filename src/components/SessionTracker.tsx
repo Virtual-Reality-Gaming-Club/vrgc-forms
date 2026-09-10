@@ -2,7 +2,7 @@
 
 import React, { useEffect } from 'react';
 import { useAuth } from '@/lib/auth-context';
-import { initOrResumeSession, finalizeSession } from '@/lib/sessionTracker';
+import { initOrResumeSession, finalizeSession, touchSessionActivity } from '@/lib/sessionTracker';
 
 export const SessionTracker: React.FC = () => {
   const { user, userEmail, memberData, authenticRole, isAuthenticSuperAdmin, isAdmin, isElevatedSession, isFaculty, authLoading } = useAuth();
@@ -36,7 +36,18 @@ export const SessionTracker: React.FC = () => {
     });
   }, [authLoading, userEmail, resolvedName, resolvedRole, user?.photoURL, user?.email, isElevatedSession, isAuthenticSuperAdmin]);
 
-  // 2. Mark offline on browser exit / tab close (Single write on exit, NO tab-switch spam)
+  // 2. Periodic gentle heartbeat every 3 minutes while tab is active and visible (Zero waste on Spark quota)
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (typeof document !== 'undefined' && !document.hidden) {
+        touchSessionActivity();
+      }
+    }, 3 * 60 * 1000);
+
+    return () => clearInterval(interval);
+  }, []);
+
+  // 3. Mark offline on browser exit / tab close via sendBeacon
   useEffect(() => {
     let finalized = false;
 
@@ -59,3 +70,4 @@ export const SessionTracker: React.FC = () => {
 };
 
 export default SessionTracker;
+

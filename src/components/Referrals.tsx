@@ -5,7 +5,7 @@ import { createPortal } from 'react-dom';
 import { CONFIG } from '../lib/config';
 import { auth, googleProvider, db } from '../lib/firebase';
 import { signInWithPopup, signOut, onAuthStateChanged, User } from 'firebase/auth';
-import { collection, addDoc, updateDoc, deleteDoc, doc, setDoc, onSnapshot, query, orderBy, getDocs, deleteField, where } from 'firebase/firestore';
+import { collection, addDoc, updateDoc, deleteDoc, doc, setDoc, onSnapshot, query, orderBy, getDocs, getDoc, deleteField, where } from 'firebase/firestore';
 import SpecularButton from './SpecularButton';
 
 interface ReferralsProps {
@@ -232,14 +232,16 @@ const Referrals: React.FC<ReferralsProps> = ({
           console.warn('Error fetching admins from Firestore:', aErr);
         }
 
-        // Fetch members from Firestore 'members' collection
+        // Fetch members from Firestore 'members' and 'id_cards' collections
+        const parsedMembersMap = new Map<string, MemberData>();
+
         try {
           const mSnap = await getDocs(collection(db, 'members'));
           mSnap.forEach((docSnap) => {
             const data = docSnap.data();
             const email = (data.email || data.Email || docSnap.id || '').toLowerCase().trim();
             const reg = (data.registrationNumber || data['Registration Number'] || data.regNo || '').toUpperCase().trim();
-            const name = (data.name || data.Name || data.fullName || '').toLowerCase().trim();
+            const name = (data.name || data.Name || data.fullName || 'Member').trim();
             const photo = data.photoUrl || data.photoURL || data.avatarUrl || data.photo || data.image || data.avatar;
 
             if (photo) {
@@ -248,23 +250,34 @@ const Referrals: React.FC<ReferralsProps> = ({
                 photos[email.split('@')[0]] = photo;
               }
               if (reg) photos[reg] = photo;
-              if (name) photos[name] = photo;
+              if (name) photos[name.toLowerCase()] = photo;
+            }
+
+            const mapKey = reg || email || docSnap.id;
+            if (mapKey) {
+              parsedMembersMap.set(mapKey, {
+                Name: name,
+                'Registration Number': reg,
+                Email: email,
+                Phone: data.phone || data.Phone || '',
+                Team: data.team || data.domain || 'Member',
+                Position: data.position || 'Member',
+              });
             }
           });
         } catch (mErr) {
-          console.warn('Error fetching members collection photos:', mErr);
+          console.warn('Error fetching members collection:', mErr);
         }
 
         // Fetch members from Firestore 'id_cards' collection
         try {
           const memberCol = collection(db, 'id_cards');
           const memberSnap = await getDocs(memberCol);
-          const parsedMembers: MemberData[] = [];
           memberSnap.forEach((docSnap) => {
             const data = docSnap.data();
             const email = (data.email || data.Email || docSnap.id || '').toLowerCase().trim();
             const reg = (data.regNo || data.registrationNumber || '').toUpperCase().trim();
-            const name = (data.fullName || data.name || '').toLowerCase().trim();
+            const name = (data.fullName || data.name || 'Member').trim();
             const photo = data.photoUrl || data.photoURL || data.avatarUrl || data.photo || data.image;
 
             if (photo) {
@@ -273,12 +286,13 @@ const Referrals: React.FC<ReferralsProps> = ({
                 photos[email.split('@')[0]] = photo;
               }
               if (reg) photos[reg] = photo;
-              if (name) photos[name] = photo;
+              if (name) photos[name.toLowerCase()] = photo;
             }
 
-            if (email && email.includes('@')) {
-              parsedMembers.push({
-                Name: data.fullName || data.name || 'Member',
+            const mapKey = reg || email || docSnap.id;
+            if (mapKey && !parsedMembersMap.has(mapKey)) {
+              parsedMembersMap.set(mapKey, {
+                Name: name,
                 'Registration Number': reg,
                 Email: email,
                 Phone: data.phone || '',
@@ -287,11 +301,12 @@ const Referrals: React.FC<ReferralsProps> = ({
               });
             }
           });
-          if (parsedMembers.length > 0) {
-            setMembers(parsedMembers);
+
+          if (parsedMembersMap.size > 0) {
+            setMembers(Array.from(parsedMembersMap.values()));
           }
         } catch (mErr) {
-          console.warn('Error fetching members from Firestore:', mErr);
+          console.warn('Error fetching id_cards from Firestore:', mErr);
         }
 
         setUserPhotoMap(photos);
@@ -414,31 +429,41 @@ const Referrals: React.FC<ReferralsProps> = ({
     const clean = regNo.trim().toUpperCase();
     if (!clean) return { isDuplicate: false };
 
-    // 1. HIGHEST PRIORITY: Check if the candidate is already an active/official member of VRGC
+    // 1. HIGHEST PRIORITY: Check if the candidate is already an active/admitted member of VRGC Roster
     const existingMember = members.find(m => {
       const mReg = (m['Registration Number'] || m.regNo || m['Registration No'] || m.registrationNumber || '').toUpperCase().trim();
       return mReg === clean;
     });
 
     if (existingMember) {
-      const personName = existingMember.Name || existingMember.name || existingMember['Full Name'] || clean;
+      const personName = (existingMember.Name || existingMember.name || existingMember['Full Name'] || '').trim();
+      const displayName = personName || name.trim() || clean;
       return {
         isDuplicate: true,
-        message: `${personName} is already registered in the club.`,
+        message: `${displayName} is already present in the Members Roster.`,
       };
     }
 
-    // 2. SECONDARY: Check existing referrals in state / database
-    const existingReferral = referrals.find(r => {
+    // 2. Check active in-progress referrals (Pending, Under Review, Interviewing, etc.)
+    // Note: If candidate was admitted previously but deleted from the roster, or rejected, they are not in the roster and can be referred!
+    const activeReferral = referrals.find(r => {
       if (currentDocId && r.id === currentDocId) return false;
       const rReg = (getRefVal(r, 'Candidate Registration Number') || getRefVal(r, 'candidateRegNo') || '').toUpperCase().trim();
-      return rReg === clean;
+      if (rReg !== clean) return false;
+
+      const rawStatus = (getRefVal(r, 'Status') || r.status || '').toLowerCase().trim();
+      if (rawStatus === 'admitted' || rawStatus === 'rejected') {
+        return false;
+      }
+      return true;
     });
 
-    if (existingReferral) {
+    if (activeReferral) {
+      const personName = (getRefVal(activeReferral, 'Candidate Name') || getRefVal(activeReferral, 'candidateName') || '').trim();
+      const displayName = personName || name.trim() || clean;
       return {
         isDuplicate: true,
-        message: 'Someone has already registered that member! A candidate cannot be referred more than once.',
+        message: `Someone has already referred ${displayName}! A candidate cannot be referred more than once.`,
       };
     }
 
@@ -515,6 +540,39 @@ const Referrals: React.FC<ReferralsProps> = ({
 
     // Deep Firestore uniqueness check (ensures real-time integrity even against parallel requests)
     try {
+      // 1. Check if candidate is already in Firestore 'members' collection
+      let memName = '';
+      const qMemReg = query(collection(db, 'members'), where('registrationNumber', '==', cleanReg));
+      const snapMem = await getDocs(qMemReg);
+      if (!snapMem.empty) {
+        const d = snapMem.docs[0].data();
+        memName = (d.name || d.Name || d.fullName || '').trim();
+      } else {
+        const docById = await getDoc(doc(db, 'members', cleanReg.toLowerCase()));
+        if (docById.exists()) {
+          const d = docById.data();
+          memName = (d.name || d.Name || d.fullName || '').trim();
+        }
+      }
+
+      if (!memName) {
+        // Also check id_cards in Firestore
+        const qId = query(collection(db, 'id_cards'), where('regNo', '==', cleanReg));
+        const snapId = await getDocs(qId);
+        if (!snapId.empty) {
+          const d = snapId.docs[0].data();
+          memName = (d.fullName || d.name || '').trim();
+        }
+      }
+
+      if (memName) {
+        const displayName = memName || name.trim() || cleanReg;
+        setErrors(prev => ({ ...prev, registrationNumber: `${displayName} is already present in the Members Roster.` }));
+        setIsSubmitting(false);
+        return;
+      }
+
+      // 2. Check Firestore 'referrals' collection
       const qCamel = query(collection(db, 'referrals'), where('candidateRegNo', '==', cleanReg));
       const snapCamel = await getDocs(qCamel);
       let dupDoc = snapCamel.docs[0];
@@ -525,10 +583,23 @@ const Referrals: React.FC<ReferralsProps> = ({
       }
 
       if (dupDoc) {
-        const errMsg = 'Someone has already registered that member! A candidate cannot be referred more than once.';
-        setErrors(prev => ({ ...prev, registrationNumber: errMsg }));
-        setIsSubmitting(false);
-        return;
+        const dupData = dupDoc.data();
+        const dupStatus = (dupData.status || dupData.Status || '').toLowerCase().trim();
+        const candName = (dupData.candidateName || dupData['Candidate Name'] || name.trim() || cleanReg).trim();
+
+        if (dupStatus === 'admitted' || dupStatus === 'rejected') {
+          // Member was deleted from roster or rejected, but stale referral record lingered:
+          // Clean up the stale referral doc so the new referral transmits seamlessly!
+          await deleteDoc(dupDoc.ref).catch(() => {});
+          setReferrals(prev => prev.filter(r => r.id !== dupDoc?.id));
+        } else {
+          setErrors(prev => ({
+            ...prev,
+            registrationNumber: `Someone has already referred ${candName}! A candidate cannot be referred more than once.`,
+          }));
+          setIsSubmitting(false);
+          return;
+        }
       }
     } catch (queryErr) {
       console.warn('Firestore real-time uniqueness query error:', queryErr);
@@ -599,8 +670,68 @@ const Referrals: React.FC<ReferralsProps> = ({
         },
         { merge: true }
       );
+
+      // Immediately sync local members state
+      setMembers((prev) => {
+        const alreadyInState = prev.some((m) => {
+          const mReg = (m['Registration Number'] || m.regNo || m.registrationNumber || '').toUpperCase().trim();
+          const mEmail = (m.Email || m.email || '').toLowerCase().trim();
+          return (cReg && mReg === cReg) || (cEmail && mEmail === cEmail);
+        });
+        if (alreadyInState) return prev;
+        return [
+          ...prev,
+          {
+            Name: cName,
+            'Registration Number': cReg,
+            Email: cEmail,
+            Phone: cPhone,
+            Team: cTeam,
+            Position: 'Core Member',
+          },
+        ];
+      });
     } catch (memberErr) {
       console.error('Error auto-adding admitted candidate to VRGC database:', memberErr);
+    }
+  };
+
+  const removeCandidateFromMembers = async (candidate: ReferralRecord) => {
+    try {
+      const cReg = (getRefVal(candidate, 'Candidate Registration Number') || getRefVal(candidate, 'candidateRegNo') || '').toUpperCase().trim();
+      const cEmail = (getRefVal(candidate, 'Candidate Email') || getRefVal(candidate, 'candidateEmail') || '').toLowerCase().trim();
+
+      if (cEmail) {
+        await deleteDoc(doc(db, 'members', cEmail)).catch(() => {});
+      }
+      if (cReg) {
+        await deleteDoc(doc(db, 'members', cReg)).catch(() => {});
+        await deleteDoc(doc(db, 'members', cReg.toLowerCase())).catch(() => {});
+      }
+
+      if (cEmail) {
+        const qEmail = query(collection(db, 'members'), where('email', '==', cEmail));
+        const snapEmail = await getDocs(qEmail);
+        snapEmail.forEach((d) => deleteDoc(d.ref).catch(() => {}));
+      }
+      if (cReg) {
+        const qReg = query(collection(db, 'members'), where('registrationNumber', '==', cReg));
+        const snapReg = await getDocs(qReg);
+        snapReg.forEach((d) => deleteDoc(d.ref).catch(() => {}));
+      }
+
+      // Immediately remove from local members state
+      setMembers((prev) =>
+        prev.filter((m) => {
+          const mReg = (m['Registration Number'] || m.regNo || m.registrationNumber || '').toUpperCase().trim();
+          const mEmail = (m.Email || m.email || '').toLowerCase().trim();
+          const matchReg = cReg && mReg === cReg;
+          const matchEmail = cEmail && mEmail === cEmail;
+          return !matchReg && !matchEmail;
+        })
+      );
+    } catch (memberErr) {
+      console.error('Error removing candidate from VRGC members database:', memberErr);
     }
   };
 
@@ -608,24 +739,33 @@ const Referrals: React.FC<ReferralsProps> = ({
     if (!candidateRegNo || !newStatus) return;
     setIsUpdatingStatus(candidateRegNo);
     try {
+      const candidate = referrals.find(
+        (r) => r.id === docId || (getRefVal(r, 'Candidate Registration Number') || getRefVal(r, 'candidateRegNo')) === candidateRegNo
+      );
+      const prevStatus = (candidate ? (getRefVal(candidate, 'Status') || getRefVal(candidate, 'status') || '') : '').toLowerCase();
+      const wasInterviewed = prevStatus.includes('interview') || candidate?.interviewed || candidate?.hadInterview;
+
       if (docId) {
         const docRef = doc(db, 'referrals', docId);
-        await updateDoc(docRef, { status: newStatus });
+        const updatePayload: Record<string, any> = { status: newStatus };
+        if (wasInterviewed) {
+          updatePayload.interviewed = true;
+        }
+        await updateDoc(docRef, updatePayload);
       }
 
-      // If admitted, auto-add to members collection as Core Member
-      if (newStatus === 'Admitted') {
-        const candidate = referrals.find(
-          (r) => r.id === docId || (getRefVal(r, 'Candidate Registration Number') || getRefVal(r, 'candidateRegNo')) === candidateRegNo
-        );
-        if (candidate) {
-          await addAdmittedCandidateToMembers(candidate);
-        }
+      // If admitted, auto-add to members collection as Core Member; if rejected, remove from members collection
+      if (newStatus === 'Admitted' && candidate) {
+        await addAdmittedCandidateToMembers(candidate);
+      } else if (newStatus === 'Rejected' && candidate) {
+        await removeCandidateFromMembers(candidate);
       }
 
       setSyncToastMessage(
         newStatus === 'Admitted'
           ? `Candidate ADMITTED & enrolled into VRGC Database as Core Member! 🎉`
+          : newStatus === 'Rejected'
+          ? `Candidate marked REJECTED and updated in roster.`
           : `Candidate dossier status updated to ${newStatus.toUpperCase()}`
       );
       setTimeout(() => setSyncToastMessage(null), 4000);
@@ -645,12 +785,21 @@ const Referrals: React.FC<ReferralsProps> = ({
       const targetRefs = activeList.filter((r, idx) => selectedReferralIds.has(getRefKey(r, idx)));
 
       for (const ref of targetRefs) {
+        const prevStatus = (getRefVal(ref, 'Status') || getRefVal(ref, 'status') || '').toLowerCase();
+        const wasInterviewed = prevStatus.includes('interview') || ref?.interviewed || ref?.hadInterview;
+
         if (ref.id) {
           const docRef = doc(db, 'referrals', ref.id);
-          await updateDoc(docRef, { status: targetStatus });
+          const updatePayload: Record<string, any> = { status: targetStatus };
+          if (wasInterviewed) {
+            updatePayload.interviewed = true;
+          }
+          await updateDoc(docRef, updatePayload);
         }
         if (targetStatus === 'Admitted') {
           await addAdmittedCandidateToMembers(ref);
+        } else if (targetStatus === 'Rejected') {
+          await removeCandidateFromMembers(ref);
         }
       }
 
@@ -757,7 +906,7 @@ const Referrals: React.FC<ReferralsProps> = ({
         await updateDoc(docRef, updatedFields);
       }
 
-      // If status changed to Admitted, enroll candidate into members collection
+      // If status changed to Admitted, enroll candidate into members collection; if Rejected, remove
       if (cleanStatus === 'Admitted') {
         const memDocId = (cleanEmail || cleanReg || `admitted-${Date.now()}`).toLowerCase();
         await setDoc(
@@ -774,6 +923,12 @@ const Referrals: React.FC<ReferralsProps> = ({
           },
           { merge: true }
         );
+      } else if (cleanStatus === 'Rejected') {
+        await removeCandidateFromMembers({
+          ...editingCandidate,
+          candidateEmail: cleanEmail,
+          candidateRegNo: cleanReg,
+        } as ReferralRecord);
       }
 
       // Update local state without duplicate keys
@@ -1004,19 +1159,22 @@ const Referrals: React.FC<ReferralsProps> = ({
 
   // Strict Recruiter XP Formula per candidate referral:
   // +10 XP for submission (pending / in process)
-  // +50 XP when invited to interview (replaces pending 10 XP)
-  // +100 XP when admitted (replaces interview 50 XP)
-  // 0 XP when rejected (replaces candidate's XP to 0 without zeroing other recruits)
-  const calculateCandidateXP = (rawStatus?: string): number => {
+  // +50 XP when invited to interview / interview taken
+  // +100 XP when admitted
+  // Rejection rules:
+  // - If rejected before moving to interview: RETAINS 10 XP (for submission)
+  // - If rejected after interviewing: RETAINS 50 XP (for interview completion)
+  const calculateCandidateXP = (rawStatus?: string, record?: ReferralRecord): number => {
     const s = (rawStatus || 'pending').toLowerCase().trim();
-    if (s === 'rejected' || s.includes('reject')) {
-      return 0;
-    }
     if (s === 'admitted' || s.includes('admit')) {
       return 100;
     }
     if (s.includes('interview')) {
       return 50;
+    }
+    if (s === 'rejected' || s.includes('reject')) {
+      const isInterviewed = record?.interviewed || record?.hadInterview || (record && (getRefVal(record, 'interviewed') === 'true' || getRefVal(record, 'interviewed') === true));
+      return isInterviewed ? 50 : 10;
     }
     // Submission / Pending / In Process
     return 10;
@@ -1112,7 +1270,7 @@ const Referrals: React.FC<ReferralsProps> = ({
         (nameLower ? userPhotoMap[nameLower] : null) ||
         null;
 
-      const xpAwarded = calculateCandidateXP(rawStatus);
+      const xpAwarded = calculateCandidateXP(rawStatus, ref);
 
       // Canonical grouping key: Primary is the unique registration number if valid; fallback to email, name, or doc ID
       const groupKey = (reg && reg !== 'UNKNOWN')
@@ -1533,12 +1691,12 @@ const Referrals: React.FC<ReferralsProps> = ({
     );
   };
 
-  const getCandidateStatusBadge = (statusText?: string) => {
+  const getCandidateStatusBadge = (statusText?: string, record?: ReferralRecord) => {
     const s = (statusText || 'Pending').toLowerCase().trim();
-    const xp = calculateCandidateXP(s);
+    const xp = calculateCandidateXP(s, record);
     if (s === 'admitted' || s.includes('admit')) {
       return (
-        <span className="inline-flex items-center gap-1.5 text-[10px] bg-emerald-500/20 border border-emerald-400 text-emerald-300 font-extrabold px-2.5 py-1 rounded-full uppercase tracking-wider font-mono shadow-[0_0_12px_rgba(16,185,129,0.35)]">
+        <span className="inline-flex items-center gap-1.5 text-[10px] bg-emerald-500/20 border border-emerald-400 text-emerald-300 font-extrabold px-2.5 py-1 rounded-full uppercase tracking-wider font-mono shadow-[0_0_12px_rgba(168,85,247,0.35)]">
           <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
           <span>ADMITTED</span>
           <span className="text-emerald-200 font-black ml-0.5">(+100 XP)</span>
@@ -1568,7 +1726,7 @@ const Referrals: React.FC<ReferralsProps> = ({
         <span className="inline-flex items-center gap-1.5 text-[10px] bg-rose-500/20 border border-rose-500 text-rose-400 font-extrabold px-2.5 py-1 rounded-full uppercase tracking-wider font-mono shadow-[0_0_12px_rgba(239,68,68,0.35)]">
           <span className="w-1.5 h-1.5 rounded-full bg-rose-500"></span>
           <span>REJECTED</span>
-          <span className="text-rose-300 font-black ml-0.5">(0 XP)</span>
+          <span className="text-rose-300 font-black ml-0.5">(+{xp} XP)</span>
         </span>
       );
     }
@@ -1605,7 +1763,7 @@ const Referrals: React.FC<ReferralsProps> = ({
   const myReferralsList = getMyReferrals();
   const myReferralsXP = myReferralsList.reduce((acc, ref) => {
     const s = getRefVal(ref, 'Status') || getRefVal(ref, 'status') || 'Pending';
-    return acc + calculateCandidateXP(s);
+    return acc + calculateCandidateXP(s, ref);
   }, 0);
   const userXP = userStats ? userStats.totalXP : myReferralsXP;
 
@@ -1933,7 +2091,7 @@ const Referrals: React.FC<ReferralsProps> = ({
                               ? 'border-rose-500/80 focus:border-rose-400 focus:ring-1 focus:ring-rose-400/50 bg-rose-950/20'
                               : 'border-purple-500/30 focus:border-purple-400 focus:ring-1 focus:ring-purple-400/50'
                             }`}
-                          placeholder="e.g. 24BCG10082"
+                          placeholder="25XXX10000"
                           type="text"
                         />
                       </div>
@@ -2161,8 +2319,9 @@ const Referrals: React.FC<ReferralsProps> = ({
                         <img
                           src={leaderboard[1].photoURL}
                           alt={leaderboard[1].name}
+                          referrerPolicy="no-referrer"
                           onError={(e) => {
-                            (e.target as HTMLImageElement).src = `https://api.dicebear.com/9.x/bottts/svg?seed=${encodeURIComponent(leaderboard[1].name)}`;
+                            (e.target as HTMLImageElement).src = `https://ui-avatars.com/api/?name=${encodeURIComponent(leaderboard[1].name)}&background=1e1035&color=c084fc&bold=true`;
                           }}
                           className={`w-10 h-10 sm:w-14 sm:h-14 rounded-xl sm:rounded-2xl object-cover ${rank2Theme.avatarBorder}`}
                         />
@@ -2197,8 +2356,9 @@ const Referrals: React.FC<ReferralsProps> = ({
                         <img
                           src={leaderboard[0].photoURL}
                           alt={leaderboard[0].name}
+                          referrerPolicy="no-referrer"
                           onError={(e) => {
-                            (e.target as HTMLImageElement).src = `https://api.dicebear.com/9.x/bottts/svg?seed=${encodeURIComponent(leaderboard[0].name)}`;
+                            (e.target as HTMLImageElement).src = `https://ui-avatars.com/api/?name=${encodeURIComponent(leaderboard[0].name)}&background=261504&color=f59e0b&bold=true`;
                           }}
                           className="w-11 h-11 sm:w-16 sm:h-16 rounded-xl sm:rounded-2xl object-cover border-2 border-amber-400 shadow-[0_0_20px_rgba(245,158,11,0.5)] bg-amber-950/50"
                         />
@@ -2235,8 +2395,9 @@ const Referrals: React.FC<ReferralsProps> = ({
                         <img
                           src={leaderboard[2].photoURL}
                           alt={leaderboard[2].name}
+                          referrerPolicy="no-referrer"
                           onError={(e) => {
-                            (e.target as HTMLImageElement).src = `https://api.dicebear.com/9.x/bottts/svg?seed=${encodeURIComponent(leaderboard[2].name)}`;
+                            (e.target as HTMLImageElement).src = `https://ui-avatars.com/api/?name=${encodeURIComponent(leaderboard[2].name)}&background=1e1035&color=c084fc&bold=true`;
                           }}
                           className={`w-10 h-10 sm:w-14 sm:h-14 rounded-xl sm:rounded-2xl object-cover ${rank3Theme.avatarBorder}`}
                         />
@@ -2301,8 +2462,9 @@ const Referrals: React.FC<ReferralsProps> = ({
                               <img
                                 src={lb.photoURL}
                                 alt={lb.name}
+                                referrerPolicy="no-referrer"
                                 onError={(e) => {
-                                  (e.target as HTMLImageElement).src = `https://api.dicebear.com/9.x/bottts/svg?seed=${encodeURIComponent(lb.name)}`;
+                                  (e.target as HTMLImageElement).src = `https://ui-avatars.com/api/?name=${encodeURIComponent(lb.name)}&background=1e1035&color=c084fc&bold=true`;
                                 }}
                                 className="w-8 h-8 sm:w-10 sm:h-10 rounded-full sm:rounded-xl object-cover border border-purple-500/30 bg-purple-950/40"
                               />
@@ -2464,8 +2626,8 @@ const Referrals: React.FC<ReferralsProps> = ({
                     <div className="text-[9px] uppercase tracking-wider text-slate-400 font-bold">Admitted</div>
                   </div>
                   <div className="px-3 py-2 rounded-xl bg-rose-950/40 border border-rose-500/30 text-center">
-                    <div className="text-rose-400 font-mono font-black text-sm">0 XP</div>
-                    <div className="text-[9px] uppercase tracking-wider text-slate-400 font-bold">Rejected</div>
+                    <div className="text-rose-300 font-mono font-black text-sm">10 / 50 XP</div>
+                    <div className="text-[9px] uppercase tracking-wider text-slate-400 font-bold">Rejected (Retained)</div>
                   </div>
                 </div>
               </div>
@@ -2495,7 +2657,7 @@ const Referrals: React.FC<ReferralsProps> = ({
               ) : (
                 myReferralsList.map((ref, idx) => {
                   const status = getRefVal(ref, 'Status') || getRefVal(ref, 'status') || 'Pending';
-                  const candidateXP = calculateCandidateXP(status);
+                  const candidateXP = calculateCandidateXP(status, ref);
                   const cReg = getRefVal(ref, 'Candidate Registration Number') || getRefVal(ref, 'candidateRegNo') || 'UNKNOWN';
                   const cName = getRefVal(ref, 'Candidate Name') || getRefVal(ref, 'candidateName') || 'Candidate';
                   const targetT = getRefVal(ref, 'Target Team') || getRefVal(ref, 'targetTeam') || 'Technical';
@@ -2520,7 +2682,7 @@ const Referrals: React.FC<ReferralsProps> = ({
                         </div>
                       </div>
                       <div className="flex items-center gap-2.5 self-end sm:self-auto shrink-0">
-                        {getCandidateStatusBadge(status)}
+                        {getCandidateStatusBadge(status, ref)}
                         {canDeleteReferrals && (
                           <button
                             type="button"
@@ -3540,7 +3702,7 @@ const Referrals: React.FC<ReferralsProps> = ({
                       value={editFormData.candidateRegNo}
                       onChange={(e) => setEditFormData({ ...editFormData, candidateRegNo: e.target.value.toUpperCase() })}
                       className="w-full bg-[#0a0315] border border-purple-500/30 rounded-xl px-3 py-2 text-xs sm:text-sm text-purple-300 focus:outline-none focus:border-purple-400 font-mono uppercase"
-                      placeholder="e.g. 24BCE10001"
+                      placeholder="25XXX10000"
                     />
                   </div>
 

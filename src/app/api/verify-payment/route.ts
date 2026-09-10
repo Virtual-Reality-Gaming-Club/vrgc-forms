@@ -121,7 +121,7 @@ export async function POST(request: Request) {
         }
 
         // Finding 3: Razorpay Order Amount Verification via API
-        const keyId = process.env.RAZORPAY_KEY_ID || process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID;
+        const keyId = process.env.RAZORPAY_KEY_ID;
         if (keyId && keySecret) {
           try {
             // @ts-ignore

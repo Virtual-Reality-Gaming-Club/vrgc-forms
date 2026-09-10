@@ -27,6 +27,7 @@ import {
   CheckSquare,
   RotateCcw,
   UserCheck,
+  Trash2,
 } from 'lucide-react';
 import { auth, db } from '@/lib/firebase';
 import { onAuthStateChanged } from 'firebase/auth';
@@ -36,38 +37,30 @@ import {
   SupportTicket,
   saveTicketToUserHistory,
   getUserHistoryTicketIds,
+  removeTicketFromUserHistory,
   fetchTicketById,
   fetchAllActiveTickets,
   resolveTicket,
   reopenTicket,
+  deleteTicketPermanently,
+  cleanupExpiredSupportTickets,
   isTicketExpired,
   getRemainingSolvedTime,
 } from '@/lib/support';
+import {
+  SupportFaq,
+  FAQ_CATEGORIES,
+  subscribeSupportFaqs,
+} from '@/lib/supportFaqs';
+import { fetchPermissionsConfig, resolveUserPagePermission, PermissionsConfig } from '@/lib/permissions';
 
-const FAQS = [
-  {
-    q: 'How do I verify if my club membership payment went through?',
-    a: 'Head to the Payments & Dues portal from the main dashboard. If your payment was successful via Razorpay, your status will show "Verified" with a transaction reference. If amount was deducted but still shows pending, submit a ticket below with your payment screenshot / Razorpay payment ID.',
-  },
-  {
-    q: 'Why is my ID Card showing "Under Verification"?',
-    a: 'ID Cards undergo a two-step audit by Domain Leads and Chapter Administrators to verify uploaded portraits, registration credentials, and club affiliations. Verification typically completes within 24–48 hours.',
-  },
-  {
-    q: 'How can I change my allocated Primary Domain or Position?',
-    a: 'Domain and Position metadata updates must be requested through your respective Domain Lead or Chapter Coordinator. You can also file a ticket below under the "Domain / Role Allocation" category.',
-  },
-  {
-    q: 'Can non-members register for Planned Events and Hackathons?',
-    a: 'Most flag-bearer tournaments and workshops have open public rounds. However, members receive priority seating, waived registration fees, and official VRGC digital credentials.',
-  },
-];
+
 
 const CATEGORIES = [
   { id: 'payment', label: 'Payment & Dues', desc: 'Dues status, Razorpay issues, refund inquiry' },
   { id: 'idcard', label: 'ID Card & Dossier', desc: 'Photo rejection, details correction, download issue' },
   { id: 'membership', label: 'Domain / Roster', desc: 'Domain reallocation, roster details update' },
-  { id: 'events', label: 'Planned Events', desc: 'Event registrations, hackathons, tournament queries' },
+  { id: 'events', label: 'Planned Events', desc: 'Event proposals, hackathons, tournament queries' },
   { id: 'referrals', label: 'Referrals Portal', desc: 'Code issues, candidate status, milestone tracking' },
   { id: 'technical', label: 'Bug / Technical', desc: 'System glitch, login failure, access errors' },
   { id: 'other', label: 'General Inquiry', desc: 'Sponsorships, collaborations, other questions' },
@@ -77,8 +70,18 @@ function ContactPageContent() {
   const searchParams = useSearchParams();
   const urlTab = searchParams.get('tab');
 
-  const { isSuperAdmin, isAdmin, userRole, userEmail } = useAuth();
-  const canResolveTickets = isSuperAdmin || isAdmin || userRole === 'Technical';
+  const { isSuperAdmin, isAdmin, isFaculty, isAuthorized, userRole, userEmail } = useAuth();
+  const [permissionsConfig, setPermissionsConfig] = useState<PermissionsConfig | null>(null);
+
+  useEffect(() => {
+    fetchPermissionsConfig().then(setPermissionsConfig).catch(() => {});
+  }, []);
+
+  const ticketPerm = permissionsConfig
+    ? resolveUserPagePermission('tickets', permissionsConfig, userRole, isSuperAdmin, isFaculty, isAuthorized)
+    : { canView: isSuperAdmin || isAdmin || userRole === 'Technical', canEdit: isSuperAdmin || isAdmin || userRole === 'Technical', bypassMaintenance: false };
+
+  const canResolveTickets = isSuperAdmin || ticketPerm.canView || ticketPerm.canEdit;
 
   const [activeTab, setActiveTab] = useState<'submit' | 'track' | 'resolve'>(
     urlTab === 'resolve' ? 'resolve' : urlTab === 'track' ? 'track' : 'submit'
@@ -94,7 +97,30 @@ function ContactPageContent() {
   const [ticketId, setTicketId] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [copiedTicket, setCopiedTicket] = useState(false);
-  const [expandedFaq, setExpandedFaq] = useState<number | null>(null);
+
+  // Dynamic FAQs State
+  const [faqs, setFaqs] = useState<SupportFaq[]>([]);
+  const [faqCategoryFilter, setFaqCategoryFilter] = useState<string>('all');
+  const [faqSearchQuery, setFaqSearchQuery] = useState<string>('');
+  const [expandedFaqId, setExpandedFaqId] = useState<string | null>(null);
+
+  useEffect(() => {
+    const unsub = subscribeSupportFaqs((list) => {
+      setFaqs(list);
+    });
+    return () => unsub();
+  }, []);
+
+  const activeFaqs = faqs.filter((f) => f.isActive !== false);
+  const visibleFaqs = activeFaqs;
+  const displayedFaqs = activeFaqs.filter((f) => {
+    const q = faqSearchQuery.toLowerCase();
+    const matchesSearch =
+      f.question.toLowerCase().includes(q) || f.answer.toLowerCase().includes(q);
+    const matchesCategory =
+      faqCategoryFilter === 'all' || f.category === faqCategoryFilter;
+    return matchesSearch && matchesCategory;
+  });
 
   // Track & History State
   const [searchTicketId, setSearchTicketId] = useState('');
@@ -135,6 +161,13 @@ function ContactPageContent() {
     }
   }, [urlTab, canResolveTickets]);
 
+  // Proactive background sweep to permanently remove >12h solved tickets from Firebase
+  useEffect(() => {
+    cleanupExpiredSupportTickets().catch((err) =>
+      console.warn('[SupportDesk] Expired tickets auto-sweep notice:', err)
+    );
+  }, []);
+
   // Load User History on Tab Switch
   useEffect(() => {
     if (activeTab === 'track') {
@@ -159,8 +192,18 @@ function ContactPageContent() {
       }
       const promises = ids.map((id) => fetchTicketById(id));
       const results = await Promise.all(promises);
-      // Filter out nulls and tickets solved for more than 12 hours
-      const valid = results.filter((t): t is SupportTicket => t !== null && !isTicketExpired(t));
+      const valid: SupportTicket[] = [];
+      for (const t of results) {
+        if (t) {
+          if (isTicketExpired(t)) {
+            // Delete permanently from Firebase Firestore and prune from user localStorage
+            deleteTicketPermanently(t.ticketId).catch(console.warn);
+            removeTicketFromUserHistory(t.ticketId);
+          } else {
+            valid.push(t);
+          }
+        }
+      }
       setUserHistoryTickets(valid);
     } catch (err) {
       console.error('Error loading history tickets:', err);
@@ -238,9 +281,11 @@ function ContactPageContent() {
     try {
       const ticket = await fetchTicketById(cleanId);
       if (!ticket) {
-        setSearchError(`No active record found for Ticket ID "${cleanId}".`);
+        setSearchError(`No active record found for Ticket ID "${cleanId}". (Note: Solved tickets are permanently deleted from Firebase after 12 hours).`);
       } else if (isTicketExpired(ticket)) {
-        setSearchError(`Ticket "${cleanId}" was marked as SOLVED and has been archived following the 12-hour resolution window.`);
+        await deleteTicketPermanently(ticket.ticketId);
+        removeTicketFromUserHistory(ticket.ticketId);
+        setSearchError(`Ticket "${cleanId}" was marked as SOLVED over 12 hours ago and has been permanently deleted from Firebase.`);
       } else {
         setTrackedTicket(ticket);
       }
@@ -282,6 +327,21 @@ function ContactPageContent() {
       alert('Failed to reopen ticket: ' + err.message);
     } finally {
       setResolvingId(null);
+    }
+  };
+
+  const handleDeleteTicket = async (ticketIdToDelete: string) => {
+    if (!window.confirm(`Permanently delete ticket ${ticketIdToDelete} from Firebase? This action cannot be undone.`)) {
+      return;
+    }
+    try {
+      await deleteTicketPermanently(ticketIdToDelete);
+      setAllTickets((prev) => prev.filter((t) => t.ticketId !== ticketIdToDelete));
+      setUserHistoryTickets((prev) => prev.filter((t) => t.ticketId !== ticketIdToDelete));
+      setActionSuccessMsg(`Ticket ${ticketIdToDelete} permanently deleted from Firebase.`);
+      setTimeout(() => setActionSuccessMsg(''), 4000);
+    } catch (err: any) {
+      alert('Failed to delete ticket from Firebase: ' + err.message);
     }
   };
 
@@ -494,8 +554,178 @@ function ContactPageContent() {
               </a>
             </section>
 
+            {/* ═════════════════════════════════════════════════════════════════ */}
+            {/* TICKET FAQS: CHECK SOLUTIONS BEFORE DISPATCHING                  */}
+            {/* ═════════════════════════════════════════════════════════════════ */}
+            <section className="space-y-6 pt-2">
+              <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-3 border-b border-purple-500/20 pb-4">
+                <div className="space-y-1">
+                  <div className="inline-flex items-center gap-1.5 px-3 py-0.5 rounded-full bg-purple-950/80 border border-purple-500/40 text-purple-300 text-[10px] font-mono font-bold tracking-wider uppercase">
+                    <HelpCircle className="w-3 h-3 text-purple-400" />
+                    <span>1. Check Instant Solutions First</span>
+                  </div>
+                  <h2 className="text-xl sm:text-2xl font-black text-white tracking-tight flex items-center gap-2">
+                    Frequently Asked Questions
+                  </h2>
+                  <p className="text-xs text-slate-300 max-w-2xl">
+                    Review official solutions to common issues before dispatching a ticket. If your query remains unresolved, proceed directly below to submit your dossier.
+                  </p>
+                </div>
+
+                <a
+                  href="#file-dossier-form"
+                  className="self-start sm:self-auto inline-flex items-center gap-1 px-3 py-1.5 rounded-xl bg-[#140b24] hover:bg-purple-900/40 border border-purple-500/30 text-purple-300 text-xs font-bold transition-all cursor-pointer"
+                >
+                  <span>Skip to Form</span>
+                  <span>↓</span>
+                </a>
+              </div>
+
+              {/* Category Filter Chips & Search Bar */}
+              <div className="space-y-3">
+                <div className="flex flex-col sm:flex-row gap-2.5">
+                  <div className="relative flex-1">
+                    <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                    <input
+                      type="text"
+                      placeholder="Search FAQ keywords (e.g. payment, ID card, verification, XP)..."
+                      value={faqSearchQuery}
+                      onChange={(e) => setFaqSearchQuery(e.target.value)}
+                      className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-[#120722] border border-purple-500/30 focus:border-purple-400 focus:outline-none text-xs text-white placeholder-slate-500 transition-colors"
+                    />
+                    {faqSearchQuery && (
+                      <button
+                        type="button"
+                        onClick={() => setFaqSearchQuery('')}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white text-xs"
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Category Chips */}
+                <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-1 flex-nowrap sm:flex-wrap">
+                  <button
+                    type="button"
+                    onClick={() => setFaqCategoryFilter('all')}
+                    className={`px-3 py-1 rounded-xl text-[11px] font-bold shrink-0 transition-all cursor-pointer border ${
+                      faqCategoryFilter === 'all'
+                        ? 'bg-purple-600 text-white border-purple-400 shadow-[0_0_12px_rgba(168,85,247,0.35)]'
+                        : 'bg-[#140b24] border-purple-900/40 text-slate-400 hover:text-white hover:border-purple-500/40'
+                    }`}
+                  >
+                    All Solutions ({visibleFaqs.length})
+                  </button>
+                  {FAQ_CATEGORIES.map((cat) => {
+                    const count = activeFaqs.filter((f) => f.category === cat.id).length;
+                    if (count === 0 && faqCategoryFilter !== cat.id) return null;
+                    return (
+                      <button
+                        key={cat.id}
+                        type="button"
+                        onClick={() => setFaqCategoryFilter(cat.id)}
+                        className={`px-3 py-1 rounded-xl text-[11px] font-bold shrink-0 transition-all cursor-pointer border ${
+                          faqCategoryFilter === cat.id
+                            ? 'bg-purple-600 text-white border-purple-400 shadow-[0_0_12px_rgba(168,85,247,0.35)]'
+                            : 'bg-[#140b24] border-purple-900/40 text-slate-400 hover:text-white hover:border-purple-500/40'
+                        }`}
+                      >
+                        {cat.label} ({count})
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* FAQ Accordion Cards */}
+              {displayedFaqs.length === 0 ? (
+                <div className="p-6 rounded-2xl bg-[#0e071c] border border-purple-500/20 text-center space-y-2">
+                  <p className="text-xs text-slate-400">
+                    No FAQs match your search or filter. Scroll below to file an official support dossier directly.
+                  </p>
+                  <a
+                    href="#file-dossier-form"
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-purple-600 text-white text-xs font-bold"
+                  >
+                    <span>Dispatch Support Ticket</span>
+                    <span>↓</span>
+                  </a>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {displayedFaqs.map((faq) => {
+                    const isOpen = expandedFaqId === faq.id;
+                    const catObj = FAQ_CATEGORIES.find((c) => c.id === faq.category) || {
+                      id: 'general',
+                      label: 'General Inquiry',
+                    };
+                    return (
+                      <div
+                        key={faq.id}
+                        className={`p-4 rounded-2xl border transition-all ${
+                          isOpen
+                            ? 'bg-[#140b24] border-purple-500/60 shadow-[0_0_20px_rgba(147,51,234,0.15)]'
+                            : 'bg-[#0e071c] border-purple-500/25 hover:border-purple-500/50'
+                        }`}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => setExpandedFaqId(isOpen ? null : faq.id)}
+                          className="w-full flex items-start justify-between gap-3 text-left cursor-pointer select-none"
+                        >
+                          <div className="space-y-1">
+                            <span className="inline-block text-[9px] font-mono font-bold uppercase tracking-wider px-2 py-0.5 rounded-md bg-purple-950/80 text-purple-300 border border-purple-700/40">
+                              {catObj.label}
+                            </span>
+                            <h3 className="font-bold text-white text-xs sm:text-sm leading-snug">
+                              {faq.question}
+                            </h3>
+                          </div>
+                          {isOpen ? (
+                            <ChevronUp className="w-4 h-4 text-purple-400 shrink-0 mt-1" />
+                          ) : (
+                            <ChevronDown className="w-4 h-4 text-slate-400 shrink-0 mt-1" />
+                          )}
+                        </button>
+                        {isOpen && (
+                          <div className="text-xs text-slate-300 mt-3 leading-relaxed border-t border-purple-500/20 pt-2.5 animate-in fade-in">
+                            {faq.answer}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Seamless Downward Transition Banner */}
+              <div className="flex flex-col sm:flex-row items-center justify-between gap-3 p-4 rounded-2xl bg-gradient-to-r from-purple-950/80 via-[#180a2b] to-purple-950/80 border border-purple-500/40 shadow-lg">
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-xl bg-purple-600/30 border border-purple-400/40 flex items-center justify-center text-purple-300 shrink-0">
+                    <MessageSquare className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h4 className="text-xs sm:text-sm font-black text-white">Issue still not solved above?</h4>
+                    <p className="text-[11px] text-slate-300">
+                      Proceed below to dispatch your support dossier directly to VRGC Executive Leads.
+                    </p>
+                  </div>
+                </div>
+
+                <a
+                  href="#file-dossier-form"
+                  className="w-full sm:w-auto px-4 py-2 rounded-xl bg-gradient-to-r from-purple-600 to-fuchsia-600 hover:from-purple-500 hover:to-fuchsia-500 text-white text-xs font-black uppercase tracking-wider transition-all shadow-[0_0_15px_rgba(168,85,247,0.35)] shrink-0 flex items-center justify-center gap-1.5"
+                >
+                  <span>File Support Dossier</span>
+                  <span>↓</span>
+                </a>
+              </div>
+            </section>
+
             {/* Form Section */}
-            <section className="bg-[#0c0517] border border-purple-500/40 rounded-3xl p-6 sm:p-10 shadow-[0_0_50px_rgba(147,51,234,0.15)] relative overflow-hidden">
+            <section id="file-dossier-form" className="bg-[#0c0517] border border-purple-500/40 rounded-3xl p-6 sm:p-10 shadow-[0_0_50px_rgba(147,51,234,0.15)] relative overflow-hidden">
               <div className="relative z-10 space-y-6">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-purple-500/20 pb-4">
                   <div>
@@ -651,7 +881,7 @@ function ContactPageContent() {
                         </label>
                         <input
                           type="text"
-                          placeholder="e.g. 24BCE10999"
+                          placeholder="25XXX10000"
                           value={regNo}
                           onChange={(e) => setRegNo(e.target.value.toUpperCase())}
                           className="w-full px-3.5 py-2.5 rounded-xl bg-[#140b24] border border-[#2b1642] focus:border-purple-500 focus:outline-none text-xs text-white placeholder-slate-500 uppercase font-mono transition-colors"
@@ -1171,6 +1401,17 @@ function ContactPageContent() {
                               <span>Reopen as Unsolved</span>
                             </button>
                           )}
+
+                          {/* Instant Manual Purge Button for Admins */}
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteTicket(t.ticketId)}
+                            className="px-2.5 py-1.5 rounded-xl bg-rose-950/50 hover:bg-rose-900/80 border border-rose-600/50 text-rose-300 hover:text-white text-xs font-bold transition-all flex items-center gap-1 cursor-pointer"
+                            title="Permanently delete this ticket from Firebase"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span className="hidden sm:inline">Delete</span>
+                          </button>
                         </div>
                       </div>
                     </div>
@@ -1181,48 +1422,7 @@ function ContactPageContent() {
           </div>
         )}
 
-        {/* Quick FAQ Section */}
-        <section className="space-y-4 pt-4 border-t border-purple-500/20">
-          <div className="text-center space-y-1">
-            <h2 className="text-xl sm:text-2xl font-black text-white tracking-tight flex items-center justify-center gap-2">
-              <HelpCircle className="w-5 h-5 text-purple-400" />
-              <span>Frequently Asked Questions</span>
-            </h2>
-            <p className="text-xs text-slate-400">
-              Quick solutions to the most common portal queries.
-            </p>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            {FAQS.map((faq, idx) => {
-              const isOpen = expandedFaq === idx;
-              return (
-                <div
-                  key={idx}
-                  className="p-4 rounded-2xl bg-[#0e071c] border border-purple-500/25 transition-colors"
-                >
-                  <button
-                    type="button"
-                    onClick={() => setExpandedFaq(isOpen ? null : idx)}
-                    className="w-full flex items-start justify-between gap-3 text-left cursor-pointer"
-                  >
-                    <span className="font-bold text-white text-xs sm:text-sm">{faq.q}</span>
-                    {isOpen ? (
-                      <ChevronUp className="w-4 h-4 text-purple-400 shrink-0 mt-0.5" />
-                    ) : (
-                      <ChevronDown className="w-4 h-4 text-slate-400 shrink-0 mt-0.5" />
-                    )}
-                  </button>
-                  {isOpen && (
-                    <p className="text-xs text-slate-300 mt-2.5 leading-relaxed border-t border-purple-500/15 pt-2 animate-in fade-in">
-                      {faq.a}
-                    </p>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </section>
+        {/* End of content */}
       </main>
 
       {/* Footer */}

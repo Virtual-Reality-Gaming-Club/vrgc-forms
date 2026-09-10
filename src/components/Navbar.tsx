@@ -145,7 +145,15 @@ const Navbar: React.FC<NavbarProps> = ({
     });
   }
 
-  if (isAdmin && onOpenMaintenanceModal) {
+  const canAccessMaintenance = onOpenMaintenanceModal && (
+    isSuperAdmin ||
+    (permissionsConfig
+      ? resolveUserPagePermission('maintenance', permissionsConfig, userRole, isSuperAdmin, isFaculty, !!userEmail).canView ||
+        resolveUserPagePermission('maintenance', permissionsConfig, userRole, isSuperAdmin, isFaculty, !!userEmail).canEdit
+      : isAdmin)
+  );
+
+  if (canAccessMaintenance) {
     mobileMenuItems.push({
       id: 'maintenance',
       label: 'Maintenance Desk',

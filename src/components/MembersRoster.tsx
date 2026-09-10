@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { collection, getDocs, doc, setDoc, updateDoc, deleteDoc } from 'firebase/firestore';
+import { collection, getDocs, doc, setDoc, updateDoc, deleteDoc, query, where } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { useAuth } from '@/lib/auth-context';
 import * as XLSX from 'xlsx';
@@ -808,15 +808,69 @@ const MembersRoster: React.FC<MembersRosterProps> = ({ onRedirect, isAdmin: prop
     if (!deleteConfirmMember) return;
     setDeletingMember(true);
     try {
-      const targetDocId = (deleteConfirmMember.id || deleteConfirmMember.registrationNumber || deleteConfirmMember.email).trim();
+      const targetDocId = (deleteConfirmMember.id || '').trim();
       const cleanEmail = (deleteConfirmMember.email || '').toLowerCase().trim();
+      const cleanReg = (deleteConfirmMember.registrationNumber || '').toUpperCase().trim();
       
-      await deleteDoc(doc(db, 'members', targetDocId));
-      if (cleanEmail && cleanEmail !== targetDocId) {
-        try { await deleteDoc(doc(db, 'members', cleanEmail)); } catch {}
+      // 1. Delete from Firestore 'members' collection
+      if (targetDocId) {
+        await deleteDoc(doc(db, 'members', targetDocId)).catch(() => {});
+      }
+      if (cleanEmail) {
+        await deleteDoc(doc(db, 'members', cleanEmail)).catch(() => {});
+        const qMemEmail = query(collection(db, 'members'), where('email', '==', cleanEmail));
+        const snapMemEmail = await getDocs(qMemEmail);
+        snapMemEmail.forEach((d) => deleteDoc(d.ref).catch(() => {}));
+      }
+      if (cleanReg) {
+        await deleteDoc(doc(db, 'members', cleanReg)).catch(() => {});
+        await deleteDoc(doc(db, 'members', cleanReg.toLowerCase())).catch(() => {});
+        const qMemReg = query(collection(db, 'members'), where('registrationNumber', '==', cleanReg));
+        const snapMemReg = await getDocs(qMemReg);
+        snapMemReg.forEach((d) => deleteDoc(d.ref).catch(() => {}));
       }
 
-      setMembers((prev) => prev.filter((m) => m.id !== targetDocId && m.email.toLowerCase() !== cleanEmail));
+      // 2. Delete from Firestore 'id_cards' collection (if present)
+      if (targetDocId) {
+        await deleteDoc(doc(db, 'id_cards', targetDocId)).catch(() => {});
+      }
+      if (cleanEmail) {
+        await deleteDoc(doc(db, 'id_cards', cleanEmail)).catch(() => {});
+        const qIdEmail = query(collection(db, 'id_cards'), where('email', '==', cleanEmail));
+        const snapIdEmail = await getDocs(qIdEmail);
+        snapIdEmail.forEach((d) => deleteDoc(d.ref).catch(() => {}));
+      }
+      if (cleanReg) {
+        await deleteDoc(doc(db, 'id_cards', cleanReg)).catch(() => {});
+        await deleteDoc(doc(db, 'id_cards', cleanReg.toLowerCase())).catch(() => {});
+        const qIdReg = query(collection(db, 'id_cards'), where('regNo', '==', cleanReg));
+        const snapIdReg = await getDocs(qIdReg);
+        snapIdReg.forEach((d) => deleteDoc(d.ref).catch(() => {}));
+      }
+
+      // 3. Remove from Firestore 'referrals' collection
+      // If this member came from referrals, remove their referral record so they can be re-referred cleanly
+      if (cleanReg) {
+        const qRefReg = query(collection(db, 'referrals'), where('candidateRegNo', '==', cleanReg));
+        const snapRefReg = await getDocs(qRefReg);
+        snapRefReg.forEach((d) => deleteDoc(d.ref).catch(() => {}));
+
+        const qRefRegTitle = query(collection(db, 'referrals'), where('Candidate Registration Number', '==', cleanReg));
+        const snapRefRegTitle = await getDocs(qRefRegTitle);
+        snapRefRegTitle.forEach((d) => deleteDoc(d.ref).catch(() => {}));
+      }
+      if (cleanEmail) {
+        const qRefEmail = query(collection(db, 'referrals'), where('candidateEmail', '==', cleanEmail));
+        const snapRefEmail = await getDocs(qRefEmail);
+        snapRefEmail.forEach((d) => deleteDoc(d.ref).catch(() => {}));
+      }
+
+      setMembers((prev) => prev.filter((m) => {
+        const matchId = targetDocId && m.id === targetDocId;
+        const matchEmail = cleanEmail && m.email.toLowerCase() === cleanEmail;
+        const matchReg = cleanReg && m.registrationNumber.toUpperCase() === cleanReg;
+        return !matchId && !matchEmail && !matchReg;
+      }));
       setDeleteConfirmMember(null);
       await loadAllMembers();
     } catch (err) {
@@ -1790,7 +1844,7 @@ const MembersRoster: React.FC<MembersRosterProps> = ({ onRedirect, isAdmin: prop
                   <input
                     type="text"
                     required
-                    placeholder="e.g. 24BCG10051"
+                    placeholder="25XXX10000"
                     value={memberFormData.registrationNumber}
                     onChange={(e) => setMemberFormData({ ...memberFormData, registrationNumber: e.target.value.toUpperCase() })}
                     className="w-full px-3 py-2 bg-[#1c1c1c] border border-[#333333] rounded-lg text-xs text-white placeholder-slate-500 focus:outline-none focus:border-purple-500"

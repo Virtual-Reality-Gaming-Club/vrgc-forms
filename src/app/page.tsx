@@ -72,6 +72,35 @@ const RestrictedModuleScreen = ({
   />
 );
 
+// ── Super Admin private access denial screen (never shows maintenance theme) ──
+const SuperAdminAccessDeniedScreen = ({ onBack }: { onBack?: () => void }) => (
+  <div className="flex-1 flex items-center justify-center p-4">
+    <div className="max-w-md w-full bg-[#0c0517]/95 border border-rose-500/30 rounded-2xl p-8 backdrop-blur-xl shadow-[0_0_60px_rgba(244,63,94,0.15)] flex flex-col items-center gap-5 text-center">
+      <div className="w-14 h-14 rounded-2xl bg-rose-950/80 border border-rose-500/50 flex items-center justify-center shadow-inner">
+        <span className="material-symbols-outlined text-rose-400 text-3xl">shield_lock</span>
+      </div>
+      <div className="space-y-1.5">
+        <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-rose-950 border border-rose-500/40 text-rose-300 font-mono tracking-wider uppercase">
+          Private Enclave
+        </span>
+        <h3 className="text-xl font-black text-white">Super Administrator Access Required</h3>
+        <p className="text-xs text-slate-400 leading-relaxed">
+          The Super Admin Enclave is a private administrative command center reserved exclusively for authorized Super Administrators.
+        </p>
+      </div>
+      {onBack && (
+        <button
+          onClick={onBack}
+          className="mt-2 px-4 py-2 bg-[#1b0d2e] hover:bg-[#271342] text-slate-200 text-xs font-bold rounded-xl border border-purple-500/30 transition-all cursor-pointer flex items-center gap-1.5"
+        >
+          <span className="material-symbols-outlined text-sm">arrow_back</span>
+          <span>Return to Dashboard</span>
+        </button>
+      )}
+    </div>
+  </div>
+);
+
 function AppContent() {
   const {
     user,
@@ -91,15 +120,6 @@ function AppContent() {
   } = useAuth();
 
   const [activePage, setActivePage] = useState<string>('dashboard');
-
-  useEffect(() => {
-    if (!isSuperAdmin && activePage === 'superadmin') {
-      setActivePage('dashboard');
-      if (typeof window !== 'undefined') {
-        window.history.replaceState({ path: '/' }, '', '/');
-      }
-    }
-  }, [isSuperAdmin, activePage]);
   const [toast, setToast] = useState<string | null>(null);
   const [toastKey, setToastKey] = useState<number>(0);
   const [isSuperAdminModalOpen, setIsSuperAdminModalOpen] = useState<boolean>(false);
@@ -186,6 +206,7 @@ function AppContent() {
   };
 
   const isSectionLocked = (sectionKey: string): boolean => {
+    if (sectionKey === 'dashboard' || sectionKey === 'superadmin') return false;
     const perm = getPagePermission(sectionKey);
     // If the role/tier has bypassMaintenance granted by Super Admin, never lock
     if (perm.bypassMaintenance) return false;
@@ -195,6 +216,7 @@ function AppContent() {
   };
 
   const isSectionUnderMaintenanceForAdmin = (sectionKey: string): boolean => {
+    if (sectionKey === 'dashboard' || sectionKey === 'superadmin') return false;
     return !!(maintenanceConfig.all || maintenanceConfig.enabled || maintenanceConfig.sections?.[sectionKey]);
   };
 
@@ -407,8 +429,8 @@ function AppContent() {
         onOpenMaintenanceModal={() => setIsMaintenanceModalOpen(true)}
       />
 
-      {/* Admin Notice when currently viewing a category that is locked for members */}
-      {isPaymentAdmin && isSectionUnderMaintenanceForAdmin(activePage) && (
+      {/* Admin Notice when currently viewing a category that is locked for members (never shown for Super Admin enclave) */}
+      {isPaymentAdmin && activePage !== 'superadmin' && activePage !== 'dashboard' && isSectionUnderMaintenanceForAdmin(activePage) && (
         <div className="bg-amber-950/40 border-b border-amber-500/30 px-4 py-2 text-center text-xs font-bold text-amber-300 flex items-center justify-center gap-2">
           <span className="material-symbols-outlined text-sm text-amber-400">construction</span>
           <span>
@@ -434,8 +456,8 @@ function AppContent() {
             ? 'h-[calc(100dvh-56px-56px)] max-h-[calc(100dvh-56px-56px)] overflow-hidden pb-0'
             : 'pb-16 md:pb-12 min-h-[calc(100dvh-132px)] md:min-h-[calc(100vh-76px)]'
         }`}>
-          {/* Permission restriction check across modules */}
-          {activePage !== 'dashboard' && !getPagePermission(activePage).canView && (
+          {/* Permission restriction check across modules (excluding superadmin and dashboard) */}
+          {activePage !== 'dashboard' && activePage !== 'superadmin' && !getPagePermission(activePage).canView && (
             <RestrictedModuleScreen
               pageTitle={getPageTitle()}
               onBack={() => handlePageChange('dashboard')}
@@ -464,8 +486,7 @@ function AppContent() {
                 currentUserEmail={userEmail || ''}
               />
             ) : (
-              <RestrictedModuleScreen
-                pageTitle="Super Admin Enclave"
+              <SuperAdminAccessDeniedScreen
                 onBack={() => handlePageChange('dashboard')}
               />
             )
@@ -583,7 +604,7 @@ function AppContent() {
       )}
 
       {/* Floating Maintenance Toolset FAB Logo — Solid Dark/Purple */}
-      {isPaymentAdmin && (
+      {(isSuperAdmin || isPaymentAdmin || getPagePermission('maintenance').canView || getPagePermission('maintenance').canEdit) && (
         <button
           onClick={() => setIsMaintenanceModalOpen(true)}
           title="Configure Maintenance Mode"

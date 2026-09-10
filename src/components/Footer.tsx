@@ -6,18 +6,31 @@ import { usePathname } from 'next/navigation';
 import { Code2, Sparkles, Mail, ShieldCheck } from 'lucide-react';
 import { AboutModal } from './AboutModal';
 import { useAuth } from '@/lib/auth-context';
+import { fetchPermissionsConfig, resolveUserPagePermission, PermissionsConfig } from '@/lib/permissions';
 
 const Footer: React.FC = () => {
   const [isAboutOpen, setIsAboutOpen] = useState<boolean>(false);
-const {
-  isSuperAdmin,
-  isAdmin,
-  userRole,
-  userEmail,
-} = useAuth();
+  const [permissionsConfig, setPermissionsConfig] = useState<PermissionsConfig | null>(null);
+  const {
+    isSuperAdmin,
+    isAdmin,
+    isFaculty,
+    isAuthorized,
+    userRole,
+    userEmail,
+  } = useAuth();
 
-const pathname = usePathname();
-  const canResolveTickets = isSuperAdmin || isAdmin || userRole === 'Technical';
+  useEffect(() => {
+    fetchPermissionsConfig().then(setPermissionsConfig).catch(() => {});
+  }, []);
+
+  const pathname = usePathname();
+
+  const ticketPerm = permissionsConfig
+    ? resolveUserPagePermission('tickets', permissionsConfig, userRole, isSuperAdmin, isFaculty, isAuthorized)
+    : { canView: isSuperAdmin || isAdmin || userRole === 'Technical', canEdit: isSuperAdmin || isAdmin || userRole === 'Technical', bypassMaintenance: false };
+
+  const canResolveTickets = isSuperAdmin || ticketPerm.canView || ticketPerm.canEdit;
 
   return (
     <footer className="w-full fixed bottom-0 left-0 right-0 z-40 md:sticky md:bottom-0 bg-[#070212]/95 backdrop-blur-xl border-t border-purple-500/25 text-[#cbd5e1] shadow-[0_-5px_25px_rgba(0,0,0,0.8)] pb-[env(safe-area-inset-bottom)] md:pb-0 transition-all duration-300 select-none">

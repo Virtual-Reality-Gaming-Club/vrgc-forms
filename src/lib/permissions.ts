@@ -6,7 +6,9 @@ export type PageId =
   | 'planned_events'
   | 'referrals'
   | 'idcard'
-  | 'payments';
+  | 'payments'
+  | 'tickets'
+  | 'maintenance';
 
 export interface PagePermission {
   canView: boolean;
@@ -37,6 +39,8 @@ export const ALL_PAGE_IDS: { id: PageId; label: string; icon: string }[] = [
   { id: 'referrals', label: 'Referrals Portal', icon: 'share' },
   { id: 'idcard', label: 'ID Card Portal', icon: 'badge' },
   { id: 'payments', label: 'Payments & Dues', icon: 'payments' },
+  { id: 'tickets', label: 'Resolve Tickets', icon: 'confirmation_number' },
+  { id: 'maintenance', label: 'Maintenance Desk', icon: 'construction' },
 ];
 
 export const SYSTEM_ROLES = ['Admin', 'Payment Admin', 'Technical'];
@@ -109,6 +113,8 @@ export const DEFAULT_PERMISSIONS_CONFIG: PermissionsConfig = {
       referrals: createDefaultPagePermission(true, true, false),
       idcard: createDefaultPagePermission(true, true, false),
       payments: createDefaultPagePermission(true, true, false),
+      tickets: createDefaultPagePermission(false, false, false),
+      maintenance: createDefaultPagePermission(false, false, false),
     },
     faculty: {
       members: createDefaultPagePermission(true, false, false),
@@ -116,6 +122,8 @@ export const DEFAULT_PERMISSIONS_CONFIG: PermissionsConfig = {
       referrals: createDefaultPagePermission(true, false, false),
       idcard: createDefaultPagePermission(true, true, false),
       payments: createDefaultPagePermission(true, false, false),
+      tickets: createDefaultPagePermission(false, false, false),
+      maintenance: createDefaultPagePermission(false, false, false),
     },
   },
   customRoles: [],

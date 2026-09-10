@@ -18,11 +18,11 @@ export const FACULTY_COLLECTION = 'faculty';
 export const FUTURE_EVENTS_COLLECTION = 'future_events';
 
 // Default test faculty email loaded from environment — no hardcoded email or name
-export const DEFAULT_TEST_FACULTY_EMAIL = (process.env.NEXT_PUBLIC_DEFAULT_FACULTY_EMAIL || '').toLowerCase().trim();
+export const DEFAULT_TEST_FACULTY_EMAIL = (process.env.DEFAULT_FACULTY_EMAIL || '').toLowerCase().trim();
 
 /**
  * Seed or ensure default faculty member exists in Firestore `faculty` collection.
- * Only runs if NEXT_PUBLIC_DEFAULT_FACULTY_EMAIL is set in the environment.
+ * Only runs if DEFAULT_FACULTY_EMAIL is set in the environment.
  */
 export async function ensureDefaultTestFaculty(): Promise<void> {
   if (!DEFAULT_TEST_FACULTY_EMAIL) return; // Skip seeding if no env var is set
@@ -35,10 +35,10 @@ export async function ensureDefaultTestFaculty(): Promise<void> {
         {
           id: DEFAULT_TEST_FACULTY_EMAIL,
           email: DEFAULT_TEST_FACULTY_EMAIL,
-          name: process.env.NEXT_PUBLIC_DEFAULT_FACULTY_NAME || 'Faculty Member',
-          facultyId: process.env.NEXT_PUBLIC_DEFAULT_FACULTY_ID || 'FAC-VRGC-01',
-          department: process.env.NEXT_PUBLIC_DEFAULT_FACULTY_DEPT || '',
-          designation: process.env.NEXT_PUBLIC_DEFAULT_FACULTY_DESIGNATION || 'Faculty Mentor',
+          name: process.env.DEFAULT_FACULTY_NAME || 'Faculty Member',
+          facultyId: process.env.DEFAULT_FACULTY_ID || 'FAC-VRGC-01',
+          department: process.env.DEFAULT_FACULTY_DEPT || '',
+          designation: process.env.DEFAULT_FACULTY_DESIGNATION || 'Faculty Mentor',
           created_at: new Date().toISOString(),
         },
         { merge: true }
@@ -61,10 +61,10 @@ export async function checkIsFaculty(email: string): Promise<FacultyMember | nul
     return {
       id: DEFAULT_TEST_FACULTY_EMAIL,
       email: DEFAULT_TEST_FACULTY_EMAIL,
-      name: process.env.NEXT_PUBLIC_DEFAULT_FACULTY_NAME || 'Faculty Member',
-      facultyId: process.env.NEXT_PUBLIC_DEFAULT_FACULTY_ID || 'FAC-VRGC-01',
-      department: process.env.NEXT_PUBLIC_DEFAULT_FACULTY_DEPT || '',
-      designation: process.env.NEXT_PUBLIC_DEFAULT_FACULTY_DESIGNATION || 'Faculty Mentor',
+      name: process.env.DEFAULT_FACULTY_NAME || 'Faculty Member',
+      facultyId: process.env.DEFAULT_FACULTY_ID || 'FAC-VRGC-01',
+      department: process.env.DEFAULT_FACULTY_DEPT || '',
+      designation: process.env.DEFAULT_FACULTY_DESIGNATION || 'Faculty Mentor',
       created_at: new Date().toISOString(),
     };
   }
@@ -144,10 +144,10 @@ export async function fetchAllFaculty(): Promise<FacultyMember[]> {
       list.push({
         id: DEFAULT_TEST_FACULTY_EMAIL,
         email: DEFAULT_TEST_FACULTY_EMAIL,
-        name: process.env.NEXT_PUBLIC_DEFAULT_FACULTY_NAME || 'Faculty Member',
-        facultyId: process.env.NEXT_PUBLIC_DEFAULT_FACULTY_ID || 'FAC-VRGC-01',
-        department: process.env.NEXT_PUBLIC_DEFAULT_FACULTY_DEPT || '',
-        designation: process.env.NEXT_PUBLIC_DEFAULT_FACULTY_DESIGNATION || 'Faculty Mentor',
+        name: process.env.DEFAULT_FACULTY_NAME || 'Faculty Member',
+        facultyId: process.env.DEFAULT_FACULTY_ID || 'FAC-VRGC-01',
+        department: process.env.DEFAULT_FACULTY_DEPT || '',
+        designation: process.env.DEFAULT_FACULTY_DESIGNATION || 'Faculty Mentor',
         created_at: new Date().toISOString(),
       });
     }
@@ -160,10 +160,10 @@ export async function fetchAllFaculty(): Promise<FacultyMember[]> {
           {
             id: DEFAULT_TEST_FACULTY_EMAIL,
             email: DEFAULT_TEST_FACULTY_EMAIL,
-            name: process.env.NEXT_PUBLIC_DEFAULT_FACULTY_NAME || 'Faculty Member',
-            facultyId: process.env.NEXT_PUBLIC_DEFAULT_FACULTY_ID || 'FAC-VRGC-01',
-            department: process.env.NEXT_PUBLIC_DEFAULT_FACULTY_DEPT || '',
-            designation: process.env.NEXT_PUBLIC_DEFAULT_FACULTY_DESIGNATION || 'Faculty Mentor',
+            name: process.env.DEFAULT_FACULTY_NAME || 'Faculty Member',
+            facultyId: process.env.DEFAULT_FACULTY_ID || 'FAC-VRGC-01',
+            department: process.env.DEFAULT_FACULTY_DEPT || '',
+            designation: process.env.DEFAULT_FACULTY_DESIGNATION || 'Faculty Mentor',
             created_at: new Date().toISOString(),
           },
         ]

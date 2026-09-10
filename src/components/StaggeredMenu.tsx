@@ -105,11 +105,8 @@ export const StaggeredMenu: React.FC<StaggeredMenuProps> = ({
     const ctx = gsap.context(() => {
       const panel = panelRef.current;
       const preContainer = preLayersRef.current;
-      const plusH = plusHRef.current;
-      const plusV = plusVRef.current;
-      const icon = iconRef.current;
       const textInner = textInnerRef.current;
-      if (!panel || !plusH || !plusV || !icon || !textInner) return;
+      if (!panel || !textInner) return;
 
       let preLayers: HTMLElement[] = [];
       if (preContainer) {
@@ -122,9 +119,6 @@ export const StaggeredMenu: React.FC<StaggeredMenuProps> = ({
       if (preContainer) {
         gsap.set(preContainer, { xPercent: 0, opacity: 1, visibility: 'hidden' });
       }
-      gsap.set(plusH, { transformOrigin: '50% 50%', rotate: 0 });
-      gsap.set(plusV, { transformOrigin: '50% 50%', rotate: 90 });
-      gsap.set(icon, { rotate: 0, transformOrigin: '50% 50%' });
       gsap.set(textInner, { yPercent: 0 });
       if (toggleBtnRef.current) gsap.set(toggleBtnRef.current, { color: menuButtonColor });
     });
@@ -609,6 +603,7 @@ export const StaggeredMenu: React.FC<StaggeredMenuProps> = ({
           onClick={toggleMenu}
           type="button"
         >
+          <span className="sm-toggle-dot" aria-hidden="true" />
           <span ref={textWrapRef} className="sm-toggle-textWrap" aria-hidden="true">
             <span ref={textInnerRef} className="sm-toggle-textInner">
               {textLines.map((l, i) => (
@@ -618,9 +613,10 @@ export const StaggeredMenu: React.FC<StaggeredMenuProps> = ({
               ))}
             </span>
           </span>
-          <span ref={iconRef} className="sm-icon" aria-hidden="true">
-            <span ref={plusHRef} className="sm-icon-line" />
-            <span ref={plusVRef} className="sm-icon-line sm-icon-line-v" />
+          <span className="sm-hamburger" aria-hidden="true">
+            <span className="sm-hamburger-bar sm-hamburger-bar-top" />
+            <span className="sm-hamburger-bar sm-hamburger-bar-mid" />
+            <span className="sm-hamburger-bar sm-hamburger-bar-bot" />
           </span>
         </button>
       </div>
