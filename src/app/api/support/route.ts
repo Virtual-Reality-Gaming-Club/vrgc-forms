@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import crypto from "crypto";
 import { adminDb } from "@/lib/firebase-admin";
-import { CONFIG } from "@/lib/config";
+import { SERVER_CONFIG } from '@/lib/server/config';
 import { authenticateRequest } from "@/lib/server/auth";
 
 const TWELVE_HOURS_MS = 12 * 60 * 60 * 1000;
@@ -20,19 +20,18 @@ async function generateUniqueTicketId(): Promise<string> {
   return `VRGC-SUP-${Date.now().toString().slice(-4)}${entropy}`;
 }
 
+// Admin authorization: Firestore is the sole source of truth for all normal roles.
+// Super Admin env list is checked only for the Super Admin role (env-controlled by design).
 async function isAuthorizedToManageTickets(email: string | null): Promise<boolean> {
   if (!email) return false;
   const normalized = email.toLowerCase().trim();
 
-  // 1. Authoritative server-side configuration lists (Admin & Super Admin)
-  if (
-    CONFIG.ADMIN_EMAILS.includes(normalized) ||
-    CONFIG.SUPER_ADMIN_EMAILS.includes(normalized)
-  ) {
+  // 1. Super Admin via env (the only env-var-controlled role)
+  if (SERVER_CONFIG.SUPER_ADMIN_EMAILS.includes(normalized)) {
     return true;
   }
 
-  // 2. Dynamic Firestore admins / super_admins collections
+  // 2. Firestore: admins and super_admins collections (managed by Super Admin Console)
   try {
     const adminDoc = await adminDb.collection("admins").doc(normalized).get();
     if (adminDoc.exists) return true;

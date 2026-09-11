@@ -5,7 +5,6 @@ import { auth, googleProvider, db } from '../lib/firebase';
 import { signInWithPopup, signOut, onAuthStateChanged, User } from 'firebase/auth';
 import { collection, onSnapshot, doc, deleteDoc, updateDoc, setDoc, getDoc, addDoc, getDocs, query, orderBy, limit } from 'firebase/firestore';
 import { supabase } from '../lib/supabase';
-import { CONFIG } from '../lib/config';
 import { getAuthHeaders } from '@/lib/auth-client';
 import SpecularButton from './SpecularButton';
 
@@ -175,8 +174,8 @@ const IDCard: React.FC<IDCardProps> = ({
       const lowerEmail = userToUse.email.toLowerCase();
       setCurrentUser(userToUse);
 
-      const configAdmins = CONFIG.ADMIN_EMAILS.map(e => e.toLowerCase());
-      const adminStatus = externalIsAdmin !== undefined ? externalIsAdmin : configAdmins.includes(lowerEmail);
+      // Admin status comes exclusively from the auth-context (Firestore-resolved)
+      const adminStatus = externalIsAdmin ?? false;
       setIsAdmin(adminStatus);
 
       if (externalIsAuthorized !== undefined) {
@@ -347,8 +346,7 @@ const IDCard: React.FC<IDCardProps> = ({
 
   // Admins can delete individual log entries via server endpoint
   const handleDeleteLog = useCallback(async (logId?: string) => {
-    const userMail = (currentUser?.email || '').toLowerCase();
-    const canDelete = CONFIG.LOG_DELETE_ADMIN_EMAILS.includes(userMail);
+    const canDelete = isAdmin;
     if (!logId || !isAdmin || !canDelete) return;
     try {
       const authHeaders = await getAuthHeaders();
@@ -373,8 +371,7 @@ const IDCard: React.FC<IDCardProps> = ({
   // Purge activity logs older than 15 days via server endpoint
   const [isPurgingLogs, setIsPurgingLogs] = useState<boolean>(false);
   const handlePurgeOldLogs = useCallback(async (days = 15) => {
-    const userMail = (currentUser?.email || '').toLowerCase();
-    const canDelete = CONFIG.LOG_DELETE_ADMIN_EMAILS.includes(userMail);
+    const canDelete = isAdmin;
     if (!isAdmin || !canDelete) return;
 
     const cutoffTime = Date.now() - (days * 24 * 60 * 60 * 1000);
@@ -2397,8 +2394,7 @@ const IDCard: React.FC<IDCardProps> = ({
 
             {/* ACTIVITY LOGS SUB-TAB */}
             {adminSectionTab === 'logs' && (() => {
-              const userMail = (currentUser?.email || '').toLowerCase();
-              const canDeleteLogs = CONFIG.LOG_DELETE_ADMIN_EMAILS.includes(userMail);
+              const canDeleteLogs = isAdmin;
               return (
                 <div className="space-y-4">
                   {/* Search & Action Filter Controls */}
@@ -3211,7 +3207,7 @@ const IDCard: React.FC<IDCardProps> = ({
             </div>
 
             <div className="flex items-center justify-between pt-3 border-t border-white/10">
-              {CONFIG.LOG_DELETE_ADMIN_EMAILS.includes((currentUser?.email || '').toLowerCase()) ? (
+              {isAdmin ? (
                 <button
                   onClick={() => {
                     if (selectedLogForDetails.id && confirm('Are you sure you want to delete this activity log entry?')) {

@@ -1,23 +1,21 @@
 import { NextResponse } from 'next/server';
 import crypto from 'crypto';
 import { adminDb } from '@/lib/firebase-admin';
-import { CONFIG } from '@/lib/config';
+import { SERVER_CONFIG } from '@/lib/server/config';
 import { authenticateRequest } from '@/lib/server/auth';
 
+// Admin authorization: Firestore is the sole source of truth for all normal roles.
+// Super Admin env list is checked only for the Super Admin role (env-controlled by design).
 async function isAuthorizedAdminEmail(email: string | null): Promise<boolean> {
   if (!email) return false;
   const normalized = email.toLowerCase().trim();
 
-  // 1. Authoritative server configuration lists
-  if (
-    CONFIG.ADMIN_EMAILS.includes(normalized) ||
-    CONFIG.SUPER_ADMIN_EMAILS.includes(normalized) ||
-    CONFIG.PAYMENT_ADMIN_EMAILS.includes(normalized)
-  ) {
+  // 1. Super Admin via env (the only env-var-controlled role)
+  if (SERVER_CONFIG.SUPER_ADMIN_EMAILS.includes(normalized)) {
     return true;
   }
 
-  // 2. Dynamic Firestore admins / super_admins collections
+  // 2. Firestore: admins and super_admins collections (managed by Super Admin Console)
   try {
     const adminDoc = await adminDb.collection('admins').doc(normalized).get();
     if (adminDoc.exists) return true;

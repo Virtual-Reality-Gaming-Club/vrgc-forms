@@ -1,7 +1,9 @@
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+# ==============================================================================
+# VRGC Forms — Git Ignore Configuration
+# ==============================================================================
 
-# dependencies
-/node_modules
+# ─── 1. Dependencies & Package Managers ───────────────────────────────────────
+node_modules/
 /.pnp
 .pnp.*
 .yarn/*
@@ -9,29 +11,60 @@
 !.yarn/plugins
 !.yarn/releases
 !.yarn/versions
+.pnpm-store/
+.npm/
 
-# testing
-/coverage
+# ─── 2. Build Outputs, Next.js & Turbopack ─────────────────────────────────────
+.next/
+out/
+build/
+dist/
+.turbo/
 
-# next.js
-/.next/
-/out/
+# ─── 3. Environment & Configuration Secrets ──────────────────────────────────
+# All environment variable files must NEVER be committed to version control
+.env*
+!.env.example
+!.env.local.example
+*.env
+*.env.*
 
-# production
-/build
-
-# misc & system
-.DS_Store
-Thumbs.db
-Thumbs.db:encryptable
-ehthumbs.db
-desktop.ini
+# ─── 4. Cloud, Firebase & Service Account Credentials ─────────────────────────
+*serviceAccount*.json
+*service-account*.json
+*-firebase-adminsdk-*.json
+serviceAccountKey.json
+google-services.json
+credentials.json
+client_secret*.json
 *.pem
 *.key
 *.p12
 *.pfx
+*.cer
+*.crt
+*.p8
+*.jks
+*.keystore
+id_rsa*
+id_ed25519*
 
-# debug & logs
+# ─── 5. Cache & Build Metadata ────────────────────────────────────────────────
+*.tsbuildinfo
+next-env.d.ts
+.eslintcache
+.cache/
+*.lcov
+
+# ─── 6. Testing, Coverage & Reports ───────────────────────────────────────────
+coverage/
+.nyc_output/
+playwright-report/
+test-results/
+blob-report/
+
+# ─── 7. Logs & Diagnostics ───────────────────────────────────────────────────
+*.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
@@ -40,33 +73,44 @@ firebase-debug.log*
 firestore-debug.log*
 ui-debug.log*
 
-# env files (can opt-in for committing if needed)
-.env*
-!.env.example
-!.env.local.example
+# ─── 8. Operating System Specific ─────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+ehthumbs_vista.db
+[Tt]humbs.db
+[Tt]humbs.db:encryptable
+[Dd]esktop.ini
+$RECYCLE.BIN/
+Icon?
 
-# Firebase & Google Cloud credentials / service accounts
-*serviceAccount*.json
-*service-account*.json
-*-firebase-adminsdk-*.json
-serviceAccountKey.json
-google-services.json
-
-# IDEs & editors
-.vscode/
+# ─── 9. IDEs, Editors & Workspaces ────────────────────────────────────────────
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
 .idea/
-*.swp
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
 *.swo
+*.swp
 *~
+*.sublime-workspace
+*.sublime-project
 
-# vercel
+# ─── 10. Cloud & Hosting CLI Artifacts ────────────────────────────────────────
 .vercel
+.firebase/
+.firebaserc.local
 
-# typescript
-*.tsbuildinfo
-next-env.d.ts
-
-# private data, csv & spreadsheet files
+# ─── 11. Private / Sensitive User & Club Data ─────────────────────────────────
 public/members.csv
 public/admins.csv
 *.csv
@@ -74,4 +118,19 @@ public/admins.csv
 *.xlsx
 *.xls
 
-
+# ─── 12. Temporary, Scratch & Archive Files ───────────────────────────────────
+*.tmp
+*.temp
+.tmp/
+.temp/
+scratch/
+*.bak
+*.backup
+*.orig
+*.old
+*.patch
+*.zip
+*.tar.gz
+*.tgz
+*.rar
+*.7z

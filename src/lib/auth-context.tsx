@@ -10,14 +10,8 @@ import {
   User,
 } from 'firebase/auth';
 import { collection, query, where, getDocs, getDoc, doc, onSnapshot } from 'firebase/firestore';
-import { CONFIG } from '@/lib/config';
-
 import { checkIsFaculty, ensureDefaultTestFaculty } from '@/lib/faculty';
 import { getSuperAdminEmails } from '@/lib/superAdminsBridge';
-
-export const PAYMENT_ADMIN_EMAILS = CONFIG.PAYMENT_ADMIN_EMAILS;
-export const PAYMENT_ADMIN_EMAIL = PAYMENT_ADMIN_EMAILS[0] || '';
-export const ADMIN_EMAIL = PAYMENT_ADMIN_EMAILS[0] || '';
 
 const googleProvider = new GoogleAuthProvider();
 
@@ -184,47 +178,33 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setIsFaculty(false);
 
       const bridgeSuperAdmins = await getSuperAdminEmails();
-      let isDbSuperAdmin = false;
-      try {
-        const superDoc = await getDoc(doc(db, 'super_admins', em));
-        if (superDoc.exists()) {
-          isDbSuperAdmin = true;
-        }
-      } catch (superErr) {
-        console.warn('Firestore super_admins check fallback:', superErr);
-      }
-      const superAdmin = isDbSuperAdmin || bridgeSuperAdmins.includes(em);
+      const superAdmin = bridgeSuperAdmins.some((se) => se.toLowerCase().trim() === em);
       setIsSuperAdmin(superAdmin);
 
-      const configAdmins = CONFIG.ADMIN_EMAILS.map((e) => e.toLowerCase().trim());
       let isDbAdmin = false;
       let assignedRole: string | null = null;
 
       try {
-
         const adminDoc = await getDoc(doc(db, 'admins', em));
         if (adminDoc.exists()) {
           isDbAdmin = true;
           const adminDocData = adminDoc.data();
-          if (adminDocData?.role === 'super_admin' || adminDocData?.isSuperAdmin) {
-            setIsSuperAdmin(true);
-            assignedRole = 'Super Admin';
-          } else if (adminDocData?.role) {
+          if (superAdmin) {
+            assignedRole = 'Super Administrator';
+          } else if (adminDocData?.role && adminDocData.role !== 'super_admin' && adminDocData.role !== 'Super Admin') {
             assignedRole = adminDocData.role;
           } else {
             assignedRole = 'Admin';
           }
         } else {
-
           const adminQuery = query(collection(db, 'admins'), where('email', '==', em));
           const adminSnap = await getDocs(adminQuery);
           if (!adminSnap.empty) {
             isDbAdmin = true;
             const adminDocData = adminSnap.docs[0].data();
-            if (adminDocData?.role === 'super_admin' || adminDocData?.isSuperAdmin) {
-              setIsSuperAdmin(true);
-              assignedRole = 'Super Admin';
-            } else if (adminDocData?.role) {
+            if (superAdmin) {
+              assignedRole = 'Super Administrator';
+            } else if (adminDocData?.role && adminDocData.role !== 'super_admin' && adminDocData.role !== 'Super Admin') {
               assignedRole = adminDocData.role;
             } else {
               assignedRole = 'Admin';
@@ -237,26 +217,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           const roleData = roleDoc.data();
           isDbAdmin = true;
           if (roleData?.role) {
-            if (roleData.role === 'super_admin' || roleData.role === 'Super Admin') {
-              setIsSuperAdmin(true);
-              assignedRole = 'Super Admin';
-            } else if (!assignedRole || assignedRole === 'Admin') {
-              assignedRole = roleData.role;
+            if (superAdmin) {
+              assignedRole = 'Super Administrator';
+            } else if (roleData.role !== 'super_admin' && roleData.role !== 'Super Admin') {
+              if (!assignedRole || assignedRole === 'Admin') {
+                assignedRole = roleData.role;
+              }
             }
           }
         } else {
-
           const roleQuery = query(collection(db, 'roles'), where('email', '==', em));
           const roleSnap = await getDocs(roleQuery);
           if (!roleSnap.empty) {
             isDbAdmin = true;
             const roleData = roleSnap.docs[0].data();
             if (roleData?.role) {
-              if (roleData.role === 'super_admin' || roleData.role === 'Super Admin') {
-                setIsSuperAdmin(true);
-                assignedRole = 'Super Admin';
-              } else if (!assignedRole || assignedRole === 'Admin') {
-                assignedRole = roleData.role;
+              if (superAdmin) {
+                assignedRole = 'Super Administrator';
+              } else if (roleData.role !== 'super_admin' && roleData.role !== 'Super Admin') {
+                if (!assignedRole || assignedRole === 'Admin') {
+                  assignedRole = roleData.role;
+                }
               }
             }
           }
@@ -330,13 +311,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
       }
 
-      const isPaymentAdminEmail = PAYMENT_ADMIN_EMAILS.includes(em) || assignedRole === 'Payment Admin';
-      const admin = superAdmin || isDbAdmin || isPaymentAdminEmail || em === PAYMENT_ADMIN_EMAIL || configAdmins.includes(em) || !!assignedRole;
+      const isPaymentAdminEmail = assignedRole === 'Payment Admin';
+      const admin = superAdmin || isDbAdmin || isPaymentAdminEmail || !!assignedRole;
       const paymentAdmin = superAdmin || isPaymentAdminEmail;
 
       if (superAdmin) {
-
-        assignedRole = assignedRole || 'Super Admin';
+        assignedRole = 'Super Administrator';
       } else if (!assignedRole && admin) {
         assignedRole = 'Admin';
       }

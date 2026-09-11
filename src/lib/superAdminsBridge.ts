@@ -1,6 +1,5 @@
 // Client-side helper with memory cache to retrieve Super Admins via the API bridge
 import { CONFIG } from '@/lib/config';
-import { getAuthHeaders } from '@/lib/auth-client';
 
 let cachedSuperAdmins: string[] | null = null;
 let fetchPromise: Promise<string[]> | null = null;
@@ -17,10 +16,7 @@ export async function getSuperAdminEmails(): Promise<string[]> {
   fetchPromise = (async () => {
     const fallbackList = (CONFIG.SUPER_ADMIN_EMAILS || []).map((e) => e.toLowerCase().trim());
     try {
-      const authHeaders = await getAuthHeaders();
-      const res = await fetch('/api/auth/super-admins', {
-        headers: authHeaders,
-      });
+      const res = await fetch('/api/auth/super-admins');
       if (res.ok) {
         const data = await res.json();
         if (Array.isArray(data.superAdmins) && data.superAdmins.length > 0) {
@@ -36,9 +32,11 @@ export async function getSuperAdminEmails(): Promise<string[]> {
     } finally {
       fetchPromise = null;
     }
-    cachedSuperAdmins = fallbackList;
+    if (fallbackList.length > 0) {
+      cachedSuperAdmins = fallbackList;
+    }
     return fallbackList;
   })();
 
   return fetchPromise;
-}
+}

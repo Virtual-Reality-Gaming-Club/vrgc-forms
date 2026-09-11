@@ -2,7 +2,6 @@
 
 import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { CONFIG } from '../lib/config';
 import { auth, googleProvider, db } from '../lib/firebase';
 import { signInWithPopup, signOut, onAuthStateChanged, User } from 'firebase/auth';
 import { collection, addDoc, updateDoc, deleteDoc, doc, setDoc, onSnapshot, query, orderBy, getDocs, getDoc, deleteField, where } from 'firebase/firestore';
@@ -70,7 +69,8 @@ const Referrals: React.FC<ReferralsProps> = ({
   const [referrerInfo, setReferrerInfo] = useState<MemberData | null>(null);
   const [adminEmails, setAdminEmails] = useState<string[]>([]);
   const isMasterAdmin = externalIsAdmin !== undefined ? externalIsAdmin : (currentUser ? adminEmails.includes((currentUser.email || '').toLowerCase()) : false);
-  const canDeleteReferrals = isMasterAdmin || CONFIG.LOG_DELETE_ADMIN_EMAILS.includes((currentUser?.email || '').toLowerCase().trim());
+  // Delete privilege is derived from Firestore-resolved admin status (server enforces authorization)
+  const canDeleteReferrals = isMasterAdmin;
 
   // Referral DB & Loading states
   const [referrals, setReferrals] = useState<ReferralRecord[]>([]);

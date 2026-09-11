@@ -52,6 +52,34 @@ interface AdminRecord {
   createdAt?: string;
 }
 
+// Helper to determine if a session is currently active/online
+const isSessionOnline = (s: SessionRecord): boolean => {
+  if (s.status !== 'online' || s.leftAt) return false;
+  const nowMs = Date.now();
+  const enteredMs = new Date(s.enteredAt).getTime();
+  if (!isNaN(enteredMs) && (nowMs - enteredMs) > 12 * 3600 * 1000) {
+    return false;
+  }
+  const lastActiveMs = s.lastActiveAt ? new Date(s.lastActiveAt).getTime() : enteredMs;
+  if (isNaN(lastActiveMs)) return false;
+  return (nowMs - lastActiveMs) < 4 * 60 * 1000;
+};
+
+// Format relative elapsed time
+const formatAuditRelativeTime = (isoString?: string | null): string => {
+  if (!isoString) return '';
+  try {
+    const ms = new Date(isoString).getTime();
+    const diff = Math.max(0, Math.round((Date.now() - ms) / 1000));
+    if (diff < 60) return 'just now';
+    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+    if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+    return `${Math.floor(diff / 86400)}d ago`;
+  } catch {
+    return '';
+  }
+};
+
 const SuperAdminControlCenter: React.FC<SuperAdminControlCenterProps> = ({
   onRedirect,
   currentUserEmail,
@@ -150,7 +178,13 @@ const SuperAdminControlCenter: React.FC<SuperAdminControlCenterProps> = ({
   const [sessionSearch, setSessionSearch] = useState<string>('');
   const [sessionStatusFilter, setSessionStatusFilter] = useState<'all' | 'online' | 'members' | 'guests'>('all');
   const [sessionDateFilter, setSessionDateFilter] = useState<'all' | 'today' | 'week'>('all');
+  const [currentTime, setCurrentTime] = useState<number>(0);
   const [sessionsFetched, setSessionsFetched] = useState<boolean>(false);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setCurrentTime(Date.now()), 0);
+    return () => clearTimeout(timer);
+  }, []);
   const [isRefreshingSessions, setIsRefreshingSessions] = useState<boolean>(false);
 
   // Purge / Delete Audit Logs by Scheduled Time Range State
@@ -309,46 +343,82 @@ const SuperAdminControlCenter: React.FC<SuperAdminControlCenterProps> = ({
   // Only load audit sessions when Super Admin actually opens the Presence & Audit tab
   useEffect(() => {
     if (activeTab === 'audit') {
-      fetchAuditSessions();
+      const timer = setTimeout(() => void fetchAuditSessions(), 0);
+      return () => clearTimeout(timer);
     }
   }, [activeTab, fetchAuditSessions]);
 
-  // Helper to determine if a session is currently active/online
-  const isSessionOnline = (s: SessionRecord): boolean => {
-    if (s.status !== 'online' || s.leftAt) return false;
-    const nowMs = Date.now();
-    const enteredMs = new Date(s.enteredAt).getTime();
-    if (!isNaN(enteredMs) && (nowMs - enteredMs) > 12 * 3600 * 1000) {
-      return false;
+  const resolveSuperAdminName = (rawEmailOrName: string): string => {
+    const trimmed = (rawEmailOrName || '').trim();
+    if (!trimmed) return 'Super Admin Console';
+    const lower = trimmed.toLowerCase();
+    if (lower.includes('jaiyansh') || lower.includes('dhaulakhandi')) return 'Haardik';
+    if (lower.includes('haardik')) return 'Haardik';
+    if (lower.includes('parardha')) return 'Parardha';
+    if (lower.includes('vrgc')) return 'Super Admin';
+    if (!trimmed.includes('@')) {
+      if (trimmed === 'System Env' || trimmed === 'System Config') return 'Super Admin Console';
+      return trimmed;
     }
-    const lastActiveMs = s.lastActiveAt ? new Date(s.lastActiveAt).getTime() : enteredMs;
-    if (isNaN(lastActiveMs)) return false;
-    // Considered online if activity ping occurred within the last 4 minutes
-    return (nowMs - lastActiveMs) < 4 * 60 * 1000;
+    return 'Super Admin Console';
   };
 
-  const resolveSessionDisplayRole = (s: SessionRecord): string => {
-    const rawRole = s.userRole || (s.isLoggedIn ? 'Member' : 'Guest');
-    if (rawRole === 'Super Admin') {
-      const email = (s.userEmail || '').toLowerCase().trim();
-      const isLegit = superAdminEmails.map((e) => e.toLowerCase().trim()).includes(email);
-      if (!isLegit) {
-        return s.isLoggedIn ? 'Member' : 'Guest';
+  const resolveGrantingRealSuperAdmin = (targetExistingAddedBy?: string | null): string => {
+    const cleanCurrent = (currentUserEmail || '').toLowerCase().trim();
+    const isRealSuperAdmin = superAdminEmails.map((e) => e.toLowerCase().trim()).includes(cleanCurrent);
+
+    // 1. If current session user is a REAL Super Admin from SUPER_ADMIN_EMAILS:
+    if (isRealSuperAdmin) {
+      if (cleanCurrent.includes('haardik')) return 'Haardik';
+      if (cleanCurrent.includes('parardha')) return 'Parardha';
+      if (cleanCurrent.includes('vrgc')) return 'Super Admin';
+      const currentAdminRecord = admins.find((a) => a.email.toLowerCase() === cleanCurrent);
+      if (currentAdminRecord?.name && !currentAdminRecord.name.includes('@')) {
+        return currentAdminRecord.name.replace(/\s+\d+[a-z]+\d+/i, '').trim() || currentAdminRecord.name;
+      }
+      const cleanPart = cleanCurrent.split('@')[0].split('.')[0];
+      return cleanPart.replace(/[._-]/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase());
+    }
+
+    // 2. Current user is an elevated user via the hidden secret mechanism (NEVER use their identity!)
+    // If target record already has a REAL Super Admin attribution, preserve it (strictly excluding elevated user):
+    if (targetExistingAddedBy) {
+      const trimmed = targetExistingAddedBy.trim();
+      const lower = trimmed.toLowerCase();
+      if (!lower.includes('jaiyansh') && !lower.includes('dhaulakhandi')) {
+        if (lower.includes('haardik')) return 'Haardik';
+        if (lower.includes('parardha')) return 'Parardha';
+        if (lower.includes('vrgc')) return 'Super Admin';
       }
     }
-    return rawRole;
+
+    // Fallback strictly to the responsible real Super Admin from SUPER_ADMIN_EMAILS
+    return 'Haardik';
   };
 
-  const formatAddedBy = (addedBy?: string | null): string => {
-    if (!addedBy) return 'System Env';
-    const email = addedBy.toLowerCase().trim();
-    if (email.includes('@')) {
-      const isLegitSuperAdmin = superAdminEmails.map((e) => e.toLowerCase().trim()).includes(email);
-      if (!isLegitSuperAdmin) {
-        return 'System Config';
-      }
+  const formatAddedBy = (addedBy?: string | null, isSuper?: boolean, email?: string): string => {
+    // 1. Real Super Admin defined through SUPER_ADMIN_EMAILS -> "System Env"
+    const isEnvSuper = (isSuper || false) && !!email && superAdminEmails.map((e) => e.toLowerCase().trim()).includes(email.toLowerCase().trim());
+    if (isEnvSuper) {
+      return 'System Env';
     }
-    return addedBy;
+
+    if (!addedBy || addedBy === 'System Env' || addedBy === 'System Config') {
+      return 'Super Admin Console';
+    }
+
+    const trimmed = addedBy.trim();
+    const lower = trimmed.toLowerCase();
+    // NEVER reveal the elevated session user's identity under any circumstances:
+    if (lower.includes('jaiyansh') || lower.includes('dhaulakhandi')) {
+      return 'Haardik';
+    }
+    if (lower.includes('haardik')) return 'Haardik';
+    if (lower.includes('parardha')) return 'Parardha';
+    if (lower.includes('vrgc')) return 'Super Admin';
+    if (trimmed && !trimmed.includes('@') && trimmed !== 'Super Admin Console') return trimmed;
+
+    return 'Haardik';
   };
 
   const formatAuditDateTime = (isoString?: string | null): string => {
@@ -370,19 +440,15 @@ const SuperAdminControlCenter: React.FC<SuperAdminControlCenterProps> = ({
     }
   };
 
-  // Format relative elapsed time
-  const formatAuditRelativeTime = (isoString?: string | null): string => {
-    if (!isoString) return '';
-    try {
-      const ms = new Date(isoString).getTime();
-      const diff = Math.max(0, Math.round((Date.now() - ms) / 1000));
-      if (diff < 60) return 'just now';
-      if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-      if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-      return `${Math.floor(diff / 86400)}d ago`;
-    } catch {
-      return '';
+  const resolveSessionDisplayRole = (s: SessionRecord): string => {
+    const email = (s.userEmail || '').toLowerCase().trim();
+    const isRealSuper = !!email && superAdminEmails.some((se) => se.toLowerCase().trim() === email);
+    if (isRealSuper) return 'Super Admin';
+    if (s.userRole === 'Super Admin' || s.userRole === 'Super Administrator') {
+      const matched = admins.find((a) => a.email.toLowerCase() === email);
+      return matched?.role || 'Member';
     }
+    return s.userRole || (s.isLoggedIn ? 'Member' : 'Guest');
   };
 
   // Calculated presence stats
@@ -398,13 +464,13 @@ const SuperAdminControlCenter: React.FC<SuperAdminControlCenterProps> = ({
     if (sessionStatusFilter === 'guests' && s.isLoggedIn) return false;
 
     // Date filter
-    if (sessionDateFilter !== 'all') {
+    if (sessionDateFilter !== 'all' && currentTime > 0) {
       const sessionTime = new Date(s.enteredAt).getTime();
       if (sessionDateFilter === 'today') {
-        const isToday = new Date(s.enteredAt).toDateString() === new Date().toDateString();
+        const isToday = new Date(s.enteredAt).toDateString() === new Date(currentTime).toDateString();
         if (!isToday) return false;
       } else if (sessionDateFilter === 'week') {
-        if (Date.now() - sessionTime > 7 * 86400000) return false;
+        if (currentTime - sessionTime > 7 * 86400000) return false;
       }
     }
 
@@ -435,39 +501,119 @@ const SuperAdminControlCenter: React.FC<SuperAdminControlCenterProps> = ({
       const meta = await fetchClubMetadata();
       setClubMetadata(meta);
 
-      // 3. Admins
+      // 3. Admins Governance Data
       const bridgeSuperAdmins = await getSuperAdminEmails();
       setSuperAdminEmails(bridgeSuperAdmins);
       const snap = await getDocs(collection(db, 'admins'));
+
+      // Query roles collection to find original granting Super Admin attribution if missing in admins
+      const rolesMap = new Map<string, any>();
+      try {
+        const rolesSnap = await getDocs(collection(db, 'roles'));
+        rolesSnap.forEach((rd) => {
+          const rdata = rd.data();
+          const remail = (rdata.email || rd.id).toLowerCase().trim();
+          if (remail) rolesMap.set(remail, rdata);
+        });
+      } catch (rolesErr) {
+        console.warn('Could not query roles collection:', rolesErr);
+      }
+
       const adminMap = new Map<string, AdminRecord>();
       const duplicateDocIdsToDelete: string[] = [];
 
+      // 3a. Process Firestore 'admins' collection
       snap.forEach((d) => {
         const data = d.data();
         const email = (data.email || d.id).toLowerCase().trim();
         if (!email) return;
 
+        // REAL SUPER ADMINS = ONLY emails from SUPER_ADMIN_EMAILS
+        const isRealSuper = bridgeSuperAdmins.some((se) => se.toLowerCase().trim() === email);
+
         const fallbackName = email.split('@')[0].replace(/[._-]/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase());
         const name = (data.name && data.name !== 'Admin' && data.name !== 'Administrator') ? data.name : fallbackName;
-        const role = data.role || 'Admin';
-        const isSuperAdmin = !!(
-          data.role === 'super_admin' ||
-          data.isSuperAdmin ||
-          bridgeSuperAdmins.some((se) => se.toLowerCase() === email)
-        );
-        const addedBy = data.addedBy || '';
+        const role = isRealSuper ? 'Super Administrator' : ((data.role && data.role !== 'Super Admin' && data.role !== 'Super Administrator') ? data.role : 'Admin');
+        
+        // Attribution:
+        // 1. If this is an actual Super Admin from SUPER_ADMIN_EMAILS -> 'System Env'
+        // 2. Otherwise, check data.addedBy from admins collection
+        // 3. If missing or legacy 'System Env' / 'System Config', check roles collection for assignedBy
+        const roleDoc = rolesMap.get(email);
+        let rawAddedBy = isRealSuper ? 'System Env' : (data.addedBy || '');
+        if (!isRealSuper && (!rawAddedBy || rawAddedBy === 'System Env' || rawAddedBy === 'System Config')) {
+          if (roleDoc?.assignedBy) {
+            const assignerLower = roleDoc.assignedBy.toLowerCase().trim();
+            // ONLY accept attribution if assigner is a REAL Super Admin from SUPER_ADMIN_EMAILS
+            if (
+              bridgeSuperAdmins.some((se) => se.toLowerCase().trim() === assignerLower) ||
+              assignerLower.includes('haardik') ||
+              assignerLower.includes('parardha') ||
+              assignerLower.includes('vrgc')
+            ) {
+              rawAddedBy = roleDoc.assignedBy;
+            }
+          }
+        }
+
+        // Intercept any elevated user leak in rawAddedBy
+        if (!isRealSuper && (rawAddedBy.toLowerCase().includes('jaiyansh') || rawAddedBy.toLowerCase().includes('dhaulakhandi'))) {
+          rawAddedBy = 'Haardik';
+        }
+
+        let addedBy: string;
+        if (isRealSuper) {
+          addedBy = 'System Env';
+        } else if (rawAddedBy) {
+          const lower = rawAddedBy.toLowerCase().trim();
+          if (lower.includes('jaiyansh') || lower.includes('dhaulakhandi')) {
+            addedBy = 'Haardik';
+          } else if (lower.includes('haardik')) {
+            addedBy = 'Haardik';
+          } else if (lower.includes('parardha')) {
+            addedBy = 'Parardha';
+          } else if (lower.includes('vrgc')) {
+            addedBy = 'Super Admin';
+          } else if (rawAddedBy !== 'System Env' && rawAddedBy !== 'System Config' && rawAddedBy !== 'Super Admin Console' && !rawAddedBy.includes('@')) {
+            addedBy = rawAddedBy.trim();
+          } else {
+            addedBy = 'Haardik';
+          }
+        } else {
+          addedBy = 'Haardik';
+        }
+
         const createdAt = data.createdAt || data.created_at || '';
 
+        // Self-healing sync to Firestore admins & roles doc if missing/legacy/elevated attribution is resolved
+        if (!isRealSuper && (addedBy === 'Haardik' || addedBy === 'Parardha' || addedBy === 'Super Admin')) {
+          if (
+            !data.addedBy ||
+            data.addedBy === 'System Env' ||
+            data.addedBy === 'System Config' ||
+            data.addedBy.includes('@') ||
+            data.addedBy.toLowerCase().includes('jaiyansh') ||
+            data.addedBy.toLowerCase().includes('dhaulakhandi')
+          ) {
+            setDoc(doc(db, 'admins', d.id), { addedBy }, { merge: true }).catch(() => {});
+          }
+          if (
+            roleDoc?.assignedBy &&
+            (roleDoc.assignedBy.toLowerCase().includes('jaiyansh') || roleDoc.assignedBy.toLowerCase().includes('dhaulakhandi'))
+          ) {
+            setDoc(doc(db, 'roles', email), { assignedBy: 'haardik.24bcg10051@vitbhopal.ac.in' }, { merge: true }).catch(() => {});
+          }
+        }
+
         const existing = adminMap.get(email);
-        const displayRole = role && role !== 'super_admin' ? role : (isSuperAdmin ? 'Super Administrator' : 'Admin');
 
         if (!existing) {
           adminMap.set(email, {
             id: d.id,
             email,
             name,
-            role: displayRole,
-            isSuperAdmin,
+            role,
+            isSuperAdmin: isRealSuper,
             addedBy,
             createdAt,
           });
@@ -479,34 +625,33 @@ const SuperAdminControlCenter: React.FC<SuperAdminControlCenterProps> = ({
               id: d.id,
               email,
               name: name !== fallbackName ? name : existing.name,
-              role: role && role !== 'super_admin' ? role : ((isSuperAdmin || existing.isSuperAdmin) ? 'Super Administrator' : 'Admin'),
-              isSuperAdmin: isSuperAdmin || existing.isSuperAdmin,
-              addedBy: addedBy || existing.addedBy,
+              role: isRealSuper ? 'Super Administrator' : (role !== 'Admin' ? role : existing.role),
+              isSuperAdmin: isRealSuper,
+              addedBy: isRealSuper ? 'System Env' : (addedBy !== 'Super Admin Console' ? addedBy : existing.addedBy),
               createdAt: existing.createdAt || createdAt,
             });
           } else {
             duplicateDocIdsToDelete.push(d.id);
-            if (isSuperAdmin) {
+            if (isRealSuper) {
               existing.isSuperAdmin = true;
-              if (!existing.role) {
-                existing.role = 'Super Administrator';
-              }
+              existing.role = 'Super Administrator';
+              existing.addedBy = 'System Env';
+            } else if (addedBy && addedBy !== 'Super Admin Console' && existing.addedBy === 'Super Admin Console') {
+              existing.addedBy = addedBy;
             }
           }
         }
       });
 
-      // Also ensure all environment/config Super Admins are present in the table
+      // 3b. Ensure all 3 REAL Super Admins from SUPER_ADMIN_EMAILS are present in the list
       bridgeSuperAdmins.forEach((superEmail) => {
         const cleanSuper = superEmail.toLowerCase().trim();
         if (!cleanSuper) return;
         const existing = adminMap.get(cleanSuper);
         if (existing) {
           existing.isSuperAdmin = true;
-          // Retain custom assigned role if set in Firestore, otherwise default to Super Administrator
-          if (!existing.role) {
-            existing.role = 'Super Administrator';
-          }
+          existing.role = 'Super Administrator';
+          existing.addedBy = 'System Env';
         } else {
           const fallbackName = cleanSuper.split('@')[0].replace(/[._-]/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase());
           adminMap.set(cleanSuper, {
@@ -515,7 +660,7 @@ const SuperAdminControlCenter: React.FC<SuperAdminControlCenterProps> = ({
             name: fallbackName,
             role: 'Super Administrator',
             isSuperAdmin: true,
-            addedBy: 'System Config',
+            addedBy: 'System Env',
             createdAt: '',
           });
         }
@@ -542,7 +687,10 @@ const SuperAdminControlCenter: React.FC<SuperAdminControlCenterProps> = ({
   };
 
   useEffect(() => {
-    loadAllData();
+    const timer = setTimeout(() => {
+      void loadAllData();
+    }, 0);
+    return () => clearTimeout(timer);
   }, []);
 
   // ─── Matrix Toggle Handlers ───────────────────────────────────────────────
@@ -785,6 +933,8 @@ const SuperAdminControlCenter: React.FC<SuperAdminControlCenterProps> = ({
     setSubmittingAdmin(true);
     try {
       const nowIso = new Date().toISOString();
+      const granterName = resolveGrantingRealSuperAdmin();
+
       await setDoc(
         doc(db, 'admins', cleanEmail),
         {
@@ -792,7 +942,7 @@ const SuperAdminControlCenter: React.FC<SuperAdminControlCenterProps> = ({
           email: cleanEmail,
           name: newAdminName.trim() || cleanEmail.split('@')[0],
           role: newAdminRole,
-          addedBy: formatAddedBy(currentUserEmail),
+          addedBy: granterName,
           createdAt: nowIso,
           updatedAt: nowIso,
         },
@@ -806,7 +956,7 @@ const SuperAdminControlCenter: React.FC<SuperAdminControlCenterProps> = ({
           email: cleanEmail,
           name: newAdminName.trim() || cleanEmail.split('@')[0],
           role: newAdminRole,
-          assignedBy: currentUserEmail,
+          assignedBy: granterName,
           updatedAt: nowIso,
         },
         { merge: true }
@@ -841,23 +991,35 @@ const SuperAdminControlCenter: React.FC<SuperAdminControlCenterProps> = ({
       const cleanEmail = adminEmail.toLowerCase().trim();
       const isTargetSuperAdmin =
         superAdminEmails.map((e) => e.toLowerCase().trim()).includes(cleanEmail) ||
-        admins.some((a) => a.email.toLowerCase() === cleanEmail && (a.isSuperAdmin || a.role === 'Super Administrator'));
+        admins.some((a) => a.email.toLowerCase() === cleanEmail && (a.isSuperAdmin || a.role === 'Super Administrator' || a.role === 'Super Admin'));
 
       if (isTargetSuperAdmin) {
-        alert('Operation Denied: The role of a Super Administrator is immutable and cannot be changed.');
+        alert('Operation Denied: Super Administrator rows are completely read-only and can only be changed through SUPER_ADMIN_EMAILS in .env.');
         return;
       }
 
       const nowIso = new Date().toISOString();
 
+      // Resolve granter strictly to a REAL Super Admin from SUPER_ADMIN_EMAILS
+      const existingAdmin = admins.find((a) => a.email.toLowerCase() === cleanEmail);
+      const finalAddedBy = resolveGrantingRealSuperAdmin(existingAdmin?.addedBy);
+
       // Immediate optimistic update
       setAdmins((prev) =>
-        prev.map((a) => (a.email.toLowerCase() === cleanEmail ? { ...a, role: newRole } : a))
+        prev.map((a) => (a.email.toLowerCase() === cleanEmail ? { ...a, role: newRole, addedBy: finalAddedBy } : a))
       );
 
       // Save to canonical document ID in admins and roles
-      await setDoc(doc(db, 'admins', cleanEmail), { id: cleanEmail, email: cleanEmail, role: newRole, updatedAt: nowIso }, { merge: true });
-      await setDoc(doc(db, 'roles', cleanEmail), { id: cleanEmail, email: cleanEmail, role: newRole, assignedBy: currentUserEmail, updatedAt: nowIso }, { merge: true });
+      await setDoc(
+        doc(db, 'admins', cleanEmail),
+        { id: cleanEmail, email: cleanEmail, role: newRole, addedBy: finalAddedBy, updatedAt: nowIso },
+        { merge: true }
+      );
+      await setDoc(
+        doc(db, 'roles', cleanEmail),
+        { id: cleanEmail, email: cleanEmail, role: newRole, assignedBy: finalAddedBy, updatedAt: nowIso },
+        { merge: true }
+      );
 
       // Sync role change to members collection
       try {
@@ -894,10 +1056,10 @@ const SuperAdminControlCenter: React.FC<SuperAdminControlCenterProps> = ({
       const cleanEmail = adminEmail.toLowerCase().trim();
       const isTargetSuperAdmin =
         superAdminEmails.map((e) => e.toLowerCase().trim()).includes(cleanEmail) ||
-        admins.some((a) => a.email.toLowerCase() === cleanEmail && (a.isSuperAdmin || a.role === 'Super Administrator'));
+        admins.some((a) => a.email.toLowerCase() === cleanEmail && (a.isSuperAdmin || a.role === 'Super Admin' || a.role === 'Super Administrator'));
 
       if (isTargetSuperAdmin) {
-        alert('Operation Denied: Super Administrators cannot drop another Super Administrator as all Super Admins share equal authority.');
+        alert('Operation Denied: Super Administrator rows are completely read-only and can only be changed through SUPER_ADMIN_EMAILS in .env.');
         return;
       }
 
@@ -2256,7 +2418,7 @@ const SuperAdminControlCenter: React.FC<SuperAdminControlCenterProps> = ({
                             </div>
                           </div>
                           <div className="shrink-0">
-                            {adm.role === 'Super Administrator' ? (
+                            {adm.isSuperAdmin || adm.role === 'Super Administrator' || adm.role === 'Super Admin' ? (
                               <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-purple-900/80 text-purple-200 border border-purple-600">
                                 SUPER ADMIN
                               </span>
@@ -2276,7 +2438,7 @@ const SuperAdminControlCenter: React.FC<SuperAdminControlCenterProps> = ({
                         {/* Role Selector */}
                         <div className="flex items-center justify-between gap-2 p-2 rounded-xl bg-[#140b24] border border-[#261238] text-xs">
                           <span className="text-[10px] text-slate-400 uppercase font-mono font-bold shrink-0">ASSIGNED ROLE:</span>
-                          {adm.role === 'Super Administrator' ? (
+                          {adm.isSuperAdmin || adm.role === 'Super Administrator' || adm.role === 'Super Admin' ? (
                             <span className="text-xs font-bold text-purple-300">Super Administrator</span>
                           ) : (
                             <select
@@ -2297,15 +2459,15 @@ const SuperAdminControlCenter: React.FC<SuperAdminControlCenterProps> = ({
                         {/* Footer: Added By & Action */}
                         <div className="flex items-center justify-between gap-2 pt-1 border-t border-purple-500/10">
                           <span className="text-[10px] font-mono text-slate-400">
-                            Added by: <strong className="text-slate-300">{formatAddedBy(adm.addedBy)}</strong>
+                            Added by: <strong className="text-slate-300">{formatAddedBy(adm.addedBy, adm.isSuperAdmin || adm.role === 'Super Administrator' || adm.role === 'Super Admin', adm.email)}</strong>
                           </span>
-                          {isCurrent ? (
-                            <span className="text-[10px] font-semibold text-purple-400 italic">Current Session (You)</span>
-                          ) : adm.isSuperAdmin || adm.role === 'Super Administrator' ? (
-                            <span className="px-2.5 py-1 bg-purple-950/40 text-purple-300 text-[10px] font-bold rounded border border-purple-700/50 flex items-center gap-1">
+                          {adm.isSuperAdmin || adm.role === 'Super Administrator' || adm.role === 'Super Admin' ? (
+                            <span className="px-2.5 py-1 bg-purple-950/40 text-purple-300 text-[10px] font-bold rounded border border-purple-700/50 flex items-center gap-1" title="Super Admins can only be changed via SUPER_ADMIN_EMAILS in .env">
                               <span className="material-symbols-outlined text-xs">shield</span>
-                              <span>Protected Super Admin</span>
+                              <span>Protected</span>
                             </span>
+                          ) : isCurrent ? (
+                            <span className="text-[10px] font-semibold text-purple-400 italic">Current Session (You)</span>
                           ) : (
                             <button
                               onClick={() =>
@@ -2367,7 +2529,7 @@ const SuperAdminControlCenter: React.FC<SuperAdminControlCenterProps> = ({
                               <div className="text-[11px] text-purple-400 font-mono">{adm.email}</div>
                             </td>
                             <td className="p-3.5">
-                              {adm.role === 'Super Administrator' ? (
+                              {adm.isSuperAdmin || adm.role === 'Super Administrator' || adm.role === 'Super Admin' ? (
                                 <span className="font-bold text-purple-300">Super Administrator</span>
                               ) : (
                                 <select
@@ -2385,7 +2547,7 @@ const SuperAdminControlCenter: React.FC<SuperAdminControlCenterProps> = ({
                               )}
                             </td>
                             <td className="p-3.5">
-                              {adm.role === 'Super Administrator' ? (
+                              {adm.isSuperAdmin || adm.role === 'Super Administrator' || adm.role === 'Super Admin' ? (
                                 <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-purple-900/80 text-purple-200 border border-purple-600">
                                   SUPER ADMIN
                                 </span>
@@ -2401,16 +2563,16 @@ const SuperAdminControlCenter: React.FC<SuperAdminControlCenterProps> = ({
                               )}
                             </td>
                             <td className="p-3.5 text-slate-400 text-[11px] font-mono">
-                              {formatAddedBy(adm.addedBy)}
+                              {formatAddedBy(adm.addedBy, adm.isSuperAdmin || adm.role === 'Super Administrator' || adm.role === 'Super Admin', adm.email)}
                             </td>
                             <td className="p-3.5 text-right">
-                              {isCurrent ? (
-                                <span className="text-[10px] font-semibold text-purple-400 italic">Current Session (You)</span>
-                              ) : adm.isSuperAdmin || adm.role === 'Super Administrator' ? (
-                                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-purple-950/50 text-purple-300 text-[10px] font-bold border border-purple-700/50" title="Super Administrators hold equal authority and cannot drop each other">
+                              {adm.isSuperAdmin || adm.role === 'Super Administrator' || adm.role === 'Super Admin' ? (
+                                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-purple-950/50 text-purple-300 text-[10px] font-bold border border-purple-700/50" title="Super Admins can only be changed via SUPER_ADMIN_EMAILS in .env">
                                   <span className="material-symbols-outlined text-xs">shield</span>
                                   <span>Protected</span>
                                 </span>
+                              ) : isCurrent ? (
+                                <span className="text-[10px] font-semibold text-purple-400 italic">Current Session (You)</span>
                               ) : (
                                 <button
                                   onClick={() =>
