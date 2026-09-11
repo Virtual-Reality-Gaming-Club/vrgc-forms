@@ -1,18 +1,34 @@
 import { NextResponse } from 'next/server';
 import crypto from 'crypto';
-import { db } from '@/lib/firebase';
-import { collection, getDocs, query, where } from 'firebase/firestore';
+import { adminDb } from '@/lib/firebase-admin';
 import { CONFIG } from '@/lib/config';
 import { authenticateRequest } from '@/lib/server/auth';
 
-function isAuthorizedAdminEmail(email: string | null): boolean {
+async function isAuthorizedAdminEmail(email: string | null): Promise<boolean> {
   if (!email) return false;
   const normalized = email.toLowerCase().trim();
-  return (
+
+  // 1. Authoritative server configuration lists
+  if (
     CONFIG.ADMIN_EMAILS.includes(normalized) ||
     CONFIG.SUPER_ADMIN_EMAILS.includes(normalized) ||
     CONFIG.PAYMENT_ADMIN_EMAILS.includes(normalized)
-  );
+  ) {
+    return true;
+  }
+
+  // 2. Dynamic Firestore admins / super_admins collections
+  try {
+    const adminDoc = await adminDb.collection('admins').doc(normalized).get();
+    if (adminDoc.exists) return true;
+
+    const superDoc = await adminDb.collection('super_admins').doc(normalized).get();
+    if (superDoc.exists) return true;
+  } catch (err) {
+    console.warn('[Payments Export CSV] Firestore admin check notice:', err);
+  }
+
+  return false;
 }
 
 function verifyExportSecret(adminKey: string | null): boolean {
@@ -43,7 +59,7 @@ export async function GET(request: Request) {
       }
 
       // 3. Verify that the authenticated user's email has admin authorization
-      const isAuthorizedAdmin = isAuthorizedAdminEmail(user.email);
+      const isAuthorizedAdmin = await isAuthorizedAdminEmail(user.email);
       if (!isAuthorizedAdmin) {
         return NextResponse.json(
           { error: 'Forbidden: Access to payment exports requires admin authorization.' },
@@ -52,16 +68,10 @@ export async function GET(request: Request) {
       }
     }
 
-    const colRef = collection(db, 'payments');
-    let q;
-
-    if (titleFilter) {
-      q = query(colRef, where('title', '==', titleFilter));
-    } else {
-      q = query(colRef);
-    }
-
-    const snapshot = await getDocs(q);
+    const paymentsCol = adminDb.collection('payments');
+    const snapshot = titleFilter
+      ? await paymentsCol.where('title', '==', titleFilter).get()
+      : await paymentsCol.get();
     const payments: any[] = [];
 
     snapshot.forEach((docSnap) => {

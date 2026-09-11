@@ -1,10 +1,24 @@
 import { NextResponse } from "next/server";
-import { db } from "@/lib/firebase";
-import { doc, getDoc, setDoc, deleteDoc, collection, query, where, getDocs, writeBatch } from "firebase/firestore";
+import crypto from "crypto";
+import { adminDb } from "@/lib/firebase-admin";
 import { CONFIG } from "@/lib/config";
 import { authenticateRequest } from "@/lib/server/auth";
 
 const TWELVE_HOURS_MS = 12 * 60 * 60 * 1000;
+
+async function generateUniqueTicketId(): Promise<string> {
+  // Generate cryptographically secure ticket ID: VRGC-SUP-XXXXXX (6 digits)
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const candidateId = `VRGC-SUP-${crypto.randomInt(100000, 1000000)}`;
+    const docSnap = await adminDb.collection("support_tickets").doc(candidateId).get();
+    if (!docSnap.exists) {
+      return candidateId;
+    }
+  }
+  // High-entropy fallback if 5 consecutive collisions occur
+  const entropy = crypto.randomBytes(3).toString("hex").toUpperCase();
+  return `VRGC-SUP-${Date.now().toString().slice(-4)}${entropy}`;
+}
 
 async function isAuthorizedToManageTickets(email: string | null): Promise<boolean> {
   if (!email) return false;
@@ -20,11 +34,11 @@ async function isAuthorizedToManageTickets(email: string | null): Promise<boolea
 
   // 2. Dynamic Firestore admins / super_admins collections
   try {
-    const adminDoc = await getDoc(doc(db, "admins", normalized));
-    if (adminDoc.exists()) return true;
+    const adminDoc = await adminDb.collection("admins").doc(normalized).get();
+    if (adminDoc.exists) return true;
 
-    const superDoc = await getDoc(doc(db, "super_admins", normalized));
-    if (superDoc.exists()) return true;
+    const superDoc = await adminDb.collection("super_admins").doc(normalized).get();
+    if (superDoc.exists) return true;
   } catch (err) {
     console.warn("[Support API] Admin authorization check notice:", err);
   }
@@ -35,27 +49,35 @@ async function isAuthorizedToManageTickets(email: string | null): Promise<boolea
 export async function POST(req: Request) {
   let ticketId = "VRGC-SUP-PENDING";
   try {
-    const body = await req.json();
+    const body = await req.json().catch(() => ({}));
     const { fullName, contactInfo, regNo, category, message } = body;
-    if (body.ticketId) {
-      ticketId = body.ticketId;
-    } else {
-      ticketId = `VRGC-SUP-${Math.floor(100000 + Math.random() * 900000)}`;
-    }
 
-    if (!fullName || !contactInfo || !message) {
+    if (
+      !fullName ||
+      !contactInfo ||
+      !message ||
+      typeof fullName !== "string" ||
+      typeof contactInfo !== "string" ||
+      typeof message !== "string" ||
+      !fullName.trim() ||
+      !contactInfo.trim() ||
+      !message.trim()
+    ) {
       return NextResponse.json(
         { error: "Missing required fields" },
         { status: 400 }
       );
     }
 
+    // Generate authoritative ticket ID server-side (ignore any client-supplied ticketId)
+    ticketId = await generateUniqueTicketId();
+
     const formattedRegNo = regNo ? String(regNo).trim().toUpperCase() : "Not provided";
     const nowIso = new Date().toISOString();
 
     // 1. Always record ticket in Firebase Firestore
     try {
-      await setDoc(doc(db, "support_tickets", ticketId), {
+      await adminDb.collection("support_tickets").doc(ticketId).set({
         ticketId,
         fullName: fullName.trim(),
         contactInfo: contactInfo.trim(),
@@ -75,11 +97,10 @@ export async function POST(req: Request) {
     // 2. Proactively sweep and purge any solved tickets older than 12 hours from Firebase
     try {
       const nowMs = Date.now();
-      const q = query(
-        collection(db, "support_tickets"),
-        where("status", "==", "solved")
-      );
-      const snap = await getDocs(q);
+      const snap = await adminDb
+        .collection("support_tickets")
+        .where("status", "==", "solved")
+        .get();
       const expiredRefs: any[] = [];
       snap.forEach((d) => {
         const data = d.data();
@@ -91,7 +112,7 @@ export async function POST(req: Request) {
         }
       });
       if (expiredRefs.length > 0) {
-        const batch = writeBatch(db);
+        const batch = adminDb.batch();
         expiredRefs.forEach((ref) => batch.delete(ref));
         await batch.commit();
         console.log(`[Support Desk API] Purged ${expiredRefs.length} expired ticket(s) from Firebase.`);
@@ -194,13 +215,12 @@ export async function DELETE(req: Request) {
     }
 
     // Delete direct doc
-    await deleteDoc(doc(db, "support_tickets", ticketId)).catch(() => {});
+    await adminDb.collection("support_tickets").doc(ticketId).delete().catch(() => {});
 
     // Also query and delete matching ticketId
-    const q = query(collection(db, "support_tickets"), where("ticketId", "==", ticketId));
-    const snap = await getDocs(q);
+    const snap = await adminDb.collection("support_tickets").where("ticketId", "==", ticketId).get();
     if (!snap.empty) {
-      const batch = writeBatch(db);
+      const batch = adminDb.batch();
       snap.forEach((d) => batch.delete(d.ref));
       await batch.commit();
     }

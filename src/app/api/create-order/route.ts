@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
-import { db } from '@/lib/firebase';
-import { doc, getDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
+import { adminDb } from '@/lib/firebase-admin';
+import { FieldValue } from 'firebase-admin/firestore';
 import { authenticateRequest } from '@/lib/server/auth';
 
 export async function POST(request: Request) {
@@ -22,17 +22,17 @@ export async function POST(request: Request) {
     }
 
     // 2. Fetch actual payment document from Firestore to prevent client tampering
-    const paymentDocRef = doc(db, 'payments', String(paymentId));
-    const paymentDocSnap = await getDoc(paymentDocRef);
+    const paymentDocRef = adminDb.collection('payments').doc(String(paymentId));
+    const paymentDocSnap = await paymentDocRef.get();
 
-    if (!paymentDocSnap.exists()) {
+    if (!paymentDocSnap.exists) {
       return NextResponse.json(
         { success: false, error: 'Invoice or payment record not found in database.' },
         { status: 404 }
       );
     }
 
-    const paymentData = paymentDocSnap.data();
+    const paymentData = paymentDocSnap.data() || {};
 
     // 3. Verify payment ownership against the cryptographically verified caller
     const paymentEmail = (paymentData.user_email || '').toLowerCase().trim();
@@ -129,10 +129,10 @@ export async function POST(request: Request) {
 
     // 7. Update payment status to 'Processing' in Firestore only after authorization and order creation succeed
     try {
-      await updateDoc(paymentDocRef, {
+      await paymentDocRef.update({
         razorpay_order_id: order.id,
         status: 'Processing',
-        updated_at: serverTimestamp(),
+        updated_at: FieldValue.serverTimestamp(),
       });
     } catch (dbErr) {
       console.warn('Firestore status update warning during order creation:', dbErr);

@@ -2,75 +2,149 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Maintenance mode flag & system configuration — readable and writable by authenticated users
+    // =========================================================================
+    // Core Reusable Authorization Functions
+    // =========================================================================
+
+    // Validates that the client request has an authenticated session
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Extracts normalized, lowercase email from authentication token
+    function userEmail() {
+      return request.auth.token.email != null ? request.auth.token.email.lower() : '';
+    }
+
+    // Checks whether the caller is a Super Admin.
+    // Derived strictly from the /super_admins collection, which is non-writable by clients.
+    function isSuperAdmin() {
+      return isAuthenticated() &&
+        exists(/databases/$(database)/documents/super_admins/$(userEmail()));
+    }
+
+    // Checks whether the caller is an Admin.
+    // Super Admins automatically satisfy Admin privilege.
+    // Admins must exist in /admins (which only Super Admins can manage).
+    function isAdmin() {
+      return isAuthenticated() && (
+        isSuperAdmin() ||
+        exists(/databases/$(database)/documents/admins/$(userEmail()))
+      );
+    }
+
+    // =========================================================================
+    // 1. System Configuration & Metadata
+    // =========================================================================
+    // Publicly readable so unauthenticated visitors receive real-time maintenance
+    // status and permissions matrix on the home page. Writable strictly by Super Admins.
     match /config/{docId} {
-      allow read: if request.auth != null;
-      allow write: if request.auth != null;
+      allow read: if true;
+      allow write: if isSuperAdmin();
     }
 
-    // Admins, Super Admins, and Roles collections
-    match /admins/{adminId} {
-      allow read: if request.auth != null;
-      allow write: if request.auth != null;
-    }
-
-    match /roles/{roleId} {
-      allow read: if request.auth != null;
-      allow write: if request.auth != null;
-    }
-
-    match /roles_registry/{roleId} {
-      allow read: if request.auth != null;
-      allow write: if request.auth != null;
-    }
-
+    // =========================================================================
+    // 2. Administrative & Role Registries
+    // =========================================================================
+    // Super Admins: Normal authenticated users can ONLY fetch their own record.
+    // Listing the collection is restricted to Super Admins to protect hidden identity.
+    // Client writes are completely disabled (write: false).
     match /super_admins/{superAdminId} {
-      allow read: if request.auth != null;
-      allow write: if request.auth != null;
+      allow get: if isAuthenticated() && (superAdminId == userEmail() || isSuperAdmin());
+      allow list: if isSuperAdmin();
+      allow write: if false;
     }
 
-    // Referrals candidate dossiers
-    match /referrals/{referralId} {
-      allow read: if request.auth != null;
-      allow write: if request.auth != null;
+    // Admins: Readable by authenticated users (needed for Referrals roster & Admin lists).
+    // Writable ONLY by Super Admins.
+    match /admins/{adminId} {
+      allow read: if isAuthenticated();
+      allow write: if isSuperAdmin();
     }
 
-    // Members & ID Cards collections
-    match /members/{memberId} {
-      allow read: if request.auth != null;
-      allow write: if request.auth != null;
+    // Roles: Users can only read their own role document.
+    // Listing all roles is restricted to Super Admins.
+    // Writable ONLY by Super Admins.
+    match /roles/{roleId} {
+      allow get: if isAuthenticated() && (roleId == userEmail() || isSuperAdmin());
+      allow list: if isSuperAdmin();
+      allow write: if isSuperAdmin();
     }
 
-    match /id_cards/{cardId} {
-      allow read: if request.auth != null;
-      allow write: if request.auth != null;
+    // Roles Registry: Unused legacy collection, writable ONLY by Super Admins.
+    match /roles_registry/{roleId} {
+      allow read: if false;
+      allow write: if isSuperAdmin();
     }
 
-    // Faculty collection — readable by all authenticated users, writable by admins
-    match /faculty/{facultyId} {
-      allow read: if request.auth != null;
-      allow write: if request.auth != null;
-    }
-
-    // Future Event Plans collection — readable by all authenticated users, writable by authenticated users (faculty & admin)
-    match /future_events/{eventId} {
-      allow read: if request.auth != null;
-      allow write: if request.auth != null;
-    }
-
+    // =========================================================================
+    // 3. Payments & Financial Records
+    // =========================================================================
+    // Direct client mutation is completely disabled. All payment creation,
+    // verification, updates, and webhook callbacks run via Firebase Admin SDK.
     match /payments/{paymentId} {
-      // Payer can read their own payment records, admins can read all, faculty can read if visible_to_faculty == true
-      allow read: if request.auth != null;
-
-      // Disallow direct unauthorized creation/updating of payment status & financial fields
-      allow create: if request.auth != null;
-      allow update: if request.auth != null; 
-      allow delete: if request.auth != null;
+      allow read: if isAuthenticated();
+      allow write: if false;
 
       match /attempts/{attemptId} {
-        allow read: if request.auth != null;
-        allow write: if request.auth != null;
+        allow read: if isAuthenticated();
+        allow write: if false;
       }
+    }
+
+    // =========================================================================
+    // 4. Members & ID Cards
+    // =========================================================================
+    // Member directory: Authenticated users can browse roster; writable only by Admins.
+    match /members/{memberId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    // ID Cards: Authenticated read (used by IDCard and Referrals components).
+    // Public ID verification runs server-side via Admin SDK.
+    // Authenticated users may create/update only their own dossier. Deletions require Admin.
+    match /id_cards/{cardId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAuthenticated() && (
+        isAdmin() || (
+          cardId == userEmail() &&
+          (!('email' in request.resource.data) || request.resource.data.email.lower() == userEmail())
+        )
+      );
+      allow delete: if isAdmin();
+    }
+
+    // =========================================================================
+    // 5. Faculty & Events
+    // =========================================================================
+    match /faculty/{facultyId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    match /future_events/{eventId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    // =========================================================================
+    // 6. Candidate Referrals
+    // =========================================================================
+    // Authenticated users can read referrals and submit candidate referrals under their own identity.
+    // Status updates (approvals/rejections) and record deletions are restricted to Admins.
+    match /referrals/{referralId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && (request.resource.data.referrerEmail == userEmail() || isAdmin());
+      allow update, delete: if isAdmin();
+    }
+
+    // =========================================================================
+    // 7. Explicit Catch-All Default Deny
+    // =========================================================================
+    // Unmatched documents across all databases/collections are denied by default.
+    match /{document=**} {
+      allow read, write: if false;
     }
   }
 }

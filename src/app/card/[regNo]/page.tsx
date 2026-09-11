@@ -1,7 +1,6 @@
 import React, { cache } from 'react';
 import { Metadata } from 'next';
-import { collection, query, where, getDocs, limit } from 'firebase/firestore';
-import { db } from '@/lib/firebase';
+import { adminDb } from '@/lib/firebase-admin';
 import VerifyCardClient from './VerifyCardClient';
 import { UnifiedMember } from './types';
 
@@ -42,64 +41,69 @@ const getMemberData = cache(async function getMemberData(regNo: string) {
   const regLower = regNo.toLowerCase();
 
   try {
-    if (db) {
-      let q = query(collection(db, 'id_cards'), where('registrationNumber', '==', regUpper));
-      let snapshot = await getDocs(q);
+    let snapshot = await adminDb
+      .collection('id_cards')
+      .where('registrationNumber', '==', regUpper)
+      .get();
 
-      if (snapshot.empty) {
-        q = query(collection(db, 'id_cards'), where('registrationNumber', '==', regNo));
-        snapshot = await getDocs(q);
-      }
-      if (snapshot.empty) {
-        q = query(collection(db, 'id_cards'), where('registrationNumber', '==', regLower));
-        snapshot = await getDocs(q);
-      }
-      if (snapshot.empty) {
-        q = query(collection(db, 'id_cards'), where('regNo', '==', regUpper));
-        snapshot = await getDocs(q);
-      }
+    if (snapshot.empty) {
+      snapshot = await adminDb
+        .collection('id_cards')
+        .where('registrationNumber', '==', regNo)
+        .get();
+    }
+    if (snapshot.empty) {
+      snapshot = await adminDb
+        .collection('id_cards')
+        .where('registrationNumber', '==', regLower)
+        .get();
+    }
+    if (snapshot.empty) {
+      snapshot = await adminDb
+        .collection('id_cards')
+        .where('regNo', '==', regUpper)
+        .get();
+    }
 
-      if (!snapshot.empty) {
-        snapshot.forEach(doc => {
-          member = doc.data();
+    if (!snapshot.empty) {
+      snapshot.forEach(doc => {
+        member = doc.data();
+      });
+
+      // Fetch small sample roster for orbital deck animation (limit 8 for instant speed)
+      try {
+        const allSnapshot = await adminDb.collection('id_cards').limit(8).get();
+        allSnapshot.forEach(docSnap => {
+          const d = docSnap.data();
+          const rNo = d.registrationNumber || d.regNo || docSnap.id;
+          if (rNo) {
+            const photo = formatSupabaseUrl(d.photoUrl || d.photo_url || d.photoURL || d.photo || d.image || d.imageUrl || '');
+            const avatar = formatSupabaseUrl(d.gifUrl || d.avatarUrl || d.avatar_url || d.avatarURL || d.avatar || '', true) || photo;
+            otherMembers.push({
+              id: rNo,
+              name: d.name || 'Member',
+              regNo: rNo,
+              phone: d.phone || 'N/A',
+              email: d.email || '',
+              photoUrl: photo,
+              imageUrl: photo,
+              avatarUrl: avatar,
+              assignedTeam: d.team || d.assignedTeam || 'Development',
+              position: d.position || d.role || 'Core Member',
+              role: d.position || d.role || 'Core Member',
+              rating: 4.9,
+              joinDate: d.submittedAt ? String(d.submittedAt).split('T')[0] : '2025-01-01',
+              specialization: `${d.team || 'Member'} • ${d.position || 'Core'}`,
+              fromFirestore: true,
+              fromCsv: false,
+            });
+          }
         });
-
-        // Fetch small sample roster for orbital deck animation (limit 8 for instant speed)
-        try {
-          const allQ = query(collection(db, 'id_cards'), limit(8));
-          const allSnapshot = await getDocs(allQ);
-          allSnapshot.forEach(docSnap => {
-            const d = docSnap.data();
-            const rNo = d.registrationNumber || d.regNo || docSnap.id;
-            if (rNo) {
-              const photo = formatSupabaseUrl(d.photoUrl || d.photo_url || d.photoURL || d.photo || d.image || d.imageUrl || '');
-              const avatar = formatSupabaseUrl(d.gifUrl || d.avatarUrl || d.avatar_url || d.avatarURL || d.avatar || '', true) || photo;
-              otherMembers.push({
-                id: rNo,
-                name: d.name || 'Member',
-                regNo: rNo,
-                phone: d.phone || 'N/A',
-                email: d.email || '',
-                photoUrl: photo,
-                imageUrl: photo,
-                avatarUrl: avatar,
-                assignedTeam: d.team || d.assignedTeam || 'Development',
-                position: d.position || d.role || 'Core Member',
-                role: d.position || d.role || 'Core Member',
-                rating: 4.9,
-                joinDate: d.submittedAt ? String(d.submittedAt).split('T')[0] : '2025-01-01',
-                specialization: `${d.team || 'Member'} • ${d.position || 'Core'}`,
-                fromFirestore: true,
-                fromCsv: false,
-              });
-            }
-          });
-        } catch (rErr) {
-          console.warn("Server roster fetch error:", rErr);
-        }
-      } else {
-        error = `No verified ID Card dossier found for registration number: ${regNo}`;
+      } catch (rErr) {
+        console.warn("Server roster fetch error:", rErr);
       }
+    } else {
+      error = `No verified ID Card dossier found for registration number: ${regNo}`;
     }
   } catch (err) {
     console.error("Server fetch error:", err);

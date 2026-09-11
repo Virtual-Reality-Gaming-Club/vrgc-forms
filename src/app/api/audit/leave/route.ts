@@ -1,16 +1,5 @@
 import { NextResponse } from 'next/server';
-import { db } from '@/lib/firebase';
-import {
-  doc,
-  getDoc,
-  updateDoc,
-  writeBatch,
-  getDocs,
-  query,
-  collection,
-  where,
-  limit,
-} from 'firebase/firestore';
+import { adminDb } from '@/lib/firebase-admin';
 import { authenticateRequest } from '@/lib/server/auth';
 
 const TWELVE_HOURS_MS = 12 * 60 * 60 * 1000;
@@ -31,10 +20,10 @@ async function handleLeaveSession(req: Request) {
     }
 
     // 2. Look up the existing session to enforce ownership
-    const sessionRef = doc(db, 'audit_sessions', sessionId);
-    const sessionSnap = await getDoc(sessionRef);
+    const sessionRef = adminDb.collection('audit_sessions').doc(sessionId);
+    const sessionSnap = await sessionRef.get();
 
-    if (!sessionSnap.exists()) {
+    if (!sessionSnap.exists) {
       return NextResponse.json({ ok: false, error: 'Session not found' }, { status: 404 });
     }
 
@@ -53,7 +42,7 @@ async function handleLeaveSession(req: Request) {
     const nowIso = body?.leftAt || new Date().toISOString();
 
     // 4. Mark this session as offline immediately in Firestore
-    await updateDoc(sessionRef, {
+    await sessionRef.update({
       status: 'offline',
       leftAt: nowIso,
     }).catch((err) => {
@@ -62,19 +51,19 @@ async function handleLeaveSession(req: Request) {
 
     // 5. Opportunistically purge any sessions older than 12 hours from the database
     const twelveHoursAgoIso = new Date(Date.now() - TWELVE_HOURS_MS).toISOString();
-    getDocs(
-      query(
-        collection(db, 'audit_sessions'),
-        where('enteredAt', '<=', twelveHoursAgoIso),
-        limit(25)
-      )
-    ).then((staleSnap) => {
-      if (!staleSnap.empty) {
-        const batch = writeBatch(db);
-        staleSnap.docs.forEach((d) => batch.delete(d.ref));
-        batch.commit().catch(() => {});
-      }
-    }).catch(() => {});
+    adminDb
+      .collection('audit_sessions')
+      .where('enteredAt', '<=', twelveHoursAgoIso)
+      .limit(25)
+      .get()
+      .then((staleSnap) => {
+        if (!staleSnap.empty) {
+          const batch = adminDb.batch();
+          staleSnap.docs.forEach((d) => batch.delete(d.ref));
+          batch.commit().catch(() => {});
+        }
+      })
+      .catch(() => {});
 
     return NextResponse.json({ ok: true, sessionId, status: 'offline' });
   } catch (err) {

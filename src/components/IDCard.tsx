@@ -6,6 +6,7 @@ import { signInWithPopup, signOut, onAuthStateChanged, User } from 'firebase/aut
 import { collection, onSnapshot, doc, deleteDoc, updateDoc, setDoc, getDoc, addDoc, getDocs, query, orderBy, limit } from 'firebase/firestore';
 import { supabase } from '../lib/supabase';
 import { CONFIG } from '../lib/config';
+import { getAuthHeaders } from '@/lib/auth-client';
 import SpecularButton from './SpecularButton';
 
 interface IDCardProps {
@@ -626,16 +627,39 @@ const IDCard: React.FC<IDCardProps> = ({
 
       await setDoc(doc(db, 'id_cards', (currentUser.email || '').toLowerCase()), submissionData);
 
-      // Trigger Google Sheets sync upon submission including photoUrl, avatarUrl, qrCode, cardUrl
-      if (CONFIG.GOOGLE_SCRIPT_ID_CARD_URL) {
-        const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=140x140&color=0-0-0&bgcolor=ffffff&data=${encodeURIComponent(`https://vrgc.club/card/${submissionData.registrationNumber}`)}`;
-        const cardUrl = `https://vrgc.club/card/${submissionData.registrationNumber}`;
+      // Trigger Google Sheets sync upon submission via server endpoint
+      const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=140x140&color=0-0-0&bgcolor=ffffff&data=${encodeURIComponent(`https://vrgc.club/card/${submissionData.registrationNumber}`)}`;
+      const cardUrl = `https://vrgc.club/card/${submissionData.registrationNumber}`;
 
-        const sheetSyncUrl = `${CONFIG.GOOGLE_SCRIPT_ID_CARD_URL}?action=sync_idcard&email=${encodeURIComponent(submissionData.email)}&name=${encodeURIComponent(submissionData.name)}&regNo=${encodeURIComponent(submissionData.registrationNumber)}&registrationNumber=${encodeURIComponent(submissionData.registrationNumber)}&phone=${encodeURIComponent(submissionData.phone || '')}&team=${encodeURIComponent(submissionData.team || '')}&position=${encodeURIComponent(submissionData.position || 'Member')}&photoUrl=${encodeURIComponent(submissionData.photoUrl || '')}&avatarUrl=${encodeURIComponent(submissionData.avatarUrl || '')}&avatar=${encodeURIComponent(submissionData.avatarUrl || '')}&qrCode=${encodeURIComponent(qrCodeUrl)}&qrUrl=${encodeURIComponent(qrCodeUrl)}&cardUrl=${encodeURIComponent(cardUrl)}&submittedAt=${encodeURIComponent(submissionData.submittedAt || '')}&status=${encodeURIComponent(submissionData.status || 'Pending')}`;
-
-        fetch(sheetSyncUrl, { mode: 'no-cors' })
+      try {
+        const authHeaders = await getAuthHeaders().catch(() => ({}));
+        fetch('/api/sheets/id-card', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...authHeaders,
+          },
+          body: JSON.stringify({
+            action: 'sync_idcard',
+            email: submissionData.email,
+            name: submissionData.name,
+            regNo: submissionData.registrationNumber,
+            registrationNumber: submissionData.registrationNumber,
+            phone: submissionData.phone || '',
+            team: submissionData.team || '',
+            position: submissionData.position || 'Member',
+            photoUrl: submissionData.photoUrl || '',
+            avatarUrl: submissionData.avatarUrl || '',
+            qrCode: qrCodeUrl,
+            cardUrl: cardUrl,
+            submittedAt: submissionData.submittedAt || '',
+            status: submissionData.status || 'Pending',
+          }),
+        })
           .then(() => console.log("Google Sheets submission sync succeeded for:", submissionData.email))
           .catch(err => console.error("Google Sheets submission sync failed:", err));
+      } catch (syncErr) {
+        console.warn("Google Sheets submission sync notice:", syncErr);
       }
 
       setSubmitSuccess(true);
@@ -683,11 +707,6 @@ const IDCard: React.FC<IDCardProps> = ({
 
   const handleSyncAllToSheets = async () => {
     if (sheetsCooldown > 0 || isSyncingSheets) return;
-    if (!CONFIG.GOOGLE_SCRIPT_ID_CARD_URL) {
-      setSyncToastMessage("Google Script URL is not configured.");
-      setTimeout(() => setSyncToastMessage(null), 4000);
-      return;
-    }
 
     setIsSyncingSheets(true);
 
@@ -701,21 +720,39 @@ const IDCard: React.FC<IDCardProps> = ({
       const sortedCandidates = activeCandidates.sort((a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime());
       setCandidates(sortedCandidates);
 
-      const syncPromises = sortedCandidates.map(c => {
-        const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=140x140&color=0-0-0&bgcolor=ffffff&data=${encodeURIComponent(`https://vrgc.club/card/${c.registrationNumber}`)}`;
-        const cardUrl = `https://vrgc.club/card/${c.registrationNumber}`;
-
-        const sheetSyncUrl = `${CONFIG.GOOGLE_SCRIPT_ID_CARD_URL}?action=sync_idcard&email=${encodeURIComponent(c.email)}&name=${encodeURIComponent(c.name)}&regNo=${encodeURIComponent(c.registrationNumber)}&registrationNumber=${encodeURIComponent(c.registrationNumber)}&phone=${encodeURIComponent(c.phone || '')}&team=${encodeURIComponent(c.team || '')}&position=${encodeURIComponent(c.position || 'Member')}&photoUrl=${encodeURIComponent(c.photoUrl || '')}&avatarUrl=${encodeURIComponent(c.avatarUrl || '')}&avatar=${encodeURIComponent(c.avatarUrl || '')}&qrCode=${encodeURIComponent(qrCodeUrl)}&qrUrl=${encodeURIComponent(qrCodeUrl)}&cardUrl=${encodeURIComponent(cardUrl)}&submittedAt=${encodeURIComponent(c.submittedAt || '')}&status=${encodeURIComponent(c.status || 'Pending')}`;
-        return fetch(sheetSyncUrl, { mode: 'no-cors' })
-          .then(() => true)
-          .catch(err => {
-            console.error("Sheets row sync failed:", err);
-            return false;
-          });
+      const authHeaders = await getAuthHeaders();
+      const res = await fetch('/api/sheets/id-card', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...authHeaders,
+        },
+        body: JSON.stringify({
+          action: 'bulk_sync',
+          candidates: sortedCandidates.map(c => {
+            const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=140x140&color=0-0-0&bgcolor=ffffff&data=${encodeURIComponent(`https://vrgc.club/card/${c.registrationNumber}`)}`;
+            const cardUrl = `https://vrgc.club/card/${c.registrationNumber}`;
+            return {
+              email: c.email,
+              name: c.name,
+              regNo: c.registrationNumber,
+              registrationNumber: c.registrationNumber,
+              phone: c.phone || '',
+              team: c.team || '',
+              position: c.position || 'Member',
+              photoUrl: c.photoUrl || '',
+              avatarUrl: c.avatarUrl || '',
+              qrCode: qrCodeUrl,
+              cardUrl: cardUrl,
+              submittedAt: c.submittedAt || '',
+              status: c.status || 'Pending',
+            };
+          }),
+        }),
       });
 
-      const results = await Promise.allSettled(syncPromises);
-      const successCount = results.filter(r => r.status === 'fulfilled' && r.value).length;
+      const data = await res.json().catch(() => ({}));
+      const successCount = typeof data?.count === 'number' ? data.count : sortedCandidates.length;
 
       setSyncToastMessage(`Parallel sync completed! Transmitted ${successCount} active ID record(s) to Google Sheets.`);
       setTimeout(() => setSyncToastMessage(null), 4500);
@@ -797,12 +834,24 @@ const IDCard: React.FC<IDCardProps> = ({
       // Instantly remove from local candidates state array
       setCandidates(prev => prev.filter(c => c.email.toLowerCase() !== candidate.email.toLowerCase()));
 
-      // Send deletion signal to Google Sheets via Apps Script
-      if (CONFIG.GOOGLE_SCRIPT_ID_CARD_URL) {
-        const deleteSheetUrl = `${CONFIG.GOOGLE_SCRIPT_ID_CARD_URL}?action=delete_idcard&email=${encodeURIComponent(candidate.email)}`;
-        fetch(deleteSheetUrl, { mode: 'no-cors' })
+      // Send deletion signal to Google Sheets via server endpoint
+      try {
+        const authHeaders = await getAuthHeaders();
+        fetch('/api/sheets/id-card', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...authHeaders,
+          },
+          body: JSON.stringify({
+            action: 'delete_idcard',
+            email: candidate.email,
+          }),
+        })
           .then(() => console.log("Sent deletion notification to Google Sheets for:", candidate.email))
           .catch(err => console.error("Sheets deletion call failed:", err));
+      } catch (delErr) {
+        console.error("Sheets deletion call error:", delErr);
       }
 
       // Close preview modal if deleting current candidate
@@ -848,13 +897,37 @@ const IDCard: React.FC<IDCardProps> = ({
           : c
       ));
 
-      // Trigger status update in Google Sheets
-      if (CONFIG.GOOGLE_SCRIPT_ID_CARD_URL) {
+      // Trigger status update in Google Sheets via server endpoint
+      try {
         const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=140x140&color=0-0-0&bgcolor=ffffff&data=${encodeURIComponent(`https://vrgc.club/card/${candidate.registrationNumber}`)}`;
         const cardUrl = `https://vrgc.club/card/${candidate.registrationNumber}`;
 
-        const statusSyncUrl = `${CONFIG.GOOGLE_SCRIPT_ID_CARD_URL}?action=sync_idcard&email=${encodeURIComponent(candidate.email)}&name=${encodeURIComponent(candidate.name)}&regNo=${encodeURIComponent(candidate.registrationNumber)}&registrationNumber=${encodeURIComponent(candidate.registrationNumber)}&phone=${encodeURIComponent(candidate.phone || '')}&team=${encodeURIComponent(candidate.team || '')}&position=${encodeURIComponent(candidate.position || 'Member')}&photoUrl=${encodeURIComponent(candidate.photoUrl || '')}&avatarUrl=${encodeURIComponent(candidate.avatarUrl || '')}&avatar=${encodeURIComponent(candidate.avatarUrl || '')}&qrCode=${encodeURIComponent(qrCodeUrl)}&qrUrl=${encodeURIComponent(qrCodeUrl)}&cardUrl=${encodeURIComponent(cardUrl)}&submittedAt=${encodeURIComponent(candidate.submittedAt || '')}&status=${encodeURIComponent(newStatus)}`;
-        fetch(statusSyncUrl, { mode: 'no-cors' }).catch(err => console.error("Sheets status sync error:", err));
+        const authHeaders = await getAuthHeaders();
+        fetch('/api/sheets/id-card', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...authHeaders,
+          },
+          body: JSON.stringify({
+            action: 'sync_idcard',
+            email: candidate.email,
+            name: candidate.name,
+            regNo: candidate.registrationNumber,
+            registrationNumber: candidate.registrationNumber,
+            phone: candidate.phone || '',
+            team: candidate.team || '',
+            position: candidate.position || 'Member',
+            photoUrl: candidate.photoUrl || '',
+            avatarUrl: candidate.avatarUrl || '',
+            qrCode: qrCodeUrl,
+            cardUrl: cardUrl,
+            submittedAt: candidate.submittedAt || '',
+            status: newStatus,
+          }),
+        }).catch(err => console.error("Sheets status sync error:", err));
+      } catch (toggleErr) {
+        console.error("Sheets status sync trigger error:", toggleErr);
       }
 
       if (previewCandidate && previewCandidate.email.toLowerCase() === candidate.email.toLowerCase()) {

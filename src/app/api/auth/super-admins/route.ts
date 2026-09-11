@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
-import { db } from '@/lib/firebase';
-import { doc, getDoc } from 'firebase/firestore';
+import { adminDb } from '@/lib/firebase-admin';
 import { CONFIG } from '@/lib/config';
 import { authenticateRequest } from '@/lib/server/auth';
 
@@ -18,11 +17,11 @@ async function isAuthorizedCaller(email: string | null): Promise<boolean> {
 
   // 2. Dynamic Firestore super_admins & admins collections
   try {
-    const superDoc = await getDoc(doc(db, 'super_admins', normalized));
-    if (superDoc.exists()) return true;
+    const superDoc = await adminDb.collection('super_admins').doc(normalized).get();
+    if (superDoc.exists) return true;
 
-    const adminDoc = await getDoc(doc(db, 'admins', normalized));
-    if (adminDoc.exists()) return true;
+    const adminDoc = await adminDb.collection('admins').doc(normalized).get();
+    if (adminDoc.exists) return true;
   } catch (err) {
     console.warn('[SuperAdmins API] Admin check fallback notice:', err);
   }

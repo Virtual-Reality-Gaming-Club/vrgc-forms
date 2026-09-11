@@ -1,7 +1,6 @@
 "use client";
 
 import React, { useState } from 'react';
-import { CONFIG } from '../lib/config';
 
 interface TicketsProps {
   onRedirect?: () => void;
@@ -64,22 +63,18 @@ const Tickets: React.FC<TicketsProps> = ({ onRedirect }) => {
       if (onRedirect) onRedirect();
     };
 
-    if (!CONFIG.GOOGLE_SCRIPT_REFERRAL_URL) {
-      setTimeout(() => {
-        handleSuccess();
-      }, 400);
-      return;
-    }
-
     try {
-      await fetch(CONFIG.GOOGLE_SCRIPT_REFERRAL_URL, {
+      const res = await fetch('/api/sheets/referral', {
         method: 'POST',
-        mode: 'no-cors',
         headers: {
-          'Content-Type': 'text/plain;charset=utf-8',
+          'Content-Type': 'application/json',
         },
         body: JSON.stringify(payload),
       });
+
+      if (!res.ok) {
+        throw new Error('Submission failed');
+      }
 
       handleSuccess();
     } catch (error) {

@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import crypto from 'crypto';
-import { db } from '@/lib/firebase';
-import { doc, getDoc, updateDoc, addDoc, collection, serverTimestamp, getDocs } from 'firebase/firestore';
+import { adminDb } from '@/lib/firebase-admin';
+import { FieldValue } from 'firebase-admin/firestore';
 
 export async function POST(request: Request) {
   try {
@@ -9,17 +9,28 @@ export async function POST(request: Request) {
     const signature = request.headers.get('x-razorpay-signature');
     const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET || process.env.RAZORPAY_KEY_SECRET;
 
-    // Optional Webhook Signature Verification
-    if (signature && webhookSecret) {
-      const expectedSignature = crypto
-        .createHmac('sha256', webhookSecret)
-        .update(rawBody)
-        .digest('hex');
+    if (!webhookSecret) {
+      console.error('Razorpay Webhook error: Webhook secret is not configured on server.');
+      return NextResponse.json({ success: false, error: 'Webhook secret not configured' }, { status: 500 });
+    }
 
-      if (expectedSignature !== signature) {
-        console.warn('Razorpay Webhook signature mismatch.');
-        return NextResponse.json({ success: false, error: 'Invalid webhook signature' }, { status: 400 });
-      }
+    if (!signature) {
+      console.warn('Razorpay Webhook rejected: Missing x-razorpay-signature header.');
+      return NextResponse.json({ success: false, error: 'Missing webhook signature' }, { status: 400 });
+    }
+
+    const expectedSignature = crypto
+      .createHmac('sha256', webhookSecret)
+      .update(rawBody)
+      .digest('hex');
+
+    const isSignatureValid =
+      expectedSignature.length === signature.length &&
+      crypto.timingSafeEqual(Buffer.from(expectedSignature), Buffer.from(signature));
+
+    if (!isSignatureValid) {
+      console.warn('Razorpay Webhook signature mismatch.');
+      return NextResponse.json({ success: false, error: 'Invalid webhook signature' }, { status: 400 });
     }
 
     const payload = JSON.parse(rawBody);
@@ -35,8 +46,7 @@ export async function POST(request: Request) {
       const amountPaise = Number(paymentEntity.amount) || Number(orderEntity.amount) || 0;
       const targetPaymentId = paymentEntity.notes?.paymentId || '';
 
-      const paymentsCol = collection(db, 'payments');
-      const allDocsSnap = await getDocs(paymentsCol);
+      const allDocsSnap = await adminDb.collection('payments').get();
 
       for (const pDoc of allDocsSnap.docs) {
         const pData = pDoc.data();
@@ -57,20 +67,20 @@ export async function POST(request: Request) {
             ? new Date(paymentEntity.created_at * 1000).toISOString()
             : new Date().toISOString();
 
-          await updateDoc(pDoc.ref, {
+          await pDoc.ref.update({
             status: 'Paid',
             razorpay_order_id: razorpayOrderId,
             razorpay_payment_id: razorpayPaymentId,
             payment_method: paymentEntity.method ? `Razorpay (${String(paymentEntity.method).toUpperCase()})` : 'Razorpay Online',
             paid_at: paidAtTime,
-            updated_at: serverTimestamp(),
+            updated_at: FieldValue.serverTimestamp(),
             error_description: '',
           });
 
           // Log transaction attempt subdocument
           try {
-            const attemptsCol = collection(db, 'payments', docId, 'attempts');
-            await addDoc(attemptsCol, {
+            const attemptsCol = adminDb.collection('payments').doc(docId).collection('attempts');
+            await attemptsCol.add({
               payment_id: docId,
               user_email: docEmail,
               candidate_name: pData.candidate_name || '',
@@ -83,8 +93,8 @@ export async function POST(request: Request) {
               razorpay_order_id: razorpayOrderId,
               razorpay_payment_id: razorpayPaymentId,
               paid_at: paidAtTime,
-              created_at: serverTimestamp(),
-              updated_at: serverTimestamp(),
+              created_at: FieldValue.serverTimestamp(),
+              updated_at: FieldValue.serverTimestamp(),
               source: 'razorpay-webhook',
             });
           } catch (e) {

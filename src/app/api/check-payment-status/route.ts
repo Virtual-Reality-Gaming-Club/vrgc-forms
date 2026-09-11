@@ -1,17 +1,7 @@
 import { NextResponse } from 'next/server';
 import Razorpay from 'razorpay';
-import { db } from '@/lib/firebase';
-import {
-  doc,
-  getDoc,
-  updateDoc,
-  addDoc,
-  collection,
-  serverTimestamp,
-  getDocs,
-  query,
-  where,
-} from 'firebase/firestore';
+import { adminDb } from '@/lib/firebase-admin';
+import { FieldValue } from 'firebase-admin/firestore';
 import { authenticateRequest } from '@/lib/server/auth';
 import { CONFIG } from '@/lib/config';
 
@@ -30,11 +20,11 @@ async function isAuthorizedAdmin(email: string | null): Promise<boolean> {
 
   // 2. Dynamic Firestore admin collections
   try {
-    const adminDoc = await getDoc(doc(db, 'admins', normalized));
-    if (adminDoc.exists()) return true;
+    const adminDoc = await adminDb.collection('admins').doc(normalized).get();
+    if (adminDoc.exists) return true;
 
-    const superDoc = await getDoc(doc(db, 'super_admins', normalized));
-    if (superDoc.exists()) return true;
+    const superDoc = await adminDb.collection('super_admins').doc(normalized).get();
+    if (superDoc.exists) return true;
   } catch (err) {
     console.warn('Admin authorization check notice:', err);
   }
@@ -66,9 +56,9 @@ async function logTransactionToFirestore(tx: {
 }) {
   try {
     if (tx.payment_id) {
-      const attemptsCol = collection(db, 'payments', tx.payment_id, 'attempts');
-      const existingSnap = await getDocs(attemptsCol);
-      let duplicateDocRef = null;
+      const attemptsCol = adminDb.collection('payments').doc(tx.payment_id).collection('attempts');
+      const existingSnap = await attemptsCol.get();
+      let duplicateDocRef: any = null;
 
       existingSnap.forEach((dSnap) => {
         const dData = dSnap.data();
@@ -82,20 +72,20 @@ async function logTransactionToFirestore(tx: {
       });
 
       if (duplicateDocRef) {
-        await updateDoc(duplicateDocRef, {
+        await duplicateDocRef.update({
           ...tx,
-          updated_at: serverTimestamp(),
+          updated_at: FieldValue.serverTimestamp(),
         });
       } else {
-        await addDoc(attemptsCol, {
+        await attemptsCol.add({
           ...tx,
           user_email: (tx.user_email || 'unknown').toLowerCase(),
           payment_title: tx.payment_title || 'Unknown Payment',
           amount: tx.amount || 0,
           currency: tx.currency || 'INR',
           failed_at: tx.failed_at || (tx.status === 'Failed' ? new Date().toISOString() : ''),
-          created_at: serverTimestamp(),
-          updated_at: serverTimestamp(),
+          created_at: FieldValue.serverTimestamp(),
+          updated_at: FieldValue.serverTimestamp(),
           source: 'vrgc-forms',
         });
       }
@@ -233,7 +223,7 @@ async function processRazorpaySync(docs: Array<any>, isSingleTarget: boolean = f
         : new Date().toISOString();
 
       // UPDATE FIRESTORE DOCUMENT WITH EXACT ACCURATE RAZORPAY DETAILS
-      await updateDoc(pDoc.ref, {
+      await pDoc.ref.update({
         status: 'Paid',
         razorpay_order_id: paidOrderId,
         razorpay_payment_id: paidPaymentId,
@@ -243,7 +233,7 @@ async function processRazorpaySync(docs: Array<any>, isSingleTarget: boolean = f
         razorpay_wallet: wallet,
         razorpay_contact: contact,
         paid_at: paidAtTime,
-        updated_at: serverTimestamp(),
+        updated_at: FieldValue.serverTimestamp(),
         error_description: '',
       });
 
@@ -305,11 +295,11 @@ async function processRazorpaySync(docs: Array<any>, isSingleTarget: boolean = f
       // Transition to Failed ONLY if backend confirms all attempts failed or session is stale
       if (allAttemptsFailed || isStaleTimeout) {
         const nowIso = new Date().toISOString();
-        await updateDoc(pDoc.ref, {
+        await pDoc.ref.update({
           status: 'Failed',
           failed_at: nowIso,
           error_description: failureReason,
-          updated_at: serverTimestamp(),
+          updated_at: FieldValue.serverTimestamp(),
         });
 
         await logTransactionToFirestore({
@@ -365,25 +355,40 @@ export async function POST(request: Request) {
     }
 
     const body = await request.json().catch(() => ({}));
-    const { paymentId } = body;
+    const { paymentId, razorpay_order_id } = body;
 
     const callerEmail = (user.email || '').toLowerCase().trim();
     const callerUid = user.uid;
     const isAdmin = await isAuthorizedAdmin(callerEmail);
 
-    if (paymentId) {
-      // Single payment target check
-      const paymentDocRef = doc(db, 'payments', String(paymentId));
-      const paymentDocSnap = await getDoc(paymentDocRef);
+    const targetPaymentId = paymentId ? String(paymentId).trim() : null;
+    const targetOrderId = razorpay_order_id ? String(razorpay_order_id).trim() : null;
 
-      if (!paymentDocSnap.exists()) {
+    if (targetPaymentId || targetOrderId) {
+      // Single payment target check
+      let paymentDocSnap: any = null;
+      if (targetPaymentId) {
+        const paymentDocRef = adminDb.collection('payments').doc(targetPaymentId);
+        paymentDocSnap = await paymentDocRef.get();
+      } else if (targetOrderId) {
+        const qSnap = await adminDb
+          .collection('payments')
+          .where('razorpay_order_id', '==', targetOrderId)
+          .limit(1)
+          .get();
+        if (!qSnap.empty) {
+          paymentDocSnap = qSnap.docs[0];
+        }
+      }
+
+      if (!paymentDocSnap || !paymentDocSnap.exists) {
         return NextResponse.json(
           { success: false, error: 'Invoice or payment record not found in database.' },
           { status: 404 }
         );
       }
 
-      const pData = paymentDocSnap.data();
+      const pData = paymentDocSnap.data() || {};
       const docEmail = (pData.user_email || '').toLowerCase().trim();
       const docUserId = pData.user_id ? String(pData.user_id).trim() : null;
 
@@ -403,20 +408,30 @@ export async function POST(request: Request) {
       return NextResponse.json(result);
     }
 
-    // Broad sync (no specific paymentId provided)
+    // Broad sync (no specific paymentId or orderId provided)
     let docsToProcess: any[] = [];
     if (isAdmin) {
       // Authoritative admin: process full collection
-      const allDocsSnap = await getDocs(collection(db, 'payments'));
+      const allDocsSnap = await adminDb.collection('payments').get();
       docsToProcess = allDocsSnap.docs;
     } else {
-      // Normal authenticated user: scope strictly to payments owned by caller
-      const userPaymentsQuery = query(
-        collection(db, 'payments'),
-        where('user_email', '==', callerEmail)
-      );
-      const userDocsSnap = await getDocs(userPaymentsQuery);
-      docsToProcess = userDocsSnap.docs;
+      // Normal authenticated user: scope strictly to payments owned by caller (via user_email or user_id)
+      const userDocsMap = new Map<string, any>();
+      if (callerEmail) {
+        const emailDocsSnap = await adminDb
+          .collection('payments')
+          .where('user_email', '==', callerEmail)
+          .get();
+        emailDocsSnap.docs.forEach((doc) => userDocsMap.set(doc.id, doc));
+      }
+      if (callerUid) {
+        const uidDocsSnap = await adminDb
+          .collection('payments')
+          .where('user_id', '==', callerUid)
+          .get();
+        uidDocsSnap.docs.forEach((doc) => userDocsMap.set(doc.id, doc));
+      }
+      docsToProcess = Array.from(userDocsMap.values());
     }
 
     const result = await processRazorpaySync(docsToProcess, false);
@@ -440,24 +455,40 @@ export async function GET(request: Request) {
 
     const { searchParams } = new URL(request.url);
     const paymentId = searchParams.get('paymentId');
+    const razorpayOrderId = searchParams.get('razorpay_order_id');
+
+    const targetPaymentId = paymentId ? paymentId.trim() : null;
+    const targetOrderId = razorpayOrderId ? razorpayOrderId.trim() : null;
 
     const callerEmail = (user.email || '').toLowerCase().trim();
     const callerUid = user.uid;
     const isAdmin = await isAuthorizedAdmin(callerEmail);
 
-    if (paymentId) {
+    if (targetPaymentId || targetOrderId) {
       // Single payment target check
-      const paymentDocRef = doc(db, 'payments', String(paymentId));
-      const paymentDocSnap = await getDoc(paymentDocRef);
+      let paymentDocSnap: any = null;
+      if (targetPaymentId) {
+        const paymentDocRef = adminDb.collection('payments').doc(targetPaymentId);
+        paymentDocSnap = await paymentDocRef.get();
+      } else if (targetOrderId) {
+        const qSnap = await adminDb
+          .collection('payments')
+          .where('razorpay_order_id', '==', targetOrderId)
+          .limit(1)
+          .get();
+        if (!qSnap.empty) {
+          paymentDocSnap = qSnap.docs[0];
+        }
+      }
 
-      if (!paymentDocSnap.exists()) {
+      if (!paymentDocSnap || !paymentDocSnap.exists) {
         return NextResponse.json(
           { success: false, error: 'Invoice or payment record not found in database.' },
           { status: 404 }
         );
       }
 
-      const pData = paymentDocSnap.data();
+      const pData = paymentDocSnap.data() || {};
       const docEmail = (pData.user_email || '').toLowerCase().trim();
       const docUserId = pData.user_id ? String(pData.user_id).trim() : null;
 
@@ -477,16 +508,33 @@ export async function GET(request: Request) {
       return NextResponse.json(result);
     }
 
-    // Broad sync on GET requires admin privileges (prevents payment enumeration across users)
-    if (!isAdmin) {
-      return NextResponse.json(
-        { success: false, error: 'Forbidden: Full payment status synchronization requires admin privileges.' },
-        { status: 403 }
-      );
+    // Broad sync on GET:
+    let docsToProcess: any[] = [];
+    if (isAdmin) {
+      // Authoritative admin: process full collection
+      const allDocsSnap = await adminDb.collection('payments').get();
+      docsToProcess = allDocsSnap.docs;
+    } else {
+      // Normal authenticated user: scope strictly to payments owned by caller (via user_email or user_id)
+      const userDocsMap = new Map<string, any>();
+      if (callerEmail) {
+        const emailDocsSnap = await adminDb
+          .collection('payments')
+          .where('user_email', '==', callerEmail)
+          .get();
+        emailDocsSnap.docs.forEach((doc) => userDocsMap.set(doc.id, doc));
+      }
+      if (callerUid) {
+        const uidDocsSnap = await adminDb
+          .collection('payments')
+          .where('user_id', '==', callerUid)
+          .get();
+        uidDocsSnap.docs.forEach((doc) => userDocsMap.set(doc.id, doc));
+      }
+      docsToProcess = Array.from(userDocsMap.values());
     }
 
-    const allDocsSnap = await getDocs(collection(db, 'payments'));
-    const result = await processRazorpaySync(allDocsSnap.docs, false);
+    const result = await processRazorpaySync(docsToProcess, false);
     return NextResponse.json(result);
   } catch (error: any) {
     console.error('Error in GET check-payment-status API:', error);
