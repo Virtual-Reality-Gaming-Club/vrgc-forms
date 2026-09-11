@@ -52,10 +52,10 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: 'Invalid title filter parameter.' }, { status: 400 });
     }
 
-    const rawAdminKey = searchParams.get('key') || request.headers.get('x-admin-key');
+    const rawAdminKey = request.headers.get('x-admin-key');
     const adminKey = rawAdminKey && rawAdminKey.length <= 128 ? rawAdminKey.trim() : null;
 
-    // 1. Check server-side export secret (for automated backups/scripts)
+    // 1. Check server-side export secret header (for automated backups/scripts)
     const isAuthorizedSecret = verifyExportSecret(adminKey);
 
     if (!isAuthorizedSecret) {
