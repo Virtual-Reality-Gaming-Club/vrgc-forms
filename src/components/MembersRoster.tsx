@@ -5,7 +5,7 @@ import { createPortal } from 'react-dom';
 import { collection, getDocs, doc, setDoc, updateDoc, deleteDoc, query, where } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { useAuth } from '@/lib/auth-context';
-import * as XLSX from 'xlsx';
+import readXlsxFile from 'read-excel-file/browser';
 import {
   ClubMetadata,
   DEFAULT_CLUB_METADATA,
@@ -114,6 +114,67 @@ export function extractMemberTeams(rawTeamString: string): string[] {
   }
 
   return [str];
+}
+
+function sheetRowsToObjects(rows: any[][]): Record<string, any>[] {
+  if (!rows || rows.length < 2) return [];
+  const headers = (rows[0] || []).map((cell) => (cell != null ? String(cell).trim() : ''));
+  const objects: Record<string, any>[] = [];
+
+  for (let r = 1; r < rows.length; r++) {
+    const row = rows[r];
+    if (!row || row.length === 0) continue;
+    const hasData = row.some((cell) => cell != null && String(cell).trim() !== '');
+    if (!hasData) continue;
+
+    const obj: Record<string, any> = {};
+    headers.forEach((header, colIndex) => {
+      if (header) {
+        const val = row[colIndex];
+        obj[header] = val != null ? String(val).trim() : '';
+      }
+    });
+    objects.push(obj);
+  }
+  return objects;
+}
+
+function parseCSV(text: string): Record<string, any>[] {
+  const lines: string[][] = [];
+  let currentRow: string[] = [''];
+  let inQuotes = false;
+
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
+    const nextChar = text[i + 1];
+
+    if (char === '"') {
+      if (inQuotes && nextChar === '"') {
+        currentRow[currentRow.length - 1] += '"';
+        i++;
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (char === ',' && !inQuotes) {
+      currentRow.push('');
+    } else if ((char === '\r' || char === '\n') && !inQuotes) {
+      if (char === '\r' && nextChar === '\n') {
+        i++;
+      }
+      if (currentRow.length > 1 || currentRow[0] !== '') {
+        lines.push(currentRow);
+      }
+      currentRow = [''];
+    } else {
+      currentRow[currentRow.length - 1] += char;
+    }
+  }
+
+  if (currentRow.length > 1 || currentRow[0] !== '') {
+    lines.push(currentRow);
+  }
+
+  return sheetRowsToObjects(lines);
 }
 
 interface MembersRosterProps {
@@ -286,6 +347,7 @@ const MembersRoster: React.FC<MembersRosterProps> = ({ onRedirect, isAdmin: prop
   };
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     loadAllMembers();
 
     const loadMetaAndPerms = async () => {
@@ -384,6 +446,7 @@ const MembersRoster: React.FC<MembersRosterProps> = ({ onRedirect, isAdmin: prop
 
   // Reset page limit back to PAGE_SIZE whenever user searches or changes filter
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setPageLimit(PAGE_SIZE);
   }, [searchQuery, selectedTeam, selectedPosition]);
 
@@ -462,11 +525,19 @@ const MembersRoster: React.FC<MembersRosterProps> = ({ onRedirect, isAdmin: prop
     setImportingFile(true);
 
     try {
-      const buffer = await file.arrayBuffer();
-      const workbook = XLSX.read(buffer, { type: 'array' });
-      const firstSheetName = workbook.SheetNames[0];
-      const worksheet = workbook.Sheets[firstSheetName];
-      const rawRows = XLSX.utils.sheet_to_json<Record<string, any>>(worksheet, { defval: '' });
+      let rawRows: Record<string, any>[] = [];
+      const fileName = file.name.toLowerCase();
+
+      if (fileName.endsWith('.csv') || file.type === 'text/csv') {
+        const text = await file.text();
+        rawRows = parseCSV(text);
+      } else {
+        const result = (await readXlsxFile(file)) as any;
+        const rows: any[][] = Array.isArray(result) && result.length > 0 && result[0] && Array.isArray(result[0].data)
+          ? result[0].data
+          : (result as any[][]);
+        rawRows = sheetRowsToObjects(rows);
+      }
 
       if (rawRows.length === 0) {
         throw new Error('No data found in uploaded file.');

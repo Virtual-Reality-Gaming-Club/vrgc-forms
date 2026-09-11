@@ -49,6 +49,14 @@ async function isAuthorizedToManageTickets(email: string | null): Promise<boolea
 export async function POST(req: Request) {
   let ticketId = "VRGC-SUP-PENDING";
   try {
+    const contentLength = req.headers.get("content-length");
+    if (contentLength && parseInt(contentLength, 10) > 65536) {
+      return NextResponse.json(
+        { error: "Payload too large. Maximum size is 64KB." },
+        { status: 413 }
+      );
+    }
+
     const body = await req.json().catch(() => ({}));
     const { fullName, contactInfo, regNo, category, message } = body;
 
@@ -58,10 +66,7 @@ export async function POST(req: Request) {
       !message ||
       typeof fullName !== "string" ||
       typeof contactInfo !== "string" ||
-      typeof message !== "string" ||
-      !fullName.trim() ||
-      !contactInfo.trim() ||
-      !message.trim()
+      typeof message !== "string"
     ) {
       return NextResponse.json(
         { error: "Missing required fields" },
@@ -69,21 +74,78 @@ export async function POST(req: Request) {
       );
     }
 
+    const cleanName = fullName.trim();
+    const cleanContact = contactInfo.trim();
+    const cleanMessage = message.trim();
+
+    if (!cleanName || !cleanContact || !cleanMessage) {
+      return NextResponse.json(
+        { error: "Missing required fields" },
+        { status: 400 }
+      );
+    }
+
+    if (cleanName.length < 2 || cleanName.length > 100) {
+      return NextResponse.json(
+        { error: "Full name must be between 2 and 100 characters." },
+        { status: 400 }
+      );
+    }
+
+    if (cleanContact.length < 3 || cleanContact.length > 150) {
+      return NextResponse.json(
+        { error: "Contact info must be between 3 and 150 characters." },
+        { status: 400 }
+      );
+    }
+
+    if (!cleanContact.includes("@") && !/\d{5,}/.test(cleanContact.replace(/[\s+-]/g, ""))) {
+      return NextResponse.json(
+        { error: "Please provide a valid contact email address or phone number." },
+        { status: 400 }
+      );
+    }
+
+    if (cleanMessage.length < 5 || cleanMessage.length > 3000) {
+      return NextResponse.json(
+        { error: "Message must be between 5 and 3,000 characters." },
+        { status: 400 }
+      );
+    }
+
+    const cleanRegNo = typeof regNo === "string" ? regNo.trim().toUpperCase() : "";
+    const formattedRegNo = cleanRegNo && cleanRegNo.length <= 30 && /^[A-Z0-9-]{1,30}$/.test(cleanRegNo)
+      ? cleanRegNo
+      : cleanRegNo ? cleanRegNo.slice(0, 30) : "Not provided";
+
+    const ALLOWED_CATEGORIES = [
+      "payment",
+      "idcard",
+      "membership",
+      "events",
+      "referrals",
+      "technical",
+      "registration",
+      "general",
+      "other",
+    ];
+    const cleanCategory = typeof category === "string" && ALLOWED_CATEGORIES.includes(category.trim().toLowerCase())
+      ? category.trim().toLowerCase()
+      : "general";
+
     // Generate authoritative ticket ID server-side (ignore any client-supplied ticketId)
     ticketId = await generateUniqueTicketId();
-
-    const formattedRegNo = regNo ? String(regNo).trim().toUpperCase() : "Not provided";
     const nowIso = new Date().toISOString();
 
     // 1. Always record ticket in Firebase Firestore
     try {
       await adminDb.collection("support_tickets").doc(ticketId).set({
         ticketId,
-        fullName: fullName.trim(),
-        contactInfo: contactInfo.trim(),
+        fullName: cleanName,
+        contactInfo: cleanContact,
         regNo: formattedRegNo,
-        category: category || "general",
-        message: message.trim(),
+        category: cleanCategory,
+        message: cleanMessage,
         status: "unsolved",
         solvedAt: null,
         createdAt: nowIso,
@@ -193,10 +255,11 @@ Automated message sent via VRGC Forms Technical Support Desk
 export async function DELETE(req: Request) {
   try {
     const { searchParams } = new URL(req.url);
-    const ticketId = searchParams.get("ticketId")?.trim().toUpperCase();
+    const rawTicketId = searchParams.get("ticketId");
+    const ticketId = typeof rawTicketId === "string" ? rawTicketId.trim().toUpperCase() : "";
 
-    if (!ticketId) {
-      return NextResponse.json({ error: "Missing ticketId parameter" }, { status: 400 });
+    if (!ticketId || ticketId.length < 5 || ticketId.length > 64 || !/^[A-Z0-9_-]{5,64}$/.test(ticketId)) {
+      return NextResponse.json({ error: "Missing or invalid ticketId parameter" }, { status: 400 });
     }
 
     // 1. Cryptographically verify Firebase ID token in Authorization header

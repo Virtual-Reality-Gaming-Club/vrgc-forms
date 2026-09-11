@@ -6,11 +6,21 @@ const TWELVE_HOURS_MS = 12 * 60 * 60 * 1000;
 
 async function handleLeaveSession(req: Request) {
   try {
-    const body = await req.json().catch(() => ({}));
-    const sessionId = body?.sessionId;
+    const contentLength = req.headers.get('content-length');
+    if (contentLength && parseInt(contentLength, 10) > 16384) {
+      return NextResponse.json({ ok: false, error: 'Payload too large' }, { status: 413 });
+    }
 
-    if (!sessionId || typeof sessionId !== 'string') {
+    const body = await req.json().catch(() => ({}));
+    const rawSessionId = body?.sessionId;
+
+    if (!rawSessionId || typeof rawSessionId !== 'string') {
       return NextResponse.json({ ok: false, error: 'Missing sessionId' }, { status: 400 });
+    }
+
+    const sessionId = rawSessionId.trim();
+    if (!sessionId || sessionId.length > 128 || sessionId.includes('/')) {
+      return NextResponse.json({ ok: false, error: 'Invalid sessionId format' }, { status: 400 });
     }
 
     // 1. Authenticate caller via Firebase ID token
@@ -39,7 +49,7 @@ async function handleLeaveSession(req: Request) {
       );
     }
 
-    const nowIso = body?.leftAt || new Date().toISOString();
+    const nowIso = new Date().toISOString();
 
     // 4. Mark this session as offline immediately in Firestore
     await sessionRef.update({

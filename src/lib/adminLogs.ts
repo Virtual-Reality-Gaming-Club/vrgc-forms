@@ -1,5 +1,4 @@
-import { collection, addDoc, serverTimestamp, getDocs, deleteDoc, doc, query, orderBy } from 'firebase/firestore';
-import { db } from './firebase';
+import { getAuthHeaders } from './auth-client';
 
 export const MAX_LOG_RETENTION_COUNT = 15;
 
@@ -26,36 +25,15 @@ interface LogAdminActionParams {
 }
 
 /**
- * Automatically prunes the Firestore `admin_logs` collection to keep only the latest 15 logs.
- * Any log beyond the top 15 most recent entries is permanently deleted from Firestore.
+ * Retained for backwards-compatibility; log retention pruning is enforced server-side.
  */
-export const purgeExpiredLogs = async (maxLogs = MAX_LOG_RETENTION_COUNT): Promise<number> => {
-  try {
-    const q = query(collection(db, 'admin_logs'), orderBy('timestamp', 'desc'));
-    const snap = await getDocs(q);
-    
-    if (snap.docs.length <= maxLogs) return 0;
-
-    // Everything after index (maxLogs - 1) should be deleted
-    const docsToDelete = snap.docs.slice(maxLogs);
-    let deletedCount = 0;
-
-    const deletions = docsToDelete.map(async (docSnap) => {
-      await deleteDoc(doc(db, 'admin_logs', docSnap.id));
-      deletedCount++;
-    });
-
-    await Promise.allSettled(deletions);
-    return deletedCount;
-  } catch (err) {
-    console.warn('[AdminLogs] Retention limit cleanup notice:', err);
-    return 0;
-  }
+export const purgeExpiredLogs = async (_maxLogs = MAX_LOG_RETENTION_COUNT): Promise<number> => {
+  return 0;
 };
 
 /**
- * Writes an admin action log entry to the `admin_logs` Firestore collection.
- * Automatically retains only the latest 15 logs in Firebase by pruning older ones in the background.
+ * Dispatches an admin action log entry to the secure server-side `/api/audit/logs` endpoint.
+ * Direct client mutations to `admin_logs` are forbidden by Firestore security rules.
  */
 export const logAdminAction = async ({
   adminEmail,
@@ -73,17 +51,26 @@ export const logAdminAction = async ({
       } catch {}
     }
 
-    await addDoc(collection(db, 'admin_logs'), {
-      adminEmail,
-      action,
-      targetEmail: targetEmail || null,
-      targetName: targetName || null,
-      details: details || null,
-      timestamp: serverTimestamp(),
-    });
+    const authHeaders = await getAuthHeaders();
+    if (!authHeaders.Authorization) {
+      console.warn('[AdminLogs] Skipped audit log write: No authenticated user session.');
+      return;
+    }
 
-    // Automatically enforce 15-logs retention limit in Firebase
-    purgeExpiredLogs(MAX_LOG_RETENTION_COUNT).catch(() => {});
+    await fetch('/api/audit/logs', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...authHeaders,
+      },
+      body: JSON.stringify({
+        action,
+        targetEmail: targetEmail || null,
+        targetName: targetName || null,
+        details: details || null,
+        performedBy: adminEmail ? adminEmail.split('@')[0] : 'Admin',
+      }),
+    });
   } catch (err) {
     console.error('[AdminLogs] Failed to write log entry:', err);
   }

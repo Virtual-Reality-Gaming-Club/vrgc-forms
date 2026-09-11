@@ -92,6 +92,11 @@ async function logTransactionToFirestore(tx: {
 
 export async function POST(request: Request) {
   try {
+    const contentLength = request.headers.get('content-length');
+    if (contentLength && parseInt(contentLength, 10) > 32768) {
+      return NextResponse.json({ success: false, error: 'Payload too large' }, { status: 413 });
+    }
+
     // 1. Cryptographically verify Firebase ID token
     const { user, errorResponse } = await authenticateRequest(request);
     if (errorResponse) {
@@ -111,10 +116,30 @@ export async function POST(request: Request) {
       currency = 'INR',
     } = body;
 
-    // Validate required fields
-    if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+    // Validate required fields and formats
+    if (
+      !razorpay_order_id ||
+      !razorpay_payment_id ||
+      !razorpay_signature ||
+      typeof razorpay_order_id !== 'string' ||
+      typeof razorpay_payment_id !== 'string' ||
+      typeof razorpay_signature !== 'string' ||
+      razorpay_signature.length !== 64 ||
+      !/^[0-9a-fA-F]{64}$/.test(razorpay_signature) ||
+      razorpay_order_id.length > 64 ||
+      !/^[A-Za-z0-9_-]{8,64}$/.test(razorpay_order_id) ||
+      razorpay_payment_id.length > 64 ||
+      !/^[A-Za-z0-9_-]{8,64}$/.test(razorpay_payment_id)
+    ) {
       return NextResponse.json(
-        { success: false, error: 'Missing required Razorpay verification parameters.' },
+        { success: false, error: 'Missing or invalid Razorpay verification parameters.' },
+        { status: 400 }
+      );
+    }
+
+    if (paymentId && (typeof paymentId !== 'string' || paymentId.length > 128 || paymentId.includes('/'))) {
+      return NextResponse.json(
+        { success: false, error: 'Invalid paymentId format.' },
         { status: 400 }
       );
     }

@@ -348,6 +348,11 @@ async function processRazorpaySync(docs: Array<any>, isSingleTarget: boolean = f
 
 export async function POST(request: Request) {
   try {
+    const contentLength = request.headers.get('content-length');
+    if (contentLength && parseInt(contentLength, 10) > 32768) {
+      return NextResponse.json({ success: false, error: 'Payload too large' }, { status: 413 });
+    }
+
     // 1. Cryptographically verify Firebase ID token
     const { user, errorResponse } = await authenticateRequest(request);
     if (errorResponse) {
@@ -361,8 +366,19 @@ export async function POST(request: Request) {
     const callerUid = user.uid;
     const isAdmin = await isAuthorizedAdmin(callerEmail);
 
-    const targetPaymentId = paymentId ? String(paymentId).trim() : null;
-    const targetOrderId = razorpay_order_id ? String(razorpay_order_id).trim() : null;
+    const rawPaymentId = typeof paymentId === 'string' ? paymentId.trim() : null;
+    const rawOrderId = typeof razorpay_order_id === 'string' ? razorpay_order_id.trim() : null;
+
+    if (rawPaymentId && (rawPaymentId.length > 128 || rawPaymentId.includes('/'))) {
+      return NextResponse.json({ success: false, error: 'Invalid paymentId format.' }, { status: 400 });
+    }
+
+    if (rawOrderId && (rawOrderId.length > 64 || !/^[A-Za-z0-9_-]{8,64}$/.test(rawOrderId))) {
+      return NextResponse.json({ success: false, error: 'Invalid razorpay_order_id format.' }, { status: 400 });
+    }
+
+    const targetPaymentId = rawPaymentId || null;
+    const targetOrderId = rawOrderId || null;
 
     if (targetPaymentId || targetOrderId) {
       // Single payment target check
@@ -457,8 +473,19 @@ export async function GET(request: Request) {
     const paymentId = searchParams.get('paymentId');
     const razorpayOrderId = searchParams.get('razorpay_order_id');
 
-    const targetPaymentId = paymentId ? paymentId.trim() : null;
-    const targetOrderId = razorpayOrderId ? razorpayOrderId.trim() : null;
+    const rawPaymentId = paymentId ? paymentId.trim() : null;
+    const rawOrderId = razorpayOrderId ? razorpayOrderId.trim() : null;
+
+    if (rawPaymentId && (rawPaymentId.length > 128 || rawPaymentId.includes('/'))) {
+      return NextResponse.json({ success: false, error: 'Invalid paymentId format.' }, { status: 400 });
+    }
+
+    if (rawOrderId && (rawOrderId.length > 64 || !/^[A-Za-z0-9_-]{8,64}$/.test(rawOrderId))) {
+      return NextResponse.json({ success: false, error: 'Invalid razorpay_order_id format.' }, { status: 400 });
+    }
+
+    const targetPaymentId = rawPaymentId || null;
+    const targetOrderId = rawOrderId || null;
 
     const callerEmail = (user.email || '').toLowerCase().trim();
     const callerUid = user.uid;

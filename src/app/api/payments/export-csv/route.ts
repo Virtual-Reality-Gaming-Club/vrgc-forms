@@ -45,8 +45,15 @@ function verifyExportSecret(adminKey: string | null): boolean {
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
-    const titleFilter = searchParams.get('title');
-    const adminKey = searchParams.get('key') || request.headers.get('x-admin-key');
+    const rawTitle = searchParams.get('title');
+    const titleFilter = rawTitle ? rawTitle.trim() : null;
+
+    if (titleFilter && titleFilter.length > 128) {
+      return NextResponse.json({ error: 'Invalid title filter parameter.' }, { status: 400 });
+    }
+
+    const rawAdminKey = searchParams.get('key') || request.headers.get('x-admin-key');
+    const adminKey = rawAdminKey && rawAdminKey.length <= 128 ? rawAdminKey.trim() : null;
 
     // 1. Check server-side export secret (for automated backups/scripts)
     const isAuthorizedSecret = verifyExportSecret(adminKey);

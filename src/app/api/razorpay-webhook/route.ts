@@ -5,7 +5,11 @@ import { FieldValue } from 'firebase-admin/firestore';
 
 export async function POST(request: Request) {
   try {
-    const rawBody = await request.text();
+    const contentLength = request.headers.get('content-length');
+    if (contentLength && parseInt(contentLength, 10) > 524288) {
+      return NextResponse.json({ success: false, error: 'Payload too large' }, { status: 413 });
+    }
+
     const signature = request.headers.get('x-razorpay-signature');
     const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET || process.env.RAZORPAY_KEY_SECRET;
 
@@ -14,9 +18,14 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: false, error: 'Webhook secret not configured' }, { status: 500 });
     }
 
-    if (!signature) {
-      console.warn('Razorpay Webhook rejected: Missing x-razorpay-signature header.');
-      return NextResponse.json({ success: false, error: 'Missing webhook signature' }, { status: 400 });
+    if (!signature || signature.length !== 64 || !/^[0-9a-fA-F]{64}$/.test(signature)) {
+      console.warn('Razorpay Webhook rejected: Missing or invalid x-razorpay-signature header.');
+      return NextResponse.json({ success: false, error: 'Missing or invalid webhook signature' }, { status: 400 });
+    }
+
+    const rawBody = await request.text();
+    if (rawBody.length > 524288) {
+      return NextResponse.json({ success: false, error: 'Payload too large' }, { status: 413 });
     }
 
     const expectedSignature = crypto

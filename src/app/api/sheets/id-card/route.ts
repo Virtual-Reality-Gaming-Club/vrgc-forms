@@ -30,24 +30,31 @@ async function isAuthorizedAdmin(email: string | null): Promise<boolean> {
 }
 
 function buildSheetSyncUrl(scriptBaseUrl: string, candidate: any): string {
-  const email = encodeURIComponent(candidate.email || '');
-  const name = encodeURIComponent(candidate.name || '');
-  const regNo = encodeURIComponent(candidate.regNo || candidate.registrationNumber || '');
-  const phone = encodeURIComponent(candidate.phone || '');
-  const team = encodeURIComponent(candidate.team || '');
-  const position = encodeURIComponent(candidate.position || 'Member');
-  const photoUrl = encodeURIComponent(candidate.photoUrl || '');
-  const avatarUrl = encodeURIComponent(candidate.avatarUrl || candidate.avatar || '');
-  const qrCode = encodeURIComponent(candidate.qrCode || candidate.qrUrl || '');
-  const cardUrl = encodeURIComponent(candidate.cardUrl || '');
-  const submittedAt = encodeURIComponent(candidate.submittedAt || '');
-  const status = encodeURIComponent(candidate.status || 'Pending');
+  const email = encodeURIComponent(String(candidate?.email || '').trim().slice(0, 254));
+  const name = encodeURIComponent(String(candidate?.name || '').trim().slice(0, 100));
+  const regNo = encodeURIComponent(String(candidate?.regNo || candidate?.registrationNumber || '').trim().slice(0, 50));
+  const phone = encodeURIComponent(String(candidate?.phone || '').trim().slice(0, 50));
+  const team = encodeURIComponent(String(candidate?.team || '').trim().slice(0, 50));
+  const position = encodeURIComponent(String(candidate?.position || 'Member').trim().slice(0, 50));
+  const photoUrl = encodeURIComponent(String(candidate?.photoUrl || '').trim().slice(0, 2048));
+  const avatarUrl = encodeURIComponent(String(candidate?.avatarUrl || candidate?.avatar || '').trim().slice(0, 2048));
+  const qrCode = encodeURIComponent(String(candidate?.qrCode || candidate?.qrUrl || '').trim().slice(0, 2048));
+  const cardUrl = encodeURIComponent(String(candidate?.cardUrl || '').trim().slice(0, 2048));
+  const submittedAt = encodeURIComponent(String(candidate?.submittedAt || '').trim().slice(0, 64));
+  const status = encodeURIComponent(String(candidate?.status || 'Pending').trim().slice(0, 30));
 
   return `${scriptBaseUrl}?action=sync_idcard&email=${email}&name=${name}&regNo=${regNo}&registrationNumber=${regNo}&phone=${phone}&team=${team}&position=${position}&photoUrl=${photoUrl}&avatarUrl=${avatarUrl}&avatar=${avatarUrl}&qrCode=${qrCode}&qrUrl=${qrCode}&cardUrl=${cardUrl}&submittedAt=${submittedAt}&status=${status}`;
 }
 
+const ALLOWED_ID_CARD_ACTIONS = ['delete_idcard', 'bulk_sync', 'sync_idcard'];
+
 export async function POST(req: Request) {
   try {
+    const contentLength = req.headers.get('content-length');
+    if (contentLength && parseInt(contentLength, 10) > 262144) {
+      return NextResponse.json({ success: false, error: 'Payload too large' }, { status: 413 });
+    }
+
     // 1. Cryptographically verify Firebase ID token
     const { user, errorResponse } = await authenticateRequest(req);
     if (errorResponse) {
@@ -56,6 +63,10 @@ export async function POST(req: Request) {
 
     const body = await req.json().catch(() => ({}));
     const { action } = body;
+
+    if (!action || typeof action !== 'string' || !ALLOWED_ID_CARD_ACTIONS.includes(action.trim())) {
+      return NextResponse.json({ success: false, error: 'Invalid or missing action parameter.' }, { status: 400 });
+    }
 
     const callerEmail = (user.email || '').toLowerCase().trim();
     const isAdmin = await isAuthorizedAdmin(callerEmail);
@@ -78,8 +89,8 @@ export async function POST(req: Request) {
       }
 
       const targetEmail = (body.email || '').toLowerCase().trim();
-      if (!targetEmail) {
-        return NextResponse.json({ success: false, error: 'Target email is required for deletion.' }, { status: 400 });
+      if (!targetEmail || targetEmail.length > 254 || !targetEmail.includes('@')) {
+        return NextResponse.json({ success: false, error: 'Valid target email is required for deletion.' }, { status: 400 });
       }
 
       const deleteUrl = `${scriptUrl}?action=delete_idcard&email=${encodeURIComponent(targetEmail)}`;
@@ -102,6 +113,10 @@ export async function POST(req: Request) {
       }
 
       const candidates: any[] = Array.isArray(body.candidates) ? body.candidates : [];
+      if (candidates.length > 100) {
+        return NextResponse.json({ success: false, error: 'Maximum 100 candidates per bulk synchronization request.' }, { status: 400 });
+      }
+
       const syncPromises = candidates.map(async (c) => {
         const url = buildSheetSyncUrl(scriptUrl, c);
         try {
@@ -120,8 +135,12 @@ export async function POST(req: Request) {
 
     if (action === 'sync_idcard') {
       const targetEmail = (body.email || '').toLowerCase().trim();
+      if (!targetEmail || targetEmail.length > 254 || !targetEmail.includes('@')) {
+        return NextResponse.json({ success: false, error: 'Valid target email is required for ID card sync.' }, { status: 400 });
+      }
+
       // Allow if caller is admin OR caller is syncing their own ID card
-      const isSelf = targetEmail && targetEmail === callerEmail;
+      const isSelf = targetEmail === callerEmail;
       if (!isAdmin && !isSelf) {
         return NextResponse.json(
           { success: false, error: "Forbidden: You are not authorized to sync another user's ID card." },
@@ -139,7 +158,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ success: true });
     }
 
-    return NextResponse.json({ success: false, error: 'Invalid or missing action parameter.' }, { status: 400 });
+    return NextResponse.json({ success: false, error: 'Invalid action parameter.' }, { status: 400 });
   } catch (err: any) {
     console.error('[ID Card Sheets API] Internal error:', err);
     return NextResponse.json({ success: false, error: err?.message || 'Failed to sync to Google Sheets' }, { status: 500 });

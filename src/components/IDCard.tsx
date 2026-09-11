@@ -261,8 +261,6 @@ const IDCard: React.FC<IDCardProps> = ({
       const logsQuery = query(collection(db, 'admin_logs'), orderBy('timestamp', 'desc'), limit(50));
       const unsubscribe = onSnapshot(logsQuery, async (snapshot) => {
         const logsList: AdminActivityLog[] = [];
-        const userMail = (currentUser?.email || '').toLowerCase().trim();
-        const canDelete = CONFIG.LOG_DELETE_ADMIN_EMAILS.includes(userMail);
 
         snapshot.docs.forEach((docSnap, index) => {
           const data = docSnap.data();
@@ -291,9 +289,6 @@ const IDCard: React.FC<IDCardProps> = ({
 
           if (index < 15) {
             logsList.push(logEntry);
-          } else if (canDelete) {
-            // Auto-purge any logs beyond top 15 from Firestore
-            deleteDoc(doc(db, 'admin_logs', docSnap.id)).catch(() => {});
           }
         });
 
@@ -305,9 +300,9 @@ const IDCard: React.FC<IDCardProps> = ({
     } catch (e) {
       console.warn('Could not query admin_logs:', e);
     }
-  }, [isAdmin, currentUser]);
+  }, [isAdmin]);
 
-  // Inline log writer — keeps everything self-contained in this component
+  // Inline log writer — dispatches to secure server-side endpoint
   const logAdminAction = useCallback(async (
     action: AdminActivityLog['action'],
     details: string,
@@ -316,7 +311,7 @@ const IDCard: React.FC<IDCardProps> = ({
     targetRegNo?: string
   ) => {
     try {
-      if (!db || !currentUser || !currentUser.email) return;
+      if (!currentUser || !currentUser.email) return;
 
       if (typeof window !== 'undefined') {
         try {
@@ -327,29 +322,46 @@ const IDCard: React.FC<IDCardProps> = ({
       }
 
       const adminDisplayName = currentUser.displayName || memberData?.name || (currentUser.email ? currentUser.email.split('@')[0] : 'Admin');
-      const logEntry: AdminActivityLog = {
-        action,
-        performedBy: adminDisplayName,
-        adminEmail: currentUser.email || adminDisplayName,
-        targetEmail: targetEmail || 'N/A',
-        targetName: targetName || 'N/A',
-        targetRegNo: targetRegNo || 'N/A',
-        details,
-        timestamp: new Date().toISOString()
-      };
-      await addDoc(collection(db, 'admin_logs'), logEntry);
+      const authHeaders = await getAuthHeaders();
+      if (!authHeaders.Authorization) return;
+
+      await fetch('/api/audit/logs', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...authHeaders,
+        },
+        body: JSON.stringify({
+          action,
+          performedBy: adminDisplayName,
+          targetEmail: targetEmail && targetEmail !== 'N/A' ? targetEmail : null,
+          targetName: targetName && targetName !== 'N/A' ? targetName : null,
+          targetRegNo: targetRegNo && targetRegNo !== 'N/A' ? targetRegNo : null,
+          details,
+        }),
+      });
     } catch (err) {
       console.error('Failed to write admin activity log:', err);
     }
   }, [currentUser, memberData]);
 
-  // Admins can delete individual log entries
+  // Admins can delete individual log entries via server endpoint
   const handleDeleteLog = useCallback(async (logId?: string) => {
     const userMail = (currentUser?.email || '').toLowerCase();
     const canDelete = CONFIG.LOG_DELETE_ADMIN_EMAILS.includes(userMail);
-    if (!logId || !db || !isAdmin || !canDelete) return;
+    if (!logId || !isAdmin || !canDelete) return;
     try {
-      await deleteDoc(doc(db, 'admin_logs', logId));
+      const authHeaders = await getAuthHeaders();
+      const res = await fetch(`/api/audit/logs?logId=${encodeURIComponent(logId)}`, {
+        method: 'DELETE',
+        headers: {
+          ...authHeaders,
+        },
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'Failed to delete log entry');
+      }
       setAdminLogs(prev => prev.filter(l => l.id !== logId));
       setSyncToastMessage('Activity log entry deleted.');
       setTimeout(() => setSyncToastMessage(null), 3000);
@@ -358,12 +370,12 @@ const IDCard: React.FC<IDCardProps> = ({
     }
   }, [isAdmin, currentUser]);
 
-  // Purge activity logs older than 15 days
+  // Purge activity logs older than 15 days via server endpoint
   const [isPurgingLogs, setIsPurgingLogs] = useState<boolean>(false);
   const handlePurgeOldLogs = useCallback(async (days = 15) => {
     const userMail = (currentUser?.email || '').toLowerCase();
     const canDelete = CONFIG.LOG_DELETE_ADMIN_EMAILS.includes(userMail);
-    if (!db || !isAdmin || !canDelete) return;
+    if (!isAdmin || !canDelete) return;
 
     const cutoffTime = Date.now() - (days * 24 * 60 * 60 * 1000);
     const oldLogs = adminLogs.filter(l => {
@@ -382,13 +394,19 @@ const IDCard: React.FC<IDCardProps> = ({
 
     setIsPurgingLogs(true);
     try {
-      let deletedCount = 0;
-      for (const logItem of oldLogs) {
-        if (logItem.id) {
-          await deleteDoc(doc(db, 'admin_logs', logItem.id));
-          deletedCount++;
-        }
+      const authHeaders = await getAuthHeaders();
+      const res = await fetch(`/api/audit/logs?days=${days}`, {
+        method: 'DELETE',
+        headers: {
+          ...authHeaders,
+        },
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'Failed to complete bulk log deletion');
       }
+      const data = await res.json().catch(() => ({}));
+      const deletedCount = data.deletedCount ?? oldLogs.length;
       setAdminLogs(prev => prev.filter(l => !oldLogs.some(ol => ol.id === l.id)));
       setSyncToastMessage(`Successfully purged ${deletedCount} logs older than ${days} days.`);
       setTimeout(() => setSyncToastMessage(null), 4000);

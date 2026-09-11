@@ -140,7 +140,18 @@ service cloud.firestore {
     }
 
     // =========================================================================
-    // 7. Explicit Catch-All Default Deny
+    // 7. Administrative Audit & Activity Logs
+    // =========================================================================
+    // Direct client mutation is completely disabled. All audit log creation,
+    // auto-pruning, and deletions run server-side via Firebase Admin SDK.
+    // Reading logs is restricted to authorized Admins for UI live streams.
+    match /admin_logs/{logId} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    // =========================================================================
+    // 8. Explicit Catch-All Default Deny
     // =========================================================================
     // Unmatched documents across all databases/collections are denied by default.
     match /{document=**} {

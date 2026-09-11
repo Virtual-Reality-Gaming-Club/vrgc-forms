@@ -5,12 +5,25 @@ import { authenticateRequest } from '@/lib/server/auth';
 
 export async function POST(request: Request) {
   try {
+    const contentLength = request.headers.get('content-length');
+    if (contentLength && parseInt(contentLength, 10) > 32768) {
+      return NextResponse.json({ success: false, error: 'Payload too large' }, { status: 413 });
+    }
+
     const body = await request.json().catch(() => ({}));
     const { currency = 'INR', receipt, paymentId, title } = body;
 
-    if (!paymentId) {
+    if (!paymentId || typeof paymentId !== 'string') {
       return NextResponse.json(
         { success: false, error: 'paymentId is required to create a payment order.' },
+        { status: 400 }
+      );
+    }
+
+    const cleanPaymentId = paymentId.trim();
+    if (!cleanPaymentId || cleanPaymentId.length > 128 || cleanPaymentId.includes('/')) {
+      return NextResponse.json(
+        { success: false, error: 'Invalid paymentId format.' },
         { status: 400 }
       );
     }
@@ -22,7 +35,7 @@ export async function POST(request: Request) {
     }
 
     // 2. Fetch actual payment document from Firestore to prevent client tampering
-    const paymentDocRef = adminDb.collection('payments').doc(String(paymentId));
+    const paymentDocRef = adminDb.collection('payments').doc(cleanPaymentId);
     const paymentDocSnap = await paymentDocRef.get();
 
     if (!paymentDocSnap.exists) {
@@ -112,16 +125,23 @@ export async function POST(request: Request) {
     });
 
     const amountInPaise = Math.round(actualAmount * 100);
-    const safeReceipt = (receipt || `rcpt_${paymentId}`).slice(0, 36);
+
+    const cleanReceipt = typeof receipt === 'string' && receipt.trim()
+      ? receipt.trim().slice(0, 36)
+      : `rcpt_${cleanPaymentId}`.slice(0, 36);
+
+    const safeCurrency = typeof currency === 'string' && /^[A-Za-z]{3}$/.test(currency.trim())
+      ? currency.trim().toUpperCase()
+      : 'INR';
 
     const options = {
       amount: amountInPaise,
-      currency: paymentData.currency || currency || 'INR',
-      receipt: safeReceipt,
+      currency: paymentData.currency || safeCurrency,
+      receipt: cleanReceipt,
       notes: {
-        paymentId: String(paymentId),
+        paymentId: cleanPaymentId,
         userEmail: callerEmail,
-        title: String(paymentData.title || title || ''),
+        title: String(paymentData.title || (typeof title === 'string' ? title.slice(0, 128) : '') || ''),
       },
     };
 
