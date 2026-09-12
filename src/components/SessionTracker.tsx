@@ -22,6 +22,9 @@ export const SessionTracker: React.FC = () => {
   // Whether the initial session Firestore write has been dispatched.
   const initDoneRef = useRef<boolean>(false);
 
+  // resolvedRole: for admitted users only (userEmail is set by auth-context ONLY on success).
+  // Denied users have userEmail='', so they fall through to 'Guest' here.
+  // The actual 'Access Denied' label is applied in the init effect using rawFirebaseEmailRef.
   const resolvedRole = isAuthenticSuperAdmin
     ? 'Super Admin'
     : authenticRole
@@ -51,8 +54,9 @@ export const SessionTracker: React.FC = () => {
 
   // 1. Initialize session ONLY ONCE after auth state has settled (single Firestore write).
   //    Identity priority:
-  //      a. Auth-context email (admitted member / admin)
-  //      b. Raw Firebase email (denied non-member — captured before admission signOut)
+  //      a. Auth-context email (admitted member / admin) → role = resolvedRole (Member/Admin/etc)
+  //      b. Raw Firebase email only (denied non-member — auth-context cleared userEmail on denial)
+  //         → role = 'Access Denied'
   //      c. null → "Guest Visitor" (truly anonymous, Firebase has no current user)
   //    Elevated sessions intentionally record null to preserve identity privacy.
   useEffect(() => {
@@ -67,19 +71,30 @@ export const SessionTracker: React.FC = () => {
       ? (memberData?.name || user?.displayName || effectiveEmail.split('@')[0])
       : 'Guest Visitor';
 
+    // Determine the role for the session record:
+    // - Admitted user (userEmail is set)   → use resolvedRole
+    // - Denied user (only rawFirebaseEmail) → 'Access Denied'
+    // - Truly anonymous (no email)          → 'Guest'
+    const effectiveRole = isElevated
+      ? 'Guest'
+      : userEmail
+      ? resolvedRole
+      : rawFirebaseEmailRef.current
+      ? 'Access Denied'
+      : 'Guest';
+
     recordedEmailRef.current = effectiveEmail;
 
     initOrResumeSession({
       email: effectiveEmail,
       name: effectiveName,
       photo: user?.photoURL || null,
-      role: resolvedRole,
+      role: effectiveRole,
     });
   }, [authLoading, userEmail, resolvedRole, user?.photoURL, user?.displayName, user?.email, isElevatedSession, isAuthenticSuperAdmin, memberData]);
 
   // 2. Upgrade identity when an anonymous (or Guest Visitor) session transitions to authenticated.
-  //    Fires after init when auth state changes — e.g., user navigates anonymously then logs in,
-  //    or a denied non-member's raw Firebase email becomes the known identity.
+  //    Fires after init when auth state changes — e.g., user navigates anonymously then logs in.
   //    Uses setDoc merge via upgradeSessionIdentity — no new session, no duplicate records.
   useEffect(() => {
     if (authLoading) return;
@@ -97,11 +112,14 @@ export const SessionTracker: React.FC = () => {
     recordedEmailRef.current = effectiveEmail;
     const effectiveName = memberData?.name || user?.displayName || effectiveEmail.split('@')[0];
 
+    // Role for upgrade: admitted user → resolvedRole, denied (rawFirebaseEmail only) → 'Access Denied'
+    const upgradeRole = userEmail ? resolvedRole : 'Access Denied';
+
     upgradeSessionIdentity({
       email: effectiveEmail,
       name: effectiveName,
       photo: user?.photoURL || null,
-      role: resolvedRole,
+      role: upgradeRole,
     });
   }, [authLoading, userEmail, resolvedRole, user?.displayName, user?.photoURL, isElevatedSession, isAuthenticSuperAdmin, memberData]);
 

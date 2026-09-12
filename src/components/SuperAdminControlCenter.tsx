@@ -308,13 +308,13 @@ const SuperAdminControlCenter: React.FC<SuperAdminControlCenterProps> = ({
       const list: SessionRecord[] = [];
       const staleDocRefs: any[] = [];
       const nowMs = Date.now();
-      const twelveHoursMs = 12 * 60 * 60 * 1000;
+      const twentyFourHoursMs = 24 * 60 * 60 * 1000;
 
       snap.forEach((d) => {
         const data = d.data() as Omit<SessionRecord, 'id'>;
         const enteredMs = new Date(data.enteredAt).getTime();
-        // Sessions older than 12 hours: automatically pruned from DB and excluded from frontend
-        if (!isNaN(enteredMs) && (nowMs - enteredMs) > twelveHoursMs) {
+        // Sessions older than 24 hours: automatically pruned from DB and excluded from frontend
+        if (!isNaN(enteredMs) && (nowMs - enteredMs) > twentyFourHoursMs) {
           staleDocRefs.push(d.ref);
         } else {
           list.push({ id: d.id, ...data });
@@ -324,14 +324,14 @@ const SuperAdminControlCenter: React.FC<SuperAdminControlCenterProps> = ({
       setSessions(list);
       setSessionsFetched(true);
 
-      // Automatically batch-delete stale records older than 12 hours from Firestore
+      // Automatically batch-delete stale records older than 24 hours from Firestore
       if (staleDocRefs.length > 0) {
         const batch = writeBatch(db);
         staleDocRefs.forEach((ref) => batch.delete(ref));
         await batch.commit().catch((err) => console.warn('[AuditSessions] Batch delete error:', err));
       }
-      // Also trigger TTL cleanup for any other lingering sessions older than 12 hours
-      cleanupStaleAuditSessions().catch(() => {});
+      // Also trigger TTL cleanup for any other lingering sessions older than 24 hours
+      cleanupStaleAuditSessions(24 * 60 * 60 * 1000).catch(() => {});
     } catch (err) {
       console.warn('[AuditSessions] Fetch error:', err);
     } finally {
@@ -448,20 +448,26 @@ const SuperAdminControlCenter: React.FC<SuperAdminControlCenterProps> = ({
       const matched = admins.find((a) => a.email.toLowerCase() === email);
       return matched?.role || 'Member';
     }
+    // Explicitly return 'Access Denied' for non-members who attempted login
+    if (s.userRole === 'Access Denied') return 'Access Denied';
     return s.userRole || (s.isLoggedIn ? 'Member' : 'Guest');
   };
 
   // Calculated presence stats
   const onlineCount = sessions.filter(isSessionOnline).length;
-  const membersCount = sessions.filter((s) => s.isLoggedIn).length;
-  const guestsCount = sessions.filter((s) => !s.isLoggedIn).length;
+  // 'Identified Members' = sessions with isLoggedIn AND not denied (Access Denied users are tracked but not members)
+  const membersCount = sessions.filter((s) => s.isLoggedIn && s.userRole !== 'Access Denied').length;
+  // 'Guest Visitors' = truly anonymous sessions (no login attempt) + denied non-members
+  const guestsCount = sessions.filter((s) => !s.isLoggedIn || s.userRole === 'Access Denied').length;
 
   // Filtered session records
   const filteredSessions = sessions.filter((s) => {
     // Status filter
     if (sessionStatusFilter === 'online' && !isSessionOnline(s)) return false;
-    if (sessionStatusFilter === 'members' && !s.isLoggedIn) return false;
-    if (sessionStatusFilter === 'guests' && s.isLoggedIn) return false;
+    // 'members' filter: only admitted/authorized users, not denied ones
+    if (sessionStatusFilter === 'members' && (!s.isLoggedIn || s.userRole === 'Access Denied')) return false;
+    // 'guests' filter: truly anonymous visitors + denied non-members
+    if (sessionStatusFilter === 'guests' && s.isLoggedIn && s.userRole !== 'Access Denied') return false;
 
     // Date filter
     if (sessionDateFilter !== 'all' && currentTime > 0) {
@@ -3315,9 +3321,11 @@ const SuperAdminControlCenter: React.FC<SuperAdminControlCenterProps> = ({
                                 ? 'bg-cyan-950/80 text-cyan-300 border border-cyan-600/50'
                                 : displayRole === 'Payment Admin'
                                   ? 'bg-emerald-950/80 text-emerald-300 border border-emerald-600/50'
-                                  : s.isLoggedIn
-                                    ? 'bg-purple-950/60 text-purple-300 border border-purple-800'
-                                    : 'bg-slate-900 text-slate-400 border border-slate-800'
+                                  : displayRole === 'Access Denied'
+                                    ? 'bg-rose-950/80 text-rose-300 border border-rose-600/50'
+                                    : s.isLoggedIn
+                                      ? 'bg-purple-950/60 text-purple-300 border border-purple-800'
+                                      : 'bg-slate-900 text-slate-400 border border-slate-800'
                               }`}>
                               {displayRole}
                             </span>
@@ -3429,9 +3437,11 @@ const SuperAdminControlCenter: React.FC<SuperAdminControlCenterProps> = ({
                                           ? 'bg-cyan-950/80 text-cyan-300 border border-cyan-600/50'
                                           : displayRole === 'Payment Admin'
                                             ? 'bg-emerald-950/80 text-emerald-300 border border-emerald-600/50'
-                                            : s.isLoggedIn
-                                              ? 'bg-purple-950/60 text-purple-300 border border-purple-800'
-                                              : 'bg-slate-900 text-slate-400 border border-slate-800'
+                                            : displayRole === 'Access Denied'
+                                              ? 'bg-rose-950/80 text-rose-300 border border-rose-600/50'
+                                              : s.isLoggedIn
+                                                ? 'bg-purple-950/60 text-purple-300 border border-purple-800'
+                                                : 'bg-slate-900 text-slate-400 border border-slate-800'
                                         }`}>
                                         {displayRole}
                                       </span>

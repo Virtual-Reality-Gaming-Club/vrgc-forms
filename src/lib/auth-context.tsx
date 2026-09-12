@@ -351,6 +351,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setUserRole(null);
         setIsAuthorized(false);
         setMemberData(null);
+        // Clear userEmail so SessionTracker does not label this person as 'Member'.
+        // The rawFirebaseEmailRef in SessionTracker will still capture the email for
+        // identity attribution, but resolvedRole will correctly resolve to 'Access Denied'.
+        setUserEmail('');
+        setUser(null);
         setAuthError('Access Denied: Only verified club members, admins, and faculty are authorized to access the VRGC Forms Portal.');
         signOut(auth).catch(console.error);
       }

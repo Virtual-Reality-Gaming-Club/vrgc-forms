@@ -254,10 +254,10 @@ export async function finalizeSession(): Promise<void> {
   }
 }
 
-// ─── Stale Sessions Auto-Deletion (TTL 12 Hours) ───────────────────────────────
-// Automatically deletes sessions older than 12 hours from the Firestore database
+// ─── Stale Sessions Auto-Deletion (TTL 24 Hours) ───────────────────────────────
+// Automatically deletes sessions older than 24 hours from the Firestore database
 
-export async function cleanupStaleAuditSessions(maxAgeMs = 12 * 60 * 60 * 1000): Promise<number> {
+export async function cleanupStaleAuditSessions(maxAgeMs = 24 * 60 * 60 * 1000): Promise<number> {
   try {
     const thresholdIso = new Date(Date.now() - maxAgeMs).toISOString();
     const staleQuery = query(
