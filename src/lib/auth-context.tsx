@@ -177,10 +177,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       setIsFaculty(false);
 
-      const bridgeSuperAdmins = await getSuperAdminEmails();
-      const superAdmin = bridgeSuperAdmins.some((se) => se.toLowerCase().trim() === em);
-      setIsSuperAdmin(superAdmin);
-
       let isDbAdmin = false;
       let assignedRole: string | null = null;
 
@@ -189,9 +185,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (adminDoc.exists()) {
           isDbAdmin = true;
           const adminDocData = adminDoc.data();
-          if (superAdmin) {
-            assignedRole = 'Super Administrator';
-          } else if (adminDocData?.role && adminDocData.role !== 'super_admin' && adminDocData.role !== 'Super Admin') {
+          if (adminDocData?.role && adminDocData.role !== 'super_admin' && adminDocData.role !== 'Super Admin') {
             assignedRole = adminDocData.role;
           } else {
             assignedRole = 'Admin';
@@ -202,9 +196,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           if (!adminSnap.empty) {
             isDbAdmin = true;
             const adminDocData = adminSnap.docs[0].data();
-            if (superAdmin) {
-              assignedRole = 'Super Administrator';
-            } else if (adminDocData?.role && adminDocData.role !== 'super_admin' && adminDocData.role !== 'Super Admin') {
+            if (adminDocData?.role && adminDocData.role !== 'super_admin' && adminDocData.role !== 'Super Admin') {
               assignedRole = adminDocData.role;
             } else {
               assignedRole = 'Admin';
@@ -217,9 +209,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           const roleData = roleDoc.data();
           isDbAdmin = true;
           if (roleData?.role) {
-            if (superAdmin) {
-              assignedRole = 'Super Administrator';
-            } else if (roleData.role !== 'super_admin' && roleData.role !== 'Super Admin') {
+            if (roleData.role !== 'super_admin' && roleData.role !== 'Super Admin') {
               if (!assignedRole || assignedRole === 'Admin') {
                 assignedRole = roleData.role;
               }
@@ -232,9 +222,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             isDbAdmin = true;
             const roleData = roleSnap.docs[0].data();
             if (roleData?.role) {
-              if (superAdmin) {
-                assignedRole = 'Super Administrator';
-              } else if (roleData.role !== 'super_admin' && roleData.role !== 'Super Admin') {
+              if (roleData.role !== 'super_admin' && roleData.role !== 'Super Admin') {
                 if (!assignedRole || assignedRole === 'Admin') {
                   assignedRole = roleData.role;
                 }
@@ -312,38 +300,55 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
 
       const isPaymentAdminEmail = assignedRole === 'Payment Admin';
-      const admin = superAdmin || isDbAdmin || isPaymentAdminEmail || !!assignedRole;
-      const paymentAdmin = superAdmin || isPaymentAdminEmail;
+      // superAdmin is intentionally excluded here — SUPER_ADMIN_EMAILS only grants
+      // powers AFTER admission is confirmed by the membership/Firestore check below.
+      const admin = isDbAdmin || isPaymentAdminEmail || !!assignedRole;
 
-      if (superAdmin) {
-        assignedRole = 'Super Administrator';
-      } else if (!assignedRole && admin) {
-        assignedRole = 'Admin';
-      }
+      if (memberRecord || admin) {
+        // Admission gate passed — now check SUPER_ADMIN_EMAILS to grant super admin powers.
+        // A non-member email in SUPER_ADMIN_EMAILS never reaches this branch.
+        const bridgeSuperAdmins = await getSuperAdminEmails();
+        const superAdmin = bridgeSuperAdmins.some((se) => se.toLowerCase().trim() === em);
 
-      setUserRole(assignedRole);
-      setIsAdmin(admin);
-      setIsPaymentAdmin(paymentAdmin);
+        const paymentAdmin = superAdmin || isPaymentAdminEmail;
 
-      if (memberRecord) {
-        setMemberData({
-          ...memberRecord,
-          position: assignedRole || memberRecord.position || (superAdmin ? 'Super Administrator' : admin ? 'Administrator' : 'Club Member'),
-        });
-        setIsAuthorized(true);
-        setAuthError('');
-      } else if (admin) {
-        setMemberData({
-          name: firebaseUser.displayName || (superAdmin ? 'Super Administrator' : (assignedRole || 'Administrator')),
-          registrationNumber: superAdmin ? 'SUPER-ADMIN' : (assignedRole ? assignedRole.toUpperCase() : 'ADMIN'),
-          phone: '',
-          email: em,
-          team: assignedRole ? `${assignedRole} Division` : 'Management',
-          position: superAdmin ? 'Super Administrator' : (assignedRole || 'Lead'),
-        });
-        setIsAuthorized(true);
-        setAuthError('');
+        if (superAdmin) {
+          assignedRole = 'Super Administrator';
+        } else if (!assignedRole && admin) {
+          assignedRole = 'Admin';
+        }
+
+        setIsSuperAdmin(superAdmin);
+        setIsAdmin(admin || superAdmin);
+        setIsPaymentAdmin(paymentAdmin);
+        setUserRole(assignedRole);
+
+        if (memberRecord) {
+          setMemberData({
+            ...memberRecord,
+            position: assignedRole || memberRecord.position || (superAdmin ? 'Super Administrator' : admin ? 'Administrator' : 'Club Member'),
+          });
+          setIsAuthorized(true);
+          setAuthError('');
+        } else {
+          setMemberData({
+            name: firebaseUser.displayName || (superAdmin ? 'Super Administrator' : (assignedRole || 'Administrator')),
+            registrationNumber: superAdmin ? 'SUPER-ADMIN' : (assignedRole ? assignedRole.toUpperCase() : 'ADMIN'),
+            phone: '',
+            email: em,
+            team: assignedRole ? `${assignedRole} Division` : 'Management',
+            position: superAdmin ? 'Super Administrator' : (assignedRole || 'Lead'),
+          });
+          setIsAuthorized(true);
+          setAuthError('');
+        }
       } else {
+        // DENIED — not a member and not a Firestore-confirmed admin.
+        // SUPER_ADMIN_EMAILS cannot grant admission — intentional security enforcement.
+        setIsSuperAdmin(false);
+        setIsAdmin(false);
+        setIsPaymentAdmin(false);
+        setUserRole(null);
         setIsAuthorized(false);
         setMemberData(null);
         setAuthError('Access Denied: Only verified club members, admins, and faculty are authorized to access the VRGC Forms Portal.');

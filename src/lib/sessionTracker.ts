@@ -172,6 +172,39 @@ export async function touchSessionActivity(): Promise<void> {
   }
 }
 
+// ─── Upgrade Session Identity (Anonymous → Authenticated) ─────────────────────
+// Patch-merges identity fields onto an existing session without creating a new
+// record. Called when the raw Firebase auth email becomes known after the initial
+// session was written as Guest Visitor (e.g. denied non-member, or page-load
+// anonymous user who later authenticates).
+
+export async function upgradeSessionIdentity(info: {
+  email: string;
+  name: string;
+  photo: string | null;
+  role: string;
+}): Promise<void> {
+  if (typeof window === 'undefined') return;
+  try {
+    const sessionId = sessionStorage.getItem(SESSION_STORAGE_KEY);
+    if (!sessionId) return;
+    await setDoc(
+      doc(db, 'audit_sessions', sessionId),
+      {
+        userEmail: info.email.toLowerCase().trim(),
+        userName: info.name,
+        userPhoto: info.photo,
+        userRole: info.role,
+        isLoggedIn: true,
+      },
+      { merge: true }
+    );
+  } catch (err) {
+    console.warn('[SessionTracker] Identity upgrade warning:', err);
+  }
+}
+
+
 // ─── Session Finalization (User Offline / Tab Closed) ──────────────────────────
 // Uses sendBeacon / keepalive fetch for guaranteed execution on tab close
 
