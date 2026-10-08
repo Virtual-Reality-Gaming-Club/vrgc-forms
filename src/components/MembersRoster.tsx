@@ -218,7 +218,11 @@ interface MembersRosterProps {
 
 const MembersRoster: React.FC<MembersRosterProps> = ({ onRedirect, isAdmin: propIsAdmin }) => {
   const { isSuperAdmin, isAdmin, userRole } = useAuth();
-  const canManage = isSuperAdmin || (propIsAdmin ?? false) || (isAdmin ?? false);
+  // canManage governs full write authority (edit member, delete member, add member, import files, bulk operations).
+  // When propIsAdmin is provided by the parent (via getPagePermission('members').canEdit), it strictly determines
+  // write authority. A custom role with "View Only" (canEdit: false) must NEVER receive write authority.
+  // Super Admin always retains unrestricted authority.
+  const canManage = isSuperAdmin || (propIsAdmin !== undefined ? propIsAdmin : (isAdmin ?? false));
 
   const [members, setMembers] = useState<RosterMember[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
@@ -820,6 +824,10 @@ const MembersRoster: React.FC<MembersRosterProps> = ({ onRedirect, isAdmin: prop
 
   // Confirm Import & Save to Database
   const handleConfirmImport = async () => {
+    if (!canManage) {
+      setImportError('Permission denied: You have view-only access to the Members Roster.');
+      return;
+    }
     setSavingImport(true);
     setImportError('');
     try {
@@ -857,6 +865,20 @@ const MembersRoster: React.FC<MembersRosterProps> = ({ onRedirect, isAdmin: prop
         const CHUNK_SIZE = 400;
         const nowIso = new Date().toISOString();
 
+        // Query existing ID cards so imported member updates propagate to the id_cards table
+        const idCardsSnap = await getDocs(collection(db, 'id_cards')).catch(() => null);
+        const idCardsMap = new Map<string, { ref: any; id: string; data: any }>();
+        if (idCardsSnap && !idCardsSnap.empty) {
+          idCardsSnap.forEach((d) => {
+            const data = d.data();
+            const em = (data.email || '').toLowerCase().trim();
+            const rg = (data.regNo || data.registrationNumber || '').toUpperCase().trim();
+            if (em) idCardsMap.set(em, { ref: d.ref, id: d.id, data });
+            if (rg) idCardsMap.set(rg, { ref: d.ref, id: d.id, data });
+            if (d.id && d.id.includes('@')) idCardsMap.set(d.id.toLowerCase().trim(), { ref: d.ref, id: d.id, data });
+          });
+        }
+
         for (let i = 0; i < toImport.length; i += CHUNK_SIZE) {
           const chunk = toImport.slice(i, i + CHUNK_SIZE);
           const batch = writeBatch(db);
@@ -886,6 +908,27 @@ const MembersRoster: React.FC<MembersRosterProps> = ({ onRedirect, isAdmin: prop
               },
               { merge: true }
             );
+
+            // Also synchronize with matching document in id_cards collection
+            const matchingIdCard = (cleanEmail && idCardsMap.get(cleanEmail)) || (cleanReg && idCardsMap.get(cleanReg));
+            if (matchingIdCard) {
+              batch.set(
+                matchingIdCard.ref,
+                {
+                  name: cleanName || matchingIdCard.data.name || 'Member',
+                  registrationNumber: cleanReg || matchingIdCard.data.registrationNumber || '',
+                  regNo: cleanReg || matchingIdCard.data.regNo || '',
+                  email: cleanEmail || matchingIdCard.data.email || '',
+                  phone: cleanPhone || matchingIdCard.data.phone || '',
+                  team: cleanTeam || matchingIdCard.data.team || 'General',
+                  position: cleanPos || matchingIdCard.data.position || 'Member',
+                  role: cleanPos || matchingIdCard.data.role || 'Member',
+                  updatedAt: nowIso,
+                },
+                { merge: true }
+              );
+            }
+
             importedCount++;
           }
 
@@ -937,6 +980,7 @@ const MembersRoster: React.FC<MembersRosterProps> = ({ onRedirect, isAdmin: prop
 
   // ─── Manual Add / Edit Member ──────────────────────────────────────────────
   const openMemberModal = (member?: RosterMember) => {
+    if (!canManage) return;
     setMemberFormError('');
     if (member) {
       setEditingMember(member);
@@ -995,6 +1039,10 @@ const MembersRoster: React.FC<MembersRosterProps> = ({ onRedirect, isAdmin: prop
 
   const handleSaveMember = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!canManage) {
+      setMemberFormError('Permission denied: You have view-only access to the Members Roster.');
+      return;
+    }
     setMemberFormError('');
 
     const cleanName = memberFormData.name.trim();
@@ -1064,6 +1112,121 @@ const MembersRoster: React.FC<MembersRosterProps> = ({ onRedirect, isAdmin: prop
         } catch (delErr) {
           // ignore
         }
+      }
+
+      // 2. Synchronize changes directly with the 'id_cards' collection in Firebase
+      try {
+        const oldEmail = (editingMember?.email || '').toLowerCase().trim();
+        const oldReg = (editingMember?.registrationNumber || '').toUpperCase().trim();
+
+        const idCardDocsToUpdate: { ref: any; id: string; data: any }[] = [];
+        const checkedIdCardIds = new Set<string>();
+
+        const inspectIdCardDoc = async (id: string) => {
+          if (!id || checkedIdCardIds.has(id)) return;
+          checkedIdCardIds.add(id);
+          try {
+            const snap = await getDoc(doc(db, 'id_cards', id));
+            if (snap.exists()) {
+              idCardDocsToUpdate.push({ ref: snap.ref, id: snap.id, data: snap.data() });
+            }
+          } catch {}
+        };
+
+        // Check direct document IDs
+        if (cleanEmail) await inspectIdCardDoc(cleanEmail);
+        if (oldEmail && oldEmail !== cleanEmail) await inspectIdCardDoc(oldEmail);
+        if (cleanReg) await inspectIdCardDoc(cleanReg);
+        if (oldReg && oldReg !== cleanReg) await inspectIdCardDoc(oldReg);
+
+        // Query by email and regNo in case document ID is keyed differently
+        const idCardQueries = [];
+        if (cleanEmail) idCardQueries.push(query(collection(db, 'id_cards'), where('email', '==', cleanEmail)));
+        if (oldEmail && oldEmail !== cleanEmail) idCardQueries.push(query(collection(db, 'id_cards'), where('email', '==', oldEmail)));
+        if (cleanReg) {
+          idCardQueries.push(query(collection(db, 'id_cards'), where('registrationNumber', '==', cleanReg)));
+          idCardQueries.push(query(collection(db, 'id_cards'), where('regNo', '==', cleanReg)));
+        }
+        if (oldReg && oldReg !== cleanReg) {
+          idCardQueries.push(query(collection(db, 'id_cards'), where('registrationNumber', '==', oldReg)));
+          idCardQueries.push(query(collection(db, 'id_cards'), where('regNo', '==', oldReg)));
+        }
+
+        for (const q of idCardQueries) {
+          try {
+            const qSnap = await getDocs(q);
+            qSnap.forEach((d) => {
+              if (!checkedIdCardIds.has(d.id)) {
+                checkedIdCardIds.add(d.id);
+                idCardDocsToUpdate.push({ ref: d.ref, id: d.id, data: d.data() });
+              }
+            });
+          } catch {}
+        }
+
+        if (idCardDocsToUpdate.length > 0) {
+          // Merge with existing ID card submission data (photos, status, submittedAt, etc.)
+          const primaryDoc = idCardDocsToUpdate.find((d) => d.data?.photoUrl || d.data?.avatarUrl) || idCardDocsToUpdate[0];
+          const existingData = primaryDoc.data || {};
+
+          const updatedIdCardPayload = {
+            ...existingData,
+            name: cleanName,
+            registrationNumber: cleanReg,
+            regNo: cleanReg,
+            email: cleanEmail,
+            phone: cleanPhone || existingData.phone || '',
+            team: cleanDomain,
+            position: cleanPosition,
+            role: cleanPosition,
+            updatedAt: nowIso,
+          };
+
+          const targetIdCardDocId = cleanEmail || cleanReg;
+          await setDoc(doc(db, 'id_cards', targetIdCardDocId), updatedIdCardPayload, { merge: true });
+
+          // If the ID card was stored under an old doc ID (e.g. oldEmail or oldReg), clean up the old duplicate
+          for (const extraDoc of idCardDocsToUpdate) {
+            if (extraDoc.id !== targetIdCardDocId) {
+              try {
+                await deleteDoc(extraDoc.ref);
+              } catch {}
+            }
+          }
+
+          // Trigger Google Sheets sync for ID card record
+          try {
+            const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=140x140&color=0-0-0&bgcolor=ffffff&data=${encodeURIComponent(`https://vrgc.club/card/${cleanReg}`)}`;
+            const cardUrl = `https://vrgc.club/card/${cleanReg}`;
+            const token = await getClientAuthToken();
+
+            fetch('/api/sheets/id-card', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                ...(token ? { Authorization: `Bearer ${token}` } : {}),
+              },
+              body: JSON.stringify({
+                action: 'sync_idcard',
+                email: cleanEmail,
+                name: cleanName,
+                regNo: cleanReg,
+                registrationNumber: cleanReg,
+                phone: cleanPhone || existingData.phone || '',
+                team: cleanDomain,
+                position: cleanPosition,
+                photoUrl: existingData.photoUrl || '',
+                avatarUrl: existingData.avatarUrl || '',
+                qrCode: qrCodeUrl,
+                cardUrl: cardUrl,
+                submittedAt: existingData.submittedAt || '',
+                status: existingData.status || 'Approved',
+              }),
+            }).catch(() => {});
+          } catch {}
+        }
+      } catch (idSyncErr) {
+        console.warn('Sync to id_cards table warning:', idSyncErr);
       }
 
       // Immediate local state update so the card refreshes without waiting for loadAllMembers
@@ -1188,7 +1351,7 @@ const MembersRoster: React.FC<MembersRosterProps> = ({ onRedirect, isAdmin: prop
   };
 
   const handleDeleteMember = async () => {
-    if (!deleteConfirmMember) return;
+    if (!canManage || !deleteConfirmMember) return;
     setDeletingMember(true);
     try {
       await executeDeleteForMember(deleteConfirmMember);
@@ -1211,7 +1374,7 @@ const MembersRoster: React.FC<MembersRosterProps> = ({ onRedirect, isAdmin: prop
   };
 
   const executeBulkDeleteMembers = async () => {
-    if (!pendingBulkDelete || pendingBulkDelete.length === 0) return;
+    if (!canManage || !pendingBulkDelete || pendingBulkDelete.length === 0) return;
     setBulkUpdating(true);
     try {
       for (const member of pendingBulkDelete) {
@@ -1230,6 +1393,7 @@ const MembersRoster: React.FC<MembersRosterProps> = ({ onRedirect, isAdmin: prop
   };
 
   const handleToggleBlockMember = async (member: RosterMember, explicitStatus?: boolean) => {
+    if (!canBlockAccess) return;
     try {
       const newStatus = explicitStatus !== undefined ? explicitStatus : !member.isBlocked;
       const cleanEmail = (member.email || '').toLowerCase().trim();

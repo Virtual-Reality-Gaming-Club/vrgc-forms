@@ -60,6 +60,11 @@ const nextConfig = {
         destination: '/',
         permanent: true,
       },
+      {
+        source: '/idea-hub',
+        destination: '/ideahub',
+        permanent: true,
+      },
     ];
   },
 

@@ -152,11 +152,12 @@ function genAvatar(seed: string) {
 
 interface IdeaHubProps {
   onRedirect?: () => void;
+  isAdmin?: boolean;
 }
 
-const IdeaHub: React.FC<IdeaHubProps> = ({ onRedirect }) => {
+const IdeaHub: React.FC<IdeaHubProps> = ({ onRedirect, isAdmin: propIsAdmin }) => {
   const { user, userEmail, isSuperAdmin, isAdmin, isFaculty, memberData, isAuthorized } = useAuth();
-  const canModerate = isSuperAdmin || isAdmin;
+  const canModerate = isSuperAdmin || (propIsAdmin !== undefined ? propIsAdmin : (isAdmin ?? false));
   const isAuthorizedUser = isAuthorized || isFaculty || isSuperAdmin || isAdmin;
 
   // ── State ──────────────────────────────────────────────────────────────────

@@ -521,6 +521,7 @@ function AppContent() {
             ) : (
               <IdeaHub
                 onRedirect={() => handlePageChange('dashboard')}
+                isAdmin={getPagePermission('ideahub').canEdit}
               />
             )
           )}

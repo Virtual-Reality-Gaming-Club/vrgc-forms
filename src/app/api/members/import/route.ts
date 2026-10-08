@@ -113,6 +113,20 @@ export async function POST(req: Request) {
       }
     }
 
+    // Query existing ID cards so imported member updates propagate to the id_cards collection
+    const idCardsSnap = await adminDb.collection('id_cards').get().catch(() => null);
+    const idCardsMap = new Map<string, { ref: FirebaseFirestore.DocumentReference; data: any }>();
+    if (idCardsSnap && !idCardsSnap.empty) {
+      idCardsSnap.forEach((d) => {
+        const data = d.data();
+        const em = (data.email || '').toLowerCase().trim();
+        const rg = (data.regNo || data.registrationNumber || '').toUpperCase().trim();
+        if (em) idCardsMap.set(em, { ref: d.ref, data });
+        if (rg) idCardsMap.set(rg, { ref: d.ref, data });
+        if (d.id && d.id.includes('@')) idCardsMap.set(d.id.toLowerCase().trim(), { ref: d.ref, data });
+      });
+    }
+
     // Process in batches of 400 to respect Firestore transaction limits
     const CHUNK_SIZE = 400;
     let savedCount = 0;
@@ -136,6 +150,27 @@ export async function POST(req: Request) {
           },
           { merge: true }
         );
+
+        const cleanEmail = (item.email || '').toLowerCase().trim();
+        const cleanReg = (item.registrationNumber || '').toUpperCase().trim();
+        const matchingIdCard = (cleanEmail && idCardsMap.get(cleanEmail)) || (cleanReg && idCardsMap.get(cleanReg));
+        if (matchingIdCard) {
+          batch.set(
+            matchingIdCard.ref,
+            {
+              name: item.name || matchingIdCard.data.name || 'Member',
+              registrationNumber: cleanReg || matchingIdCard.data.registrationNumber || '',
+              regNo: cleanReg || matchingIdCard.data.regNo || '',
+              email: cleanEmail || matchingIdCard.data.email || '',
+              phone: item.phone || matchingIdCard.data.phone || '',
+              team: item.team || matchingIdCard.data.team || 'General',
+              position: item.position || matchingIdCard.data.position || 'Member',
+              role: item.position || matchingIdCard.data.role || 'Member',
+              updatedAt: nowIso,
+            },
+            { merge: true }
+          );
+        }
       }
 
       await batch.commit();
