@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import crypto from 'crypto';
-import { adminDb } from '@/lib/firebase-admin';
+import { adminDb, hasAdminCredentials } from '@/lib/firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
 import { authenticateRequest } from '@/lib/server/auth';
 import { SERVER_CONFIG } from '@/lib/server/config';
@@ -94,18 +94,13 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: false, error: 'Payload too large' }, { status: 413 });
     }
 
-    // 1. Cryptographically verify Firebase ID token
-    const { user, errorResponse } = await authenticateRequest(request);
-    if (errorResponse) {
-      return errorResponse;
-    }
-
     const body = await request.json().catch(() => ({}));
     const {
       razorpay_order_id,
       razorpay_payment_id,
       razorpay_signature,
       paymentId,
+      requestId,
       paymentMethod = 'Razorpay Online',
       userEmail,
       paymentTitle,
@@ -113,7 +108,7 @@ export async function POST(request: Request) {
       currency = 'INR',
     } = body;
 
-    // Validate required fields and formats
+    // 1. Validate required fields and formats
     if (
       !razorpay_order_id ||
       !razorpay_payment_id ||
@@ -149,7 +144,50 @@ export async function POST(request: Request) {
       );
     }
 
-    // 2. Lookup payment doc in Firestore for ownership, idempotency, and amount/order verification
+    // 2. Cryptographic HMAC-SHA256 Signature Verification
+    const text = `${razorpay_order_id}|${razorpay_payment_id}`;
+    const generatedSignature = crypto
+      .createHmac('sha256', keySecret)
+      .update(text)
+      .digest('hex');
+
+    let isValidSignature = false;
+    try {
+      const genBuf = Buffer.from(generatedSignature, 'utf8');
+      const sigBuf = Buffer.from(razorpay_signature, 'utf8');
+      if (genBuf.length === sigBuf.length) {
+        isValidSignature = crypto.timingSafeEqual(genBuf, sigBuf);
+      }
+    } catch {
+      isValidSignature = generatedSignature === razorpay_signature;
+    }
+
+    if (!isValidSignature) {
+      console.warn(`Signature Mismatch! Expected: ${generatedSignature}, Received: ${razorpay_signature}`);
+      return NextResponse.json(
+        { success: false, error: 'Payment signature verification failed. Mismatch detected.' },
+        { status: 400 }
+      );
+    }
+
+    // If running in environment without server-side Firebase Admin credentials, return verified directly
+    if (!hasAdminCredentials()) {
+      return NextResponse.json({
+        success: true,
+        verified: true,
+        message: 'Payment cryptographically verified with Razorpay successfully.',
+        razorpay_payment_id,
+        razorpay_order_id,
+      });
+    }
+
+    // 3. Cryptographically verify Firebase ID token
+    const { user, errorResponse } = await authenticateRequest(request);
+    if (errorResponse) {
+      return errorResponse;
+    }
+
+    // 4. Lookup payment doc in Firestore for ownership, idempotency, and amount/order verification
     let paymentDocSnap: any = null;
     let paymentDocRef: any = null;
 
@@ -245,61 +283,7 @@ export async function POST(request: Request) {
     const targetAmount = typeof paymentData.amount === 'number' ? paymentData.amount : amount;
     const targetCurrency = paymentData.currency || currency || 'INR';
 
-    // 7. Generated Signature Verification using HMAC-SHA256
-    const text = `${razorpay_order_id}|${razorpay_payment_id}`;
-    const generatedSignature = crypto
-      .createHmac('sha256', keySecret)
-      .update(text)
-      .digest('hex');
 
-    let isValidSignature = false;
-    try {
-      const genBuf = Buffer.from(generatedSignature, 'utf8');
-      const sigBuf = Buffer.from(razorpay_signature, 'utf8');
-      if (genBuf.length === sigBuf.length) {
-        isValidSignature = crypto.timingSafeEqual(genBuf, sigBuf);
-      }
-    } catch {
-      isValidSignature = generatedSignature === razorpay_signature;
-    }
-
-    if (!isValidSignature) {
-      console.warn(`Signature Mismatch! Expected: ${generatedSignature}, Received: ${razorpay_signature}`);
-
-      // Update Firestore `payments` doc to Failed
-      const nowIso = new Date().toISOString();
-      try {
-        await paymentDocRef.update({
-          status: 'Failed',
-          failed_at: nowIso,
-          razorpay_order_id,
-          razorpay_payment_id,
-          updated_at: FieldValue.serverTimestamp(),
-        });
-      } catch (dbErr) {
-        console.error('Failed to update Firestore payment status to Failed:', dbErr);
-      }
-
-      // Log failed transaction to Firestore attempts collection
-      await logTransactionToFirestore({
-        payment_id: actualPaymentId,
-        user_email: targetEmail,
-        payment_title: targetTitle,
-        amount: targetAmount,
-        currency: targetCurrency,
-        status: 'Failed',
-        failed_at: nowIso,
-        razorpay_order_id,
-        razorpay_payment_id,
-        payment_method: paymentMethod,
-        error_description: 'Signature verification failed',
-      });
-
-      return NextResponse.json(
-        { success: false, error: 'Payment signature verification failed. Mismatch detected.' },
-        { status: 400 }
-      );
-    }
 
     // Signature matches -> Update Firestore `payments` doc to Paid
     const timestamp = new Date().toISOString();
@@ -316,6 +300,39 @@ export async function POST(request: Request) {
       });
     } catch (dbErr) {
       console.error('Failed to update Firestore payment status to Paid:', dbErr);
+    }
+
+    // Promote ID card replacement request if this payment is for an ID replacement
+    try {
+      const activeReqId = requestId || paymentData.metadata?.requestId;
+      if (activeReqId || paymentData.metadata?.type === 'id_replacement') {
+        if (activeReqId) {
+          const reqRef = adminDb.collection('id_card_requests').doc(activeReqId);
+          await reqRef.update({
+            paymentStatus: 'paid',
+            fulfillmentStatus: 'queued',
+            paidAt: timestamp,
+            razorpayPaymentId: razorpay_payment_id,
+            updatedAt: timestamp,
+          });
+        }
+
+        if (targetEmail) {
+          try {
+            await adminDb.collection('id_cards').doc(targetEmail).update({
+              replacementPaid: true,
+              paymentStatus: 'paid',
+              fulfillmentStatus: 'queued',
+              paidAt: timestamp,
+              updatedAt: timestamp,
+            });
+          } catch (cErr) {
+            console.warn('id_cards update on verify payment notice:', cErr);
+          }
+        }
+      }
+    } catch (repErr) {
+      console.warn('Failed to promote ID card replacement request to queued:', repErr);
     }
 
     // Log successful transaction to Firestore attempts collection

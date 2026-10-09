@@ -147,6 +147,21 @@ export async function POST(req: Request) {
         );
       }
 
+      // Guard: Do not allow syncing a suspended card to an approved/pending status
+      if (body.status && body.status.toLowerCase() !== 'suspended') {
+        try {
+          const cardDoc = await adminDb.collection('id_cards').doc(targetEmail).get();
+          if (cardDoc.exists && cardDoc.data()?.status?.toLowerCase() === 'suspended') {
+            return NextResponse.json(
+              { success: false, error: 'Cannot update status of a suspended ID card. Replacement fee payment and super admin resolution are required.' },
+              { status: 400 }
+            );
+          }
+        } catch (checkErr) {
+          console.warn('[ID Card Sheets API] Suspended check warning:', checkErr);
+        }
+      }
+
       const syncUrl = buildSheetSyncUrl(scriptUrl, body);
       try {
         await fetch(syncUrl);

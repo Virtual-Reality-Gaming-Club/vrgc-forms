@@ -1,6 +1,6 @@
 export type PaymentStatus = 'Pending' | 'Paid' | 'Failed' | 'Cancelled' | 'Processing' | 'Expired';
 
-export type PaymentCategory = 'Club Fee' | 'Event Registration' | 'Merchandise' | 'Fine' | 'Other';
+export type PaymentCategory = 'Club Fee' | 'Event Registration' | 'Merchandise' | 'Fine' | 'ID Card Replacement' | 'Other';
 
 export interface PaymentItem {
   id: string;
@@ -28,6 +28,7 @@ export interface PaymentItem {
   paid_at?: string;
   failed_at?: string;
   visible_to_faculty?: boolean;
+  metadata?: Record<string, any>;
   created_at: string;
   updated_at?: string;
 }

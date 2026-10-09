@@ -578,6 +578,8 @@ function AppContent() {
                 externalUser={user}
                 externalMemberData={memberData}
                 externalIsAdmin={getPagePermission('idcard').canEdit}
+                externalIsSuperAdmin={isSuperAdmin}
+                externalCanManageCardRequests={isSuperAdmin}
                 externalIsAuthorized={isAuthorized}
                 onLogout={handleLogout}
               />

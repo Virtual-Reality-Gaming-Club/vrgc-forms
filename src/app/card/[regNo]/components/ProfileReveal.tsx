@@ -319,21 +319,40 @@ export default function ProfileReveal({ member, isVisible, isComplete, onReplay 
         {/* Header Bar */}
         <div className="flex items-center justify-between pb-2 border-b border-[#a855f7]/30 shrink-0">
           <div className="flex items-center gap-1.5">
-            <ShieldCheck className="text-[#c084fc]" size={15} />
+            <ShieldCheck className={member.status === 'suspended' ? 'text-rose-400' : 'text-[#c084fc]'} size={15} />
             <span className="font-orbitron font-bold text-xs tracking-widest text-white uppercase">
               MEMBER DOSSIER
             </span>
           </div>
           <div className="flex flex-col items-end">
-            <span className="font-mono text-[9px] tracking-widest text-[#00ff88] uppercase font-bold flex items-center gap-1">
-              <span className="w-1.5 h-1.5 rounded-full bg-[#00ff88] animate-pulse" />
-              VERIFIED
-            </span>
+            {member.status === 'suspended' ? (
+              <span className="font-mono text-[9px] tracking-widest text-rose-400 uppercase font-bold flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-ping" />
+                CARD SUSPENDED
+              </span>
+            ) : (
+              <span className="font-mono text-[9px] tracking-widest text-[#00ff88] uppercase font-bold flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-[#00ff88] animate-pulse" />
+                VERIFIED
+              </span>
+            )}
             <span className="font-mono text-[9px] tracking-wider text-[#d8b4fe] uppercase mt-0.5">
               {joinFormatted}
             </span>
           </div>
         </div>
+
+        {member.status === 'suspended' && (
+          <div className="p-2 rounded-xl bg-rose-950/60 border border-rose-500/50 text-rose-200 text-left text-[11px] leading-tight flex items-start gap-2 shrink-0">
+            <span className="text-rose-400 font-bold shrink-0">⚠️</span>
+            <div>
+              <p className="font-bold text-rose-300 uppercase tracking-tight text-[10px]">Card Reported Lost / Damaged</p>
+              <p className="text-[10px] text-rose-200/80 mt-0.5">
+                This physical card is currently suspended pending replacement verification.
+              </p>
+            </div>
+          </div>
+        )}
 
         {/* Details Grid — 2 columns, 2 rows */}
         <div className="grid grid-cols-2 gap-2 text-left shrink-0">
