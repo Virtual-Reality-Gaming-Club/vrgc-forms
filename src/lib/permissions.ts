@@ -10,7 +10,8 @@ export type PageId =
   | 'tickets'
   | 'maintenance'
   | 'documents'
-  | 'ideahub';
+  | 'ideahub'
+  | 'live_admin';
 
 export interface PagePermission {
   canView: boolean;
@@ -27,6 +28,8 @@ export interface PermissionsConfig {
   customRoles: string[];
   allowedMetadataRoles: string[];
   allowedBlockAccessRoles?: string[];
+  allowedCasterManagerRoles?: string[];
+  allowedCasterManagerEmails?: string[];
   updatedAt?: string;
 }
 
@@ -46,9 +49,10 @@ export const ALL_PAGE_IDS: { id: PageId; label: string; icon: string }[] = [
   { id: 'tickets', label: 'Resolve Tickets', icon: 'confirmation_number' },
   { id: 'maintenance', label: 'Maintenance Desk', icon: 'construction' },
   { id: 'ideahub', label: 'Idea Curator Hub', icon: 'lightbulb' },
+  { id: 'live_admin', label: 'Live Broadcast Hub', icon: 'live_tv' },
 ];
 
-export const SYSTEM_ROLES = ['Admin', 'Payment Admin', 'Technical'];
+export const SYSTEM_ROLES = ['Admin', 'Payment Admin', 'Technical', 'Caster'];
 
 export const DEFAULT_DOMAINS = [
   'Technical',
@@ -110,6 +114,10 @@ export const DEFAULT_PERMISSIONS_CONFIG: PermissionsConfig = {
     Technical: {
       ...createDefaultPagePermissionsMap(true, true, true),
     },
+    Caster: {
+      ...createDefaultPagePermissionsMap(false, false, false),
+      live_admin: createDefaultPagePermission(true, true, true),
+    },
   },
   tiers: {
     members: {
@@ -122,6 +130,7 @@ export const DEFAULT_PERMISSIONS_CONFIG: PermissionsConfig = {
       maintenance: createDefaultPagePermission(false, false, false),
       documents: createDefaultPagePermission(true, false, false),
       ideahub: createDefaultPagePermission(true, true, false),
+      live_admin: createDefaultPagePermission(false, false, false),
     },
     faculty: {
       members: createDefaultPagePermission(true, false, false),
@@ -133,11 +142,14 @@ export const DEFAULT_PERMISSIONS_CONFIG: PermissionsConfig = {
       maintenance: createDefaultPagePermission(false, false, false),
       documents: createDefaultPagePermission(true, false, false),
       ideahub: createDefaultPagePermission(true, true, false),
+      live_admin: createDefaultPagePermission(false, false, false),
     },
   },
   customRoles: [],
   allowedMetadataRoles: ['Admin', 'Technical'],
   allowedBlockAccessRoles: ['Admin', 'Technical'],
+  allowedCasterManagerRoles: ['Admin', 'Technical'],
+  allowedCasterManagerEmails: [],
 };
 
 export const DEFAULT_CLUB_METADATA: ClubMetadata = {
@@ -161,6 +173,8 @@ export async function fetchPermissionsConfig(): Promise<PermissionsConfig> {
         customRoles: data.customRoles || [],
         allowedMetadataRoles: data.allowedMetadataRoles || DEFAULT_PERMISSIONS_CONFIG.allowedMetadataRoles,
         allowedBlockAccessRoles: data.allowedBlockAccessRoles || DEFAULT_PERMISSIONS_CONFIG.allowedBlockAccessRoles,
+        allowedCasterManagerRoles: data.allowedCasterManagerRoles || DEFAULT_PERMISSIONS_CONFIG.allowedCasterManagerRoles || ['Admin', 'Technical'],
+        allowedCasterManagerEmails: data.allowedCasterManagerEmails || [],
         updatedAt: data.updatedAt,
       };
     }
@@ -207,12 +221,55 @@ export function resolveUserPagePermission(
   userRole: string | null | undefined,
   isSuperAdmin: boolean,
   isFaculty: boolean,
-  isAuthorized: boolean
+  isAuthorized: boolean,
+  userEmail?: string | null
 ): PagePermission {
-  // Super Admin always bypasses all restrictions with full authority
   const cleanRole = userRole?.trim().toLowerCase();
+  const cleanEmail = userEmail?.trim().toLowerCase();
+
+  // Super Admin always bypasses all restrictions with full authority
   if (isSuperAdmin || cleanRole === 'super admin' || cleanRole === 'super_admin') {
     return { canView: true, canEdit: true, bypassMaintenance: true };
+  }
+
+  // Live Broadcast Hub (Caster / Broadcast Manager access gate)
+  if (pageId === 'live_admin') {
+    // 1. Direct Caster role
+    if (cleanRole === 'caster') {
+      return { canView: true, canEdit: true, bypassMaintenance: true };
+    }
+
+    // 2. Caster Manager by role
+    const managerRoles = (config.allowedCasterManagerRoles || ['Admin', 'Technical']).map((r) =>
+      r.trim().toLowerCase()
+    );
+    if (userRole && managerRoles.includes(cleanRole || '')) {
+      return { canView: true, canEdit: true, bypassMaintenance: true };
+    }
+
+    // 3. Caster Manager by explicit email delegated by SuperAdmin
+    const managerEmails = (config.allowedCasterManagerEmails || []).map((e) =>
+      e.trim().toLowerCase()
+    );
+    if (cleanEmail && managerEmails.includes(cleanEmail)) {
+      return { canView: true, canEdit: true, bypassMaintenance: true };
+    }
+
+    // 4. Role-specific configured permission in config.roles
+    if (userRole && config.roles) {
+      if (config.roles[userRole]?.live_admin?.canView) {
+        return config.roles[userRole].live_admin;
+      }
+      const matchingKey = Object.keys(config.roles).find(
+        (k) => k.trim().toLowerCase() === cleanRole
+      );
+      if (matchingKey && config.roles[matchingKey]?.live_admin?.canView) {
+        return config.roles[matchingKey].live_admin;
+      }
+    }
+
+    // Fallback: Denied for standard members / non-casters
+    return { canView: false, canEdit: false, bypassMaintenance: false };
   }
 
   // If user has a specific assigned administrative/custom role

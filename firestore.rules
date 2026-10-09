@@ -211,8 +211,43 @@ service cloud.firestore {
       allow update, delete: if isAdmin();
     }
 
+    function isCaster() {
+      return isAuthenticated() && (
+        isAdmin() ||
+        exists(/databases/$(database)/documents/live_casters/$(userEmail()))
+      );
+    }
+
     // =========================================================================
-    // 12. Explicit Catch-All Default Deny
+    // 12. Live Broadcast & Real-Time Match Engine
+    // =========================================================================
+    // Public read access enables low-latency real-time synchronization on vrgc.live.
+    // Mutation is restricted to Casters, Caster Managers, and Super Admins.
+    match /live_config/{docId} {
+      allow read: if true;
+      allow write: if isCaster();
+    }
+
+    match /live_matches/{docId} {
+      allow read: if true;
+      allow write: if isCaster();
+    }
+
+    // Live Casters Registry: Publicly readable for credentials, writable only via Server API
+    match /live_casters/{casterId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // Real-time spectator chat: public read and write access, moderation restricted to administrators.
+    match /live_chat/{chatId} {
+      allow read: if true;
+      allow create: if true;
+      allow update, delete: if isCaster();
+    }
+
+    // =========================================================================
+    // 13. Explicit Catch-All Default Deny
     // =========================================================================
     // Unmatched documents across all databases/collections are denied by default.
     match /{document=**} {

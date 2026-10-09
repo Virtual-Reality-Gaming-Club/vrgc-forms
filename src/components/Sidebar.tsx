@@ -12,6 +12,7 @@ interface SidebarProps {
   isFaculty?: boolean;
   isAuthorized?: boolean;
   userRole?: string | null;
+  userEmail?: string | null;
   permissionsConfig?: PermissionsConfig;
 }
 
@@ -23,6 +24,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   isFaculty = false,
   isAuthorized = true,
   userRole,
+  userEmail,
   permissionsConfig,
 }) => {
   // Base menu items
@@ -35,6 +37,7 @@ const Sidebar: React.FC<SidebarProps> = ({
     { id: 'idcard', label: 'ID Card Portal', icon: 'badge' },
     { id: 'referrals', label: 'Referrals', icon: 'share' },
     { id: 'documents', label: 'Documents', icon: 'description' },
+    { id: 'live_admin', label: 'Live Broadcast Hub', icon: 'live_tv' },
   ];
 
   // Filter based on permissions matrix
@@ -49,7 +52,8 @@ const Sidebar: React.FC<SidebarProps> = ({
       userRole,
       isSuperAdmin,
       isFaculty,
-      isAuthorized
+      isAuthorized,
+      userEmail
     );
     return perm.canView;
   });

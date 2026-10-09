@@ -73,6 +73,22 @@ const Dashboard: React.FC<DashboardProps> = ({ onPageChange, onOpenSuperAdminMod
 
   const dashboardCards: BentoCardItem[] = [
     {
+      id: 'live_admin',
+      title: 'Live Broadcast Hub',
+      description: 'Control tonight’s live match broadcast, YouTube streams, round scores, and halftime side swaps.',
+      label: 'Production Desk',
+      featuredPill: 'LIVE STREAM',
+      icon: 'live_tv',
+      actionText: 'OPEN STUDIO',
+      color: '#120F17',
+      glowColor: '244, 63, 94',
+      iconBg: 'bg-rose-950/90 border-rose-800 text-rose-300',
+      tagColor: 'bg-rose-950/80 text-rose-300 border border-rose-800',
+      iconColor: 'text-rose-300',
+      btnBg: 'bg-rose-600 hover:bg-rose-500',
+      onClick: () => onPageChange('live_admin'),
+    },
+    {
       id: 'idcard',
       title: 'Digital ID Card',
       description: 'Claim your VRGC Digital ID credentials. Submit profile photo and generate high-res pass.',
