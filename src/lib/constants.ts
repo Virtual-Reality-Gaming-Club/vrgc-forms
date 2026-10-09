@@ -42,6 +42,8 @@ export const COLLECTIONS = {
   CONFIG: 'config',
   /** Faculty member records */
   FACULTY: 'faculty',
+  /** Lost / damaged ID card replacement requests */
+  ID_CARD_REQUESTS: 'id_card_requests',
 } as const;
 
 export type CollectionName = (typeof COLLECTIONS)[keyof typeof COLLECTIONS];

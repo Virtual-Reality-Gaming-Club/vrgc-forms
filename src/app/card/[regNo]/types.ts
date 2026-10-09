@@ -15,4 +15,5 @@ export interface UnifiedMember {
   rating: number;
   fromFirestore: boolean;
   fromCsv: boolean;
+  status?: string;
 }

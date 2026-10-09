@@ -128,6 +128,9 @@ const SuperAdminControlCenter: React.FC<SuperAdminControlCenterProps> = ({
   const [clubMetadata, setClubMetadata] = useState<ClubMetadata>(DEFAULT_CLUB_METADATA);
   const [newDomainInput, setNewDomainInput] = useState<string>('');
   const [newPositionInput, setNewPositionInput] = useState<string>('');
+  const [replacementFeeInput, setReplacementFeeInput] = useState<number>(150);
+  const [expiryMinutesInput, setExpiryMinutesInput] = useState<number>(60);
+  const [savingIDCardSettings, setSavingIDCardSettings] = useState<boolean>(false);
   const [savingMetadata, setSavingMetadata] = useState<boolean>(false);
   const [metadataSuccess, setMetadataSuccess] = useState<string>('');
 
@@ -664,6 +667,10 @@ const SuperAdminControlCenter: React.FC<SuperAdminControlCenterProps> = ({
       // 2. Club Metadata
       const meta = await fetchClubMetadata();
       setClubMetadata(meta);
+      if (meta.idCardSettings) {
+        setReplacementFeeInput(meta.idCardSettings.replacementFee ?? 150);
+        setExpiryMinutesInput(meta.idCardSettings.expiryMinutes ?? 60);
+      }
 
       // 3. Admins Governance Data
       const bridgeSuperAdmins = await getSuperAdminEmails();
@@ -1378,6 +1385,49 @@ const SuperAdminControlCenter: React.FC<SuperAdminControlCenterProps> = ({
     } finally {
       setSavingMetadata(false);
     }
+  };
+
+  const handleSaveIDCardSettings = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSavingIDCardSettings(true);
+    try {
+      const updated: ClubMetadata = {
+        ...clubMetadata,
+        idCardSettings: {
+          replacementFee: Math.max(1, Number(replacementFeeInput) || 150),
+          expiryMinutes: Math.max(1, Number(expiryMinutesInput) || 60),
+        },
+      };
+      await saveClubMetadata(updated);
+      setClubMetadata(updated);
+      setMetadataSuccess('ID Card replacement settings updated dynamically in Firestore!');
+      setTimeout(() => setMetadataSuccess(''), 3500);
+    } catch (err: any) {
+      alert('Failed to update ID Card replacement settings: ' + err.message);
+    } finally {
+      setSavingIDCardSettings(false);
+    }
+  };
+
+  const handleToggleManageCardRequests = (roleName: string) => {
+    setPermissions((prev) => {
+      const currentRoleMap = prev.roles[roleName] || createDefaultPagePermissionsMap(true, false, false);
+      const curIdCard = currentRoleMap.idcard || { canView: true, canEdit: false, bypassMaintenance: false };
+      const curFlag = !!curIdCard.canManageCardRequests;
+      return {
+        ...prev,
+        roles: {
+          ...prev.roles,
+          [roleName]: {
+            ...currentRoleMap,
+            idcard: {
+              ...curIdCard,
+              canManageCardRequests: !curFlag,
+            },
+          },
+        },
+      };
+    });
   };
 
   // ─── Faculty Form Handlers ────────────────────────────────────────────────
@@ -2592,12 +2642,21 @@ const SuperAdminControlCenter: React.FC<SuperAdminControlCenterProps> = ({
                                       </div>
                                     </div>
 
-                                    {/* Permission Dropdown + Bypass Toggle */}
-                                    <div className="shrink-0">
+                                    {/* Permission Dropdown + Bypass Toggle + Card Requests Delegate */}
+                                    <div className="shrink-0 flex items-center gap-1.5 flex-wrap justify-end">
                                       {renderPermissionControl(cellId, perm, setLevel, toggleBypass, {
                                         compact: false,
                                         isBinary: p.id === 'tickets' || p.id === 'maintenance',
                                       })}
+                                      {p.id === 'idcard' && !isMembers && !isFaculty && (
+                                        <span
+                                          className="flex items-center gap-1 rounded-xl border font-mono font-bold px-2.5 py-1.5 text-[11px] bg-amber-950/40 border-amber-500/30 text-amber-300/80 cursor-default"
+                                          title="Lost & Damaged Replacement Queue is reserved exclusively for Super Administrators."
+                                        >
+                                          <span className="material-symbols-outlined text-xs">shield_lock</span>
+                                          <span>Super Admin Only</span>
+                                        </span>
+                                      )}
                                     </div>
                                   </div>
                                 </div>
@@ -2729,11 +2788,20 @@ const SuperAdminControlCenter: React.FC<SuperAdminControlCenterProps> = ({
                                       </div>
                                     </div>
 
-                                    <div className="shrink-0">
+                                    <div className="shrink-0 flex items-center gap-1.5 flex-wrap justify-end">
                                       {renderPermissionControl(cellId, perm, setLevel, toggleBypass, {
                                         compact: false,
                                         isBinary: portal.id === 'tickets' || portal.id === 'maintenance',
                                       })}
+                                      {portal.id === 'idcard' && !r.tier && (
+                                        <span
+                                          className="flex items-center gap-1 rounded-xl border font-mono font-bold px-2.5 py-1.5 text-[11px] bg-amber-950/40 border-amber-500/30 text-amber-300/80 cursor-default"
+                                          title="Lost & Damaged Replacement Queue is reserved exclusively for Super Administrators."
+                                        >
+                                          <span className="material-symbols-outlined text-xs">shield_lock</span>
+                                          <span>Super Admin Only</span>
+                                        </span>
+                                      )}
                                     </div>
                                   </div>
                                 </div>
@@ -3308,6 +3376,73 @@ const SuperAdminControlCenter: React.FC<SuperAdminControlCenterProps> = ({
                 </div>
               </div>
 
+            </div>
+
+            {/* ID Card Replacement & Invoicing Settings Card */}
+            <div className="p-5 bg-[#0e071a] border border-[#261238] rounded-2xl space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div>
+                  <h3 className="text-sm font-black text-white uppercase tracking-tight flex items-center gap-2">
+                    <span className="material-symbols-outlined text-purple-400 text-base">badge</span>
+                    <span>ID Card Replacement &amp; Invoicing Settings</span>
+                  </h3>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Configure the dynamic replacement fee and auto-expiry payment window for lost or damaged ID card requests.
+                  </p>
+                </div>
+                <span className="self-start sm:self-auto px-2.5 py-0.5 rounded-full text-[10px] font-bold font-mono uppercase bg-purple-950 border border-purple-500/40 text-purple-300">
+                  Dynamic Fee Engine
+                </span>
+              </div>
+
+              <form onSubmit={handleSaveIDCardSettings} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 items-end pt-2">
+                <div className="space-y-1.5">
+                  <label className="text-[11px] font-bold text-slate-300 uppercase tracking-wider block font-mono">
+                    Replacement Fee (INR ₹)
+                  </label>
+                  <div className="relative">
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-purple-400 text-xs font-bold">₹</span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={10000}
+                      value={replacementFeeInput}
+                      onChange={(e) => setReplacementFeeInput(Number(e.target.value))}
+                      className="w-full pl-7 pr-3 py-2 bg-[#160b26] border border-purple-900/60 rounded-xl text-xs text-white font-mono placeholder-slate-500 focus:outline-none focus:border-purple-500"
+                    />
+                  </div>
+                  <span className="text-[10px] text-slate-500 block">Default: ₹150. Applied to new requests.</span>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-[11px] font-bold text-slate-300 uppercase tracking-wider block font-mono">
+                    Payment Expiry Window (Minutes)
+                  </label>
+                  <div className="relative">
+                    <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-purple-400 text-sm">schedule</span>
+                    <input
+                      type="number"
+                      min={10}
+                      max={1440}
+                      value={expiryMinutesInput}
+                      onChange={(e) => setExpiryMinutesInput(Number(e.target.value))}
+                      className="w-full pl-9 pr-3 py-2 bg-[#160b26] border border-purple-900/60 rounded-xl text-xs text-white font-mono placeholder-slate-500 focus:outline-none focus:border-purple-500"
+                    />
+                  </div>
+                  <span className="text-[10px] text-slate-500 block">Unpaid invoices auto-cancel after this window.</span>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="submit"
+                    disabled={savingIDCardSettings}
+                    className="w-full px-4 py-2.5 bg-gradient-to-r from-purple-700 to-indigo-700 hover:from-purple-600 hover:to-indigo-600 disabled:opacity-40 text-white text-xs font-bold rounded-xl flex items-center justify-center gap-1.5 cursor-pointer shadow-md transition-all"
+                  >
+                    <span className="material-symbols-outlined text-sm">save</span>
+                    <span>{savingIDCardSettings ? 'Saving...' : 'Save Replacement Settings'}</span>
+                  </button>
+                </div>
+              </form>
             </div>
           </div>
         )}
@@ -4885,7 +5020,7 @@ const SuperAdminControlCenter: React.FC<SuperAdminControlCenterProps> = ({
                       <span>Real-time Interface Preview</span>
                     </div>
                     <span className="px-2 py-0.5 rounded-full text-[9px] font-mono font-bold bg-purple-950 text-purple-300 border border-purple-800">
-                      LIVE SIMULATION
+                      LIVE PREVIEW
                     </span>
                   </div>
 

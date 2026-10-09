@@ -1,18 +1,22 @@
 "use client";
 
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { auth, googleProvider, db } from '../lib/firebase';
 import { signInWithPopup, signOut, onAuthStateChanged, User } from 'firebase/auth';
-import { collection, onSnapshot, doc, deleteDoc, updateDoc, setDoc, getDoc, addDoc, getDocs, query, orderBy, limit } from 'firebase/firestore';
+import { collection, onSnapshot, doc, deleteDoc, updateDoc, setDoc, getDoc, addDoc, getDocs, query, orderBy, limit, where, deleteField } from 'firebase/firestore';
 import { supabase } from '../lib/supabase';
 import { getAuthHeaders } from '@/lib/auth-client';
 import SpecularButton from './SpecularButton';
+import { IDCardRequest, generateShortId, formatDisplayId } from '@/types/idcard';
+import { getSuperAdminEmails } from '@/lib/superAdminsBridge';
 
 interface IDCardProps {
   onRedirect: () => void;
   externalUser?: User | null;
   externalMemberData?: any;
   externalIsAdmin?: boolean;
+  externalIsSuperAdmin?: boolean;
+  externalCanManageCardRequests?: boolean;
   externalIsAuthorized?: boolean;
   onLogout?: () => Promise<void>;
 }
@@ -24,6 +28,8 @@ interface MemberData {
   email: string;
   team: string;
   position: string;
+  photoUrl?: string;
+  avatarUrl?: string;
 }
 
 interface CandidateSubmission {
@@ -38,6 +44,17 @@ interface CandidateSubmission {
   avatarUrl: string;
   submittedAt: string;
   status: string;
+  activeRequestId?: string;
+  suspendedReason?: string;
+  suspendedAt?: string;
+  replacementPaid?: boolean;
+  replacementFee?: number;
+  paymentStatus?: string;
+  fulfillmentStatus?: string;
+  paidAt?: string;
+  requestDenied?: boolean;
+  denialMessage?: string;
+  deniedAt?: string | null;
 }
 
 interface AdminActivityLog {
@@ -52,14 +69,136 @@ interface AdminActivityLog {
   timestamp: string;
 }
 
+const DEV_CARD_REQUESTS_KEY = 'vrgc_dev_card_requests';
+
+function getDevCardRequests(): IDCardRequest[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = localStorage.getItem(DEV_CARD_REQUESTS_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (r: IDCardRequest) =>
+        r &&
+        r.fulfillmentStatus !== 'resolved' &&
+        r.fulfillmentStatus !== 'denied' &&
+        r.status !== 'cancelled' &&
+        r.status !== 'resolved'
+    );
+  } catch {
+    return [];
+  }
+}
+
+function saveDevCardRequest(req: IDCardRequest) {
+  if (typeof window === 'undefined') return;
+  try {
+    const existing = getDevCardRequests();
+    const updated = [req, ...existing.filter((r) => r.id !== req.id && r.requestId !== req.requestId)];
+    localStorage.setItem(DEV_CARD_REQUESTS_KEY, JSON.stringify(updated));
+    window.dispatchEvent(new Event('vrgc_dev_requests_updated'));
+  } catch (e) {
+    console.warn('Failed saving dev card request to localStorage:', e);
+  }
+}
+
+function updateDevCardRequest(requestId: string, partial: Partial<IDCardRequest>, userEmail?: string) {
+  if (typeof window === 'undefined') return;
+  try {
+    const existing = getDevCardRequests();
+    const cleanEmail = (userEmail || '').toLowerCase().trim();
+    if (partial.fulfillmentStatus === 'resolved' || partial.fulfillmentStatus === 'denied' || partial.status === 'cancelled') {
+      const updated = existing.filter((r) => {
+        if (requestId && (r.id === requestId || r.requestId === requestId)) return false;
+        if (cleanEmail && ((r.userEmail && r.userEmail.toLowerCase().trim() === cleanEmail) || (r.email && r.email.toLowerCase().trim() === cleanEmail))) return false;
+        return true;
+      });
+      localStorage.setItem(DEV_CARD_REQUESTS_KEY, JSON.stringify(updated));
+      window.dispatchEvent(new Event('vrgc_dev_requests_updated'));
+      return;
+    }
+    let found = false;
+    const updated = existing.map((r) => {
+      if (r.id === requestId || r.requestId === requestId || (cleanEmail && r.userEmail?.toLowerCase().trim() === cleanEmail)) {
+        found = true;
+        return { ...r, ...partial };
+      }
+      return r;
+    });
+    if (!found) {
+      updated.push({
+        id: requestId,
+        requestId: requestId,
+        fulfillmentStatus: 'queued',
+        paymentStatus: 'paid',
+        feeAmount: 150,
+        amount: 150,
+        currency: 'INR',
+        paymentId: requestId,
+        userEmail: userEmail || '',
+        candidateName: 'Member',
+        registrationNumber: '',
+        team: 'General',
+        position: 'Member',
+        createdAt: new Date().toISOString(),
+        expireAt: Date.now() + 86400000,
+        ...partial,
+      } as IDCardRequest);
+    }
+    localStorage.setItem(DEV_CARD_REQUESTS_KEY, JSON.stringify(updated));
+    window.dispatchEvent(new Event('vrgc_dev_requests_updated'));
+  } catch (e) {
+    console.warn('Failed updating dev card request in localStorage:', e);
+  }
+}
+
+function deleteDevCardRequest(requestId: string, userEmail?: string) {
+  if (typeof window === 'undefined') return;
+  try {
+    const existing = getDevCardRequests();
+    const cleanEmail = (userEmail || '').toLowerCase().trim();
+    const updated = existing.filter((r) => {
+      if (requestId && (r.id === requestId || r.requestId === requestId)) return false;
+      if (cleanEmail && ((r.userEmail && r.userEmail.toLowerCase().trim() === cleanEmail) || (r.email && r.email.toLowerCase().trim() === cleanEmail))) return false;
+      return true;
+    });
+    localStorage.setItem(DEV_CARD_REQUESTS_KEY, JSON.stringify(updated));
+    window.dispatchEvent(new Event('vrgc_dev_requests_updated'));
+  } catch (e) {
+    console.warn('Failed deleting dev card request from localStorage:', e);
+  }
+}
+
 const IDCard: React.FC<IDCardProps> = ({
   onRedirect,
   externalUser,
   externalMemberData,
   externalIsAdmin,
+  externalIsSuperAdmin,
+  externalCanManageCardRequests,
   externalIsAuthorized,
   onLogout
 }) => {
+  const [bridgeSuperAdmins, setBridgeSuperAdmins] = useState<string[]>([]);
+
+  useEffect(() => {
+    getSuperAdminEmails()
+      .then((list) => {
+        if (Array.isArray(list)) {
+          setBridgeSuperAdmins(list.map((e) => e.toLowerCase().trim()));
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  const currentCallerEmail = (externalUser?.email || '').toLowerCase().trim();
+  // Only Super Admin has access to Lost & Damaged Replacement Queue and can proceed requests further
+  const canManageCardRequests = Boolean(
+    externalIsSuperAdmin ||
+    bridgeSuperAdmins.includes(currentCallerEmail) ||
+    (externalCanManageCardRequests && externalIsSuperAdmin) ||
+    false
+  );
   const getAdminDisplayRoleOrTeam = (team?: string, position?: string) => {
     const t = (team || '').toLowerCase();
     const p = (position || '').toLowerCase();
@@ -122,13 +261,53 @@ const IDCard: React.FC<IDCardProps> = ({
   const [previewCandidate, setPreviewCandidate] = useState<CandidateSubmission | null>(null);
   const [totalMembers, setTotalMembers] = useState<number>(0);
 
-  // Admin Logs sub-tab state
-  const [adminSectionTab, setAdminSectionTab] = useState<'dossiers' | 'logs'>('dossiers');
+  // Admin Tabs & ID Card Replacement States
+  const [adminSectionTab, setAdminSectionTab] = useState<'dossiers' | 'requests' | 'logs'>('dossiers');
   const [adminLogs, setAdminLogs] = useState<AdminActivityLog[]>([]);
   const [logSearchQuery, setLogSearchQuery] = useState<string>('');
   const [logActionFilter, setLogActionFilter] = useState<string>('All');
   const [selectedLogForDetails, setSelectedLogForDetails] = useState<AdminActivityLog | null>(null);
   const [openLogMenuId, setOpenLogMenuId] = useState<string | null>(null);
+
+  // ID Card Replacement Workflow States
+  const [showReportLostModal, setShowReportLostModal] = useState<boolean>(false);
+  const [isReportingLost, setIsReportingLost] = useState<boolean>(false);
+  const [reportLostError, setReportLostError] = useState<string>('');
+  const [activeReplacementRequest, setActiveReplacementRequest] = useState<IDCardRequest | null>(null);
+  const [isCheckingExpiry, setIsCheckingExpiry] = useState<boolean>(false);
+  const [expiryToast, setExpiryToast] = useState<string | null>(null);
+  const [dynamicReplacementFee, setDynamicReplacementFee] = useState<number>(() => {
+    if (typeof window !== 'undefined') {
+      const cached = localStorage.getItem('vrgc_dynamic_replacement_fee');
+      if (cached && Number(cached) > 0) return Number(cached);
+    }
+    return 150;
+  });
+  const [dynamicExpiryMinutes, setDynamicExpiryMinutes] = useState<number>(60);
+  const [showFeeSettingsModal, setShowFeeSettingsModal] = useState<boolean>(false);
+  const [feeInput, setFeeInput] = useState<number | string>(() => {
+    if (typeof window !== 'undefined') {
+      const cached = localStorage.getItem('vrgc_dynamic_replacement_fee');
+      if (cached && Number(cached) > 0) return Number(cached);
+    }
+    return 150;
+  });
+  const [expiryInput, setExpiryInput] = useState<number | string>(60);
+  const [isSavingFeeSettings, setIsSavingFeeSettings] = useState<boolean>(false);
+  const [showEnquiryModal, setShowEnquiryModal] = useState<boolean>(false);
+  const [enquiryDetails, setEnquiryDetails] = useState<{
+    card: CandidateSubmission | null;
+    request: IDCardRequest | null;
+  } | null>(null);
+
+  const [queuedRequests, setQueuedRequests] = useState<IDCardRequest[]>([]);
+  const latestFirestoreListRef = useRef<IDCardRequest[]>([]);
+  const [loadingRequests, setLoadingRequests] = useState<boolean>(false);
+  const [resolvingRequestId, setResolvingRequestId] = useState<string | null>(null);
+  const [requestSearchQuery, setRequestSearchQuery] = useState<string>('');
+  const [resolveSuccessMessage, setResolveSuccessMessage] = useState<string | null>(null);
+  const [requestStatusFilter, setRequestStatusFilter] = useState<'all' | 'paid' | 'pending'>('all');
+  const [isRefreshingQueue, setIsRefreshingQueue] = useState<boolean>(false);
 
   // Admin 3D Card View & Flipping states
   const [adminViewMode, setAdminViewMode] = useState<'list' | 'cards'>('list');
@@ -463,12 +642,1389 @@ const IDCard: React.FC<IDCardProps> = ({
       const docRef = doc(db, 'id_cards', email.toLowerCase());
       const docSnap = await getDoc(docRef);
       if (docSnap.exists()) {
-        setExistingSubmission(docSnap.data() as CandidateSubmission);
+        setExistingSubmission({ id: docSnap.id, ...docSnap.data() } as CandidateSubmission);
       } else {
         setExistingSubmission(null);
       }
     } catch (err) {
       console.error('Error checking existing submission:', err);
+    }
+  };
+
+  // Dynamically load Razorpay Checkout SDK
+  const loadRazorpayScript = useCallback((): Promise<boolean> => {
+    return new Promise((resolve) => {
+      if (typeof window !== 'undefined' && (window as any).Razorpay) {
+        resolve(true);
+        return;
+      }
+      const script = document.createElement('script');
+      script.src = 'https://checkout.razorpay.com/v1/checkout.js';
+      script.onload = () => resolve(true);
+      script.onerror = () => resolve(false);
+      document.body.appendChild(script);
+    });
+  }, []);
+
+  // 1. Real-time dynamic replacement fee and expiry window listener from config/metadata
+  useEffect(() => {
+    const unsubMeta = onSnapshot(doc(db, 'config', 'metadata'), (metaSnap) => {
+      if (metaSnap.exists()) {
+        const data = metaSnap.data();
+        if (data?.idCardSettings?.replacementFee && Number(data.idCardSettings.replacementFee) > 0) {
+          const fee = Number(data.idCardSettings.replacementFee);
+          setDynamicReplacementFee(fee);
+          setFeeInput(fee);
+          if (typeof window !== 'undefined') {
+            localStorage.setItem('vrgc_dynamic_replacement_fee', String(fee));
+          }
+        }
+        if (data?.idCardSettings?.expiryMinutes && Number(data.idCardSettings.expiryMinutes) > 0) {
+          const exp = Number(data.idCardSettings.expiryMinutes);
+          setDynamicExpiryMinutes(exp);
+          setExpiryInput(exp);
+        }
+      }
+    }, (err) => {
+      console.warn('Metadata snapshot notice:', err);
+    });
+
+    const unsubClubMeta = onSnapshot(doc(db, 'config', 'club_metadata'), (clubMetaSnap) => {
+      if (clubMetaSnap.exists()) {
+        const data = clubMetaSnap.data();
+        if (data?.idCardSettings?.replacementFee && Number(data.idCardSettings.replacementFee) > 0) {
+          const fee = Number(data.idCardSettings.replacementFee);
+          setDynamicReplacementFee(fee);
+          setFeeInput(fee);
+          if (typeof window !== 'undefined') {
+            localStorage.setItem('vrgc_dynamic_replacement_fee', String(fee));
+          }
+        }
+        if (data?.idCardSettings?.expiryMinutes && Number(data.idCardSettings.expiryMinutes) > 0) {
+          const exp = Number(data.idCardSettings.expiryMinutes);
+          setDynamicExpiryMinutes(exp);
+          setExpiryInput(exp);
+        }
+      }
+    }, (err) => {
+      console.warn('Club metadata snapshot notice:', err);
+    });
+
+    return () => {
+      unsubMeta();
+      unsubClubMeta();
+    };
+  }, []);
+
+  // 2. Real-time listener for current user's active replacement request when card is suspended
+  useEffect(() => {
+    if (!existingSubmission || existingSubmission.status !== 'suspended' || !existingSubmission.activeRequestId) {
+      setActiveReplacementRequest(null);
+      return;
+    }
+
+    const targetReqId = existingSubmission.activeRequestId;
+
+    const syncActiveRequest = (snapData: IDCardRequest | null) => {
+      if (snapData) {
+        setActiveReplacementRequest(snapData);
+      } else {
+        const localReq = getDevCardRequests().find((r) => r.id === targetReqId || r.requestId === targetReqId);
+        setActiveReplacementRequest(localReq || null);
+      }
+    };
+
+    let unsub = () => {};
+    try {
+      const reqDocRef = doc(db, 'id_card_requests', targetReqId);
+      unsub = onSnapshot(reqDocRef, async (snap) => {
+        if (snap.exists()) {
+          const reqData = { id: snap.id, ...snap.data() } as IDCardRequest;
+          syncActiveRequest(reqData);
+
+          // Auto-check expiry if pending and past expiration window
+          if (reqData.fulfillmentStatus === 'payment_pending' && reqData.expireAt && reqData.expireAt <= Date.now()) {
+            try {
+              const authHeaders = await getAuthHeaders();
+              const res = await fetch('/api/idcard/check-expiry', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', ...authHeaders },
+                body: JSON.stringify({ requestId: reqData.id, cancelIfUnpaid: false }),
+              });
+              const data = await res.json();
+              if (data.cardReactivated) {
+                setExistingSubmission((prev) => (prev ? { ...prev, status: 'active', activeRequestId: undefined } : null));
+                setActiveReplacementRequest(null);
+                setExpiryToast('Pending replacement invoice expired. Your ID card has been automatically reactivated.');
+                setTimeout(() => setExpiryToast(null), 5000);
+              }
+            } catch (e) {
+              console.warn('Auto-check expiry notice:', e);
+            }
+          }
+        } else {
+          syncActiveRequest(null);
+        }
+      }, (err) => {
+        console.warn('Notice: id_card_requests active request fallback to dev storage:', err);
+        syncActiveRequest(null);
+      });
+    } catch {
+      syncActiveRequest(null);
+    }
+
+    const handleDevUpdate = () => {
+      const localReq = getDevCardRequests().find((r) => r.id === targetReqId || r.requestId === targetReqId);
+      if (localReq) {
+        setActiveReplacementRequest(localReq);
+      }
+    };
+
+    window.addEventListener('vrgc_dev_requests_updated', handleDevUpdate);
+    window.addEventListener('storage', handleDevUpdate);
+
+    return () => {
+      unsub();
+      window.removeEventListener('vrgc_dev_requests_updated', handleDevUpdate);
+      window.removeEventListener('storage', handleDevUpdate);
+    };
+  }, [existingSubmission?.status, existingSubmission?.activeRequestId]);
+
+  // 3. Real-time listener for card replacement requests (Admins with canManageCardRequests only)
+  useEffect(() => {
+    if (!currentUser || !canManageCardRequests) return;
+
+    setLoadingRequests(true);
+
+    const syncWithLocalDev = (firestoreList: IDCardRequest[]) => {
+      const devRequests = getDevCardRequests();
+      const map = new Map<string, IDCardRequest>();
+
+      const isDismissed = (r: Partial<IDCardRequest>) =>
+        r.fulfillmentStatus === 'resolved' ||
+        r.fulfillmentStatus === 'denied' ||
+        r.status === 'cancelled' ||
+        r.status === 'resolved';
+
+      // 1. Add active Firestore requests
+      firestoreList.forEach((r) => {
+        if (!isDismissed(r)) {
+          map.set(r.id || r.requestId || '', r);
+        }
+      });
+
+      // 2. Add dev localStorage requests
+      devRequests.forEach((r) => {
+        if (!isDismissed(r)) {
+          const key = r.id || r.requestId || '';
+          if (!map.has(key)) {
+            map.set(key, r);
+          }
+        }
+      });
+
+      // 3. Cross-reference ALL candidates in 'candidates' who are currently suspended
+      // Every suspended ID MUST appear in Super Admin's queue for review, UNLESS already dismissed/resolved/denied!
+      candidates.forEach((c) => {
+        if (c.status?.toLowerCase() === 'suspended' && !c.requestDenied) {
+          const cleanEmail = (c.email || '').toLowerCase().trim();
+          const reqId = c.activeRequestId || generateShortId('REQ');
+
+          // If a request for this candidate was already marked dismissed in Dev storage, skip!
+          const dismissedInDev = devRequests.find(
+            (dr) => (dr.id === reqId || dr.requestId === reqId || (dr.userEmail && dr.userEmail.toLowerCase().trim() === cleanEmail)) && isDismissed(dr)
+          );
+          if (dismissedInDev) return;
+
+          // If a request for this candidate was already marked dismissed in Firestore, skip!
+          const dismissedInFirestore = firestoreList.find(
+            (fr) => (fr.id === reqId || fr.requestId === reqId || (fr.userEmail && fr.userEmail.toLowerCase().trim() === cleanEmail)) && isDismissed(fr)
+          );
+          if (dismissedInFirestore) return;
+
+          const existingItem = map.get(reqId) || devRequests.find(
+            (dr) => dr.id === reqId || dr.requestId === reqId || dr.userEmail?.toLowerCase() === c.email.toLowerCase()
+          );
+
+          if (existingItem && isDismissed(existingItem)) return;
+
+          const isPaid = Boolean(
+            c.replacementPaid ||
+            c.paymentStatus === 'paid' ||
+            c.fulfillmentStatus === 'queued' ||
+            existingItem?.paymentStatus === 'paid' ||
+            existingItem?.fulfillmentStatus === 'queued'
+          );
+
+          const orderId = existingItem?.orderId || existingItem?.razorpayOrderId || generateShortId('ORD');
+
+          const effectiveFee = (existingItem?.amount && Number(existingItem.amount) > 0)
+            ? Number(existingItem.amount)
+            : (existingItem?.feeAmount && Number(existingItem.feeAmount) > 0)
+            ? Number(existingItem.feeAmount)
+            : (c.replacementFee && Number(c.replacementFee) > 0)
+            ? Number(c.replacementFee)
+            : (dynamicReplacementFee > 0 ? dynamicReplacementFee : 150);
+
+          const requestItem: IDCardRequest = {
+            id: reqId,
+            requestId: reqId,
+            userEmail: c.email,
+            email: c.email,
+            candidateName: c.name || existingItem?.candidateName || 'Member',
+            name: c.name || existingItem?.candidateName || 'Member',
+            registrationNumber: c.registrationNumber || existingItem?.registrationNumber || '',
+            phone: c.phone || existingItem?.phone || '',
+            team: c.team || existingItem?.team || 'General',
+            position: c.position || existingItem?.position || 'Core Member',
+            photoUrl: c.photoUrl || existingItem?.photoUrl || '',
+            avatarUrl: c.avatarUrl || existingItem?.avatarUrl || '',
+            feeAmount: effectiveFee,
+            amount: effectiveFee,
+            currency: existingItem?.currency || 'INR',
+            paymentId: existingItem?.paymentId || reqId,
+            invoiceId: existingItem?.invoiceId || reqId,
+            paymentStatus: isPaid ? 'paid' : 'pending',
+            fulfillmentStatus: isPaid ? 'queued' : 'payment_pending',
+            razorpayOrderId: orderId,
+            orderId: orderId,
+            createdAt: c.suspendedAt || existingItem?.createdAt || new Date().toISOString(),
+            expireAt: existingItem?.expireAt || (Date.now() + 86400000),
+            paidAt: isPaid ? (c.paidAt || existingItem?.paidAt || new Date().toISOString()) : undefined,
+          };
+
+          map.set(reqId, requestItem);
+        }
+      });
+
+      const combined = Array.from(map.values()).filter((r) => !isDismissed(r));
+      combined.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+      setQueuedRequests(combined);
+      setLoadingRequests(false);
+    };
+
+    let unsub = () => {};
+
+    try {
+      unsub = onSnapshot(collection(db, 'id_card_requests'), (snap) => {
+        const list: IDCardRequest[] = [];
+        snap.forEach((d) => {
+          const item = { id: d.id, ...d.data() } as IDCardRequest;
+          const isDismissed = item.fulfillmentStatus === 'resolved' ||
+                              item.fulfillmentStatus === 'denied' ||
+                              item.status === 'cancelled' ||
+                              item.status === 'resolved';
+          if (!isDismissed) {
+            list.push(item);
+          }
+        });
+        latestFirestoreListRef.current = list;
+        syncWithLocalDev(latestFirestoreListRef.current);
+      }, (err) => {
+        console.warn('Notice: Firestore id_card_requests query falling back to dev storage:', err);
+        syncWithLocalDev([]);
+      });
+    } catch (err) {
+      console.warn('Could not query id_card_requests, using dev storage:', err);
+      syncWithLocalDev([]);
+    }
+
+    const handleDevUpdate = () => {
+      syncWithLocalDev(latestFirestoreListRef.current);
+    };
+    window.addEventListener('vrgc_dev_requests_updated', handleDevUpdate);
+    window.addEventListener('storage', handleDevUpdate);
+
+    return () => {
+      unsub();
+      window.removeEventListener('vrgc_dev_requests_updated', handleDevUpdate);
+      window.removeEventListener('storage', handleDevUpdate);
+    };
+  }, [currentUser, canManageCardRequests, candidates, dynamicReplacementFee]);
+
+  // 4. Open Razorpay Checkout for ID Card Replacement
+  const handleOpenRazorpayCheckout = useCallback(async (
+    orderId: string,
+    amount: number,
+    currency: string,
+    requestId: string,
+    invoiceId: string,
+    keyId?: string
+  ) => {
+    try {
+      const isSdkLoaded = await loadRazorpayScript();
+      if (!isSdkLoaded) {
+        alert('Failed to load Razorpay payment SDK. Please check your network connection.');
+        return;
+      }
+
+      let razorpayKey = keyId || process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID;
+      if (!razorpayKey) {
+        try {
+          const keyRes = await fetch('/api/get-razorpay-key');
+          if (keyRes.ok) {
+            const keyJson = await keyRes.json();
+            razorpayKey = keyJson.keyId;
+          }
+        } catch (e) {
+          console.warn('Failed to load razorpay key:', e);
+        }
+      }
+
+      if (!razorpayKey) {
+        alert('Razorpay payment gateway key is not configured. Please contact the administrator.');
+        return;
+      }
+
+      const safeAmount = dynamicReplacementFee > 0 ? dynamicReplacementFee : (Number(amount) > 0 ? Number(amount) : 150);
+      const safeInvoiceId = invoiceId || requestId || generateShortId('REQ');
+      const safeRequestId = requestId || safeInvoiceId;
+      const targetEmail = (currentUser?.email || externalUser?.email || '').toLowerCase().trim();
+
+      // Generate or refresh authentic Razorpay order strictly matching current dynamic fee
+      let liveOrderId = '';
+      try {
+        const createRes = await fetch('/api/idcard/create-order', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            amount: safeAmount,
+            requestId: safeRequestId,
+            paymentId: safeInvoiceId,
+            userEmail: targetEmail,
+            candidateName: existingSubmission?.name || memberData?.name || currentUser?.displayName || 'Member',
+          }),
+        });
+        if (createRes.ok) {
+          const createData = await createRes.json();
+          if (createData.success && createData.orderId) {
+            liveOrderId = createData.orderId;
+          }
+        }
+      } catch (orderErr) {
+        console.warn('Order creation error:', orderErr);
+      }
+
+      if (!liveOrderId && orderId && orderId.startsWith('order_')) {
+        liveOrderId = orderId;
+      }
+
+      if (!liveOrderId || !liveOrderId.startsWith('order_')) {
+        alert('Could not initialize official Razorpay payment order. Please try again.');
+        return;
+      }
+
+      const options = {
+        key: razorpayKey,
+        amount: Math.round(safeAmount * 100),
+        currency: currency || 'INR',
+        name: 'VRGC Platform',
+        description: `ID Card Replacement Fee (₹${safeAmount})`,
+        order_id: liveOrderId,
+        image: '/icon.svg',
+        prefill: {
+          name: existingSubmission?.name || memberData?.name || currentUser?.displayName || 'VRGC Member',
+          email: targetEmail,
+          contact: memberData?.phone || existingSubmission?.phone || '',
+        },
+        theme: {
+          color: '#a855f7',
+        },
+        modal: {
+          ondismiss: () => {
+            setExpiryToast('Payment checkout window closed. You can pay anytime before the invoice expires.');
+            setTimeout(() => setExpiryToast(null), 4000);
+          },
+        },
+        handler: async (response: {
+          razorpay_payment_id: string;
+          razorpay_order_id: string;
+          razorpay_signature: string;
+        }) => {
+          try {
+            setExpiryToast('Verifying payment signature with Razorpay...');
+            const authHeaders = await getAuthHeaders();
+            const verifyRes = await fetch('/api/verify-payment', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                ...authHeaders,
+              },
+              body: JSON.stringify({
+                paymentId: safeInvoiceId,
+                requestId: safeRequestId,
+                razorpay_order_id: response.razorpay_order_id,
+                razorpay_payment_id: response.razorpay_payment_id,
+                razorpay_signature: response.razorpay_signature,
+                userEmail: targetEmail,
+                paymentTitle: 'ID Card Replacement Fee',
+                amount: safeAmount,
+                currency: currency || 'INR',
+              }),
+            });
+
+            const verifyData = await verifyRes.json();
+            if (verifyRes.ok && verifyData.success) {
+              const nowIso = new Date().toISOString();
+
+              // 1. Update id_cards in Firestore
+              if (targetEmail) {
+                try {
+                  await updateDoc(doc(db, 'id_cards', targetEmail), {
+                    replacementPaid: true,
+                    paymentStatus: 'paid',
+                    fulfillmentStatus: 'queued',
+                    paidAt: nowIso,
+                    updatedAt: nowIso,
+                  });
+                } catch (dbErr) {
+                  console.warn('Firestore updateDoc notice:', dbErr);
+                }
+              }
+
+              // 2. Update id_card_requests in Firestore if exists
+              if (safeRequestId) {
+                try {
+                  await updateDoc(doc(db, 'id_card_requests', safeRequestId), {
+                    paymentStatus: 'paid',
+                    fulfillmentStatus: 'queued',
+                    paidAt: nowIso,
+                    razorpayPaymentId: response.razorpay_payment_id,
+                    updatedAt: nowIso,
+                  });
+                } catch (reqDbErr) {
+                  console.warn('Firestore request updateDoc notice:', reqDbErr);
+                }
+              }
+
+              // 3. Upsert into local storage & activeReplacementRequest
+              const existingDevReq = activeReplacementRequest || getDevCardRequests().find(r => r.id === safeRequestId || r.requestId === safeRequestId || r.userEmail === targetEmail);
+              const fullQueuedReq: IDCardRequest = {
+                id: safeRequestId || existingDevReq?.id || generateShortId('REQ'),
+                requestId: safeRequestId || existingDevReq?.requestId || generateShortId('REQ'),
+                userEmail: targetEmail,
+                email: targetEmail,
+                candidateName: existingSubmission?.name || memberData?.name || currentUser?.displayName || 'Member',
+                name: existingSubmission?.name || memberData?.name || currentUser?.displayName || 'Member',
+                registrationNumber: existingSubmission?.registrationNumber || memberData?.registrationNumber || '',
+                phone: existingSubmission?.phone || memberData?.phone || '',
+                team: existingSubmission?.team || memberData?.team || 'General',
+                position: existingSubmission?.position || memberData?.position || 'Core Member',
+                photoUrl: existingSubmission?.photoUrl || memberData?.photoUrl || '',
+                avatarUrl: existingSubmission?.avatarUrl || memberData?.avatarUrl || '',
+                feeAmount: safeAmount,
+                amount: safeAmount,
+                currency: currency || 'INR',
+                paymentId: safeInvoiceId,
+                invoiceId: safeInvoiceId,
+                paymentStatus: 'paid',
+                fulfillmentStatus: 'queued',
+                razorpayOrderId: response.razorpay_order_id,
+                orderId: response.razorpay_order_id,
+                razorpayPaymentId: response.razorpay_payment_id,
+                createdAt: existingDevReq?.createdAt || nowIso,
+                expireAt: Date.now() + 86400000,
+                paidAt: nowIso,
+              };
+
+              saveDevCardRequest(fullQueuedReq);
+              setActiveReplacementRequest(fullQueuedReq);
+
+              // 4. Update in-memory existingSubmission for requester
+              setExistingSubmission((prev) =>
+                prev ? {
+                  ...prev,
+                  replacementPaid: true,
+                  paymentStatus: 'paid',
+                  fulfillmentStatus: 'queued',
+                } : null
+              );
+
+              // 5. Update Super Admin queue in-memory immediately
+              setQueuedRequests((prev) => {
+                const reqKey = fullQueuedReq.id || fullQueuedReq.requestId;
+                const exists = prev.some((r) => r.id === reqKey || r.requestId === reqKey || r.userEmail?.toLowerCase() === targetEmail.toLowerCase());
+                if (exists) {
+                  return prev.map((r) =>
+                    r.id === reqKey || r.requestId === reqKey || r.userEmail?.toLowerCase() === targetEmail.toLowerCase()
+                      ? { ...r, paymentStatus: 'paid', fulfillmentStatus: 'queued', paidAt: fullQueuedReq.paidAt, razorpayPaymentId: response.razorpay_payment_id }
+                      : r
+                  );
+                }
+                return [fullQueuedReq, ...prev];
+              });
+
+              setCandidates((prev) =>
+                prev.map((c) =>
+                  c.email.toLowerCase() === targetEmail.toLowerCase()
+                    ? { ...c, replacementPaid: true, paymentStatus: 'paid', fulfillmentStatus: 'queued' }
+                    : c
+                )
+              );
+
+              setExpiryToast('Payment Verified 🎉 Your replacement request has been forwarded to the Super Admin re-issuance queue!');
+              setTimeout(() => setExpiryToast(null), 5000);
+
+              if (targetEmail) {
+                checkExistingSubmission(targetEmail);
+              }
+            } else {
+              alert('Payment verification failed: ' + (verifyData.error || 'Please contact club support.'));
+            }
+          } catch (err: any) {
+            console.error('Error verifying payment:', err);
+            alert('Verification request failed. If amount was deducted, it will sync automatically.');
+          }
+        },
+      };
+
+      const razorpayInstance = new (window as any).Razorpay(options);
+      razorpayInstance.on('payment.failed', (resp: any) => {
+        console.error('Razorpay payment failed:', resp.error);
+        alert(`Payment Failed: ${resp.error?.description || 'Transaction declined'}. Please try again.`);
+      });
+      razorpayInstance.open();
+    } catch (err: any) {
+      console.error('Error launching Razorpay checkout:', err);
+      alert('Could not open payment gateway: ' + err.message);
+    }
+  }, [currentUser, existingSubmission, memberData, loadRazorpayScript, dynamicReplacementFee]);
+
+  // 5. Trigger Report Lost / Damaged
+  const handleReportLost = async () => {
+    if (!currentUser) return;
+    setIsReportingLost(true);
+    setReportLostError('');
+
+    try {
+      let data: any = null;
+      let usedLocalFallback = false;
+
+      try {
+        const authHeaders = await getAuthHeaders();
+        const currentFee = dynamicReplacementFee > 0 ? dynamicReplacementFee : 150;
+        const res = await fetch('/api/idcard/report-lost', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...authHeaders,
+          },
+          body: JSON.stringify({
+            amount: currentFee,
+            replacementFee: currentFee,
+            fee: currentFee,
+          }),
+        });
+        data = await res.json();
+        if (!res.ok || !data.success) {
+          if (data?.localDevFallback || data?.error?.includes('credentials') || data?.error?.includes('Unauthorized')) {
+            usedLocalFallback = true;
+          } else {
+            throw new Error(data.error || 'Failed to submit card replacement report');
+          }
+        }
+      } catch (fetchErr: any) {
+        if (fetchErr.message?.includes('Failed to submit card replacement report')) {
+          throw fetchErr;
+        }
+        console.warn('API call notice, engaging local dev fallback:', fetchErr);
+        usedLocalFallback = true;
+      }
+
+      if (usedLocalFallback) {
+        const callerEmail = (currentUser.email || '').toLowerCase().trim();
+        const devRequestId = generateShortId('REQ');
+        let devOrderId = '';
+        const fee = dynamicReplacementFee > 0 ? dynamicReplacementFee : 150;
+        const nowIso = new Date().toISOString();
+        const expireAt = Date.now() + (dynamicExpiryMinutes || 60) * 60 * 1000;
+
+        try {
+          const createRes = await fetch('/api/idcard/create-order', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              amount: fee,
+              requestId: devRequestId,
+              paymentId: devRequestId,
+              userEmail: callerEmail,
+              candidateName: existingSubmission?.name || memberData?.name || currentUser.displayName || 'Member',
+            }),
+          });
+          if (createRes.ok) {
+            const createJson = await createRes.json();
+            if (createJson.success && createJson.orderId) {
+              devOrderId = createJson.orderId;
+            }
+          }
+        } catch (oErr) {
+          console.warn('Failed to pre-create live Razorpay order in fallback:', oErr);
+        }
+
+        data = {
+          success: true,
+          requestId: devRequestId,
+          orderId: devOrderId,
+          amount: fee,
+          currency: 'INR',
+          invoiceId: devRequestId,
+          paymentId: devRequestId,
+          keyId: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || '',
+          expireAt,
+        };
+      }
+
+      const callerEmail = (currentUser.email || '').toLowerCase().trim();
+      const effectiveRequestId = data?.requestId || generateShortId('REQ');
+      const effectiveOrderId = data?.orderId || '';
+      const effectivePaymentId = data?.paymentId || data?.invoiceId || effectiveRequestId;
+      const effectiveFee = Number(data?.amount ?? (dynamicReplacementFee > 0 ? dynamicReplacementFee : 150));
+      const nowIso = new Date().toISOString();
+      const expireAt = data?.expireAt || (Date.now() + (dynamicExpiryMinutes || 60) * 60 * 1000);
+
+      const newRequestItem: IDCardRequest = {
+        id: effectiveRequestId,
+        requestId: effectiveRequestId,
+        userEmail: callerEmail,
+        email: callerEmail,
+        candidateName: existingSubmission?.name || memberData?.name || currentUser.displayName || 'Member',
+        name: existingSubmission?.name || memberData?.name || currentUser.displayName || 'Member',
+        registrationNumber: existingSubmission?.registrationNumber || memberData?.registrationNumber || 'N/A',
+        phone: existingSubmission?.phone || memberData?.phone || '',
+        team: existingSubmission?.team || memberData?.team || 'General',
+        position: existingSubmission?.position || memberData?.position || 'Core Member',
+        photoUrl: existingSubmission?.photoUrl || memberData?.photoUrl || '',
+        avatarUrl: existingSubmission?.avatarUrl || memberData?.avatarUrl || '',
+        reason: 'lost_replacement',
+        feeAmount: effectiveFee,
+        replacementFee: effectiveFee,
+        amount: effectiveFee,
+        currency: data?.currency || 'INR',
+        paymentId: effectivePaymentId,
+        invoiceId: effectivePaymentId,
+        paymentStatus: 'pending',
+        fulfillmentStatus: 'payment_pending',
+        razorpayOrderId: effectiveOrderId,
+        orderId: effectiveOrderId,
+        createdAt: nowIso,
+        expireAt: expireAt,
+      };
+
+      // 1. Unconditionally write to Firestore id_cards so Super Admin and queries immediately know card is SUSPENDED & PAYMENT PENDING
+      try {
+        await updateDoc(doc(db, 'id_cards', callerEmail), {
+          status: 'suspended',
+          activeRequestId: effectiveRequestId,
+          suspendedReason: 'lost_replacement',
+          suspendedAt: nowIso,
+          paymentStatus: 'pending',
+          fulfillmentStatus: 'payment_pending',
+          replacementPaid: false,
+          replacementFee: effectiveFee,
+          requestDenied: deleteField(),
+          denialMessage: deleteField(),
+          deniedAt: deleteField(),
+          updatedAt: nowIso,
+        });
+      } catch (dbErr) {
+        console.warn('Notice updating id_cards doc to suspended:', dbErr);
+      }
+
+      // 2. Unconditionally write to Firestore id_card_requests so Super Admin Replacement Queue receives this pending request
+      try {
+        await setDoc(doc(db, 'id_card_requests', effectiveRequestId), newRequestItem, { merge: true });
+      } catch (reqErr) {
+        console.warn('Notice writing id_card_requests doc:', reqErr);
+      }
+
+      // 3. Save to dev storage and trigger synchronization across windows/tabs
+      saveDevCardRequest(newRequestItem);
+      setActiveReplacementRequest(newRequestItem);
+
+      // 4. Update in-memory candidates and queuedRequests immediately
+      setCandidates((prev) =>
+        prev.map((c) =>
+          c.email?.toLowerCase() === callerEmail
+            ? {
+                ...c,
+                status: 'suspended',
+                activeRequestId: effectiveRequestId,
+                suspendedReason: 'lost_replacement',
+                suspendedAt: nowIso,
+                paymentStatus: 'pending',
+                fulfillmentStatus: 'payment_pending',
+                replacementPaid: false,
+                replacementFee: effectiveFee,
+              }
+            : c
+        )
+      );
+
+      setQueuedRequests((prev) => {
+        const withoutThis = prev.filter(
+          (r) => r.id !== effectiveRequestId && r.requestId !== effectiveRequestId && r.userEmail?.toLowerCase() !== callerEmail
+        );
+        return [newRequestItem, ...withoutThis];
+      });
+
+      setShowReportLostModal(false);
+
+      // 5. Update existing submission state
+      setExistingSubmission((prev) => (prev ? {
+        ...prev,
+        status: 'suspended',
+        activeRequestId: effectiveRequestId,
+        suspendedReason: 'lost_replacement',
+        paymentStatus: 'pending',
+        fulfillmentStatus: 'payment_pending',
+        replacementPaid: false,
+        replacementFee: effectiveFee,
+        requestDenied: false,
+        denialMessage: undefined,
+        deniedAt: undefined,
+      } : null));
+
+      setExpiryToast('Card suspended. Opening payment checkout for replacement fee...');
+      setTimeout(() => setExpiryToast(null), 4000);
+
+      // Launch official live Razorpay checkout
+      handleOpenRazorpayCheckout(
+        data?.orderId || effectiveOrderId,
+        effectiveFee,
+        data?.currency || 'INR',
+        effectiveRequestId,
+        effectivePaymentId,
+        data?.keyId
+      );
+    } catch (err: any) {
+      console.error('Error reporting lost card:', err);
+      setReportLostError(err.message || 'Failed to report lost card. Please try again.');
+    } finally {
+      setIsReportingLost(false);
+    }
+  };
+
+  // 6. Cancel Request or Check Expiry
+  const handleCancelOrCheckExpiry = async (explicitCancel = false) => {
+    if (!currentUser || !existingSubmission?.activeRequestId) return;
+    if (explicitCancel) {
+      const confirmed = confirm('Are you sure you want to cancel this replacement request? Your ID card will be reactivated and the pending invoice will be deleted.');
+      if (!confirmed) return;
+    }
+
+    setIsCheckingExpiry(true);
+    try {
+      let handledViaApi = false;
+      try {
+        const authHeaders = await getAuthHeaders();
+        const res = await fetch('/api/idcard/check-expiry', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...authHeaders,
+          },
+          body: JSON.stringify({
+            requestId: existingSubmission.activeRequestId,
+            cancelIfUnpaid: explicitCancel,
+          }),
+        });
+
+        const data = await res.json();
+        if (res.ok && data.success) {
+          handledViaApi = true;
+          if (data.cardReactivated) {
+            setExistingSubmission((prev) => (prev ? {
+              ...prev,
+              status: 'Approved',
+              activeRequestId: undefined,
+              suspendedReason: undefined,
+              replacementPaid: false,
+            } : null));
+            setActiveReplacementRequest(null);
+            setExpiryToast(explicitCancel ? 'Replacement request cancelled. ID card reactivated.' : 'Pending invoice expired. ID card reactivated.');
+            setTimeout(() => setExpiryToast(null), 4000);
+          } else {
+            setExpiryToast(`Request is active: Status is ${data.fulfillmentStatus || 'Payment Pending'}.`);
+            setTimeout(() => setExpiryToast(null), 4000);
+          }
+        }
+      } catch (apiErr) {
+        console.warn('Check expiry API notice, using fallback:', apiErr);
+      }
+
+      if (!handledViaApi && explicitCancel) {
+        const callerEmail = (currentUser.email || '').toLowerCase().trim();
+        try {
+          await updateDoc(doc(db, 'id_cards', callerEmail), {
+            status: 'Approved',
+            activeRequestId: deleteField(),
+            suspendedReason: deleteField(),
+            suspendedAt: deleteField(),
+            replacementPaid: deleteField(),
+            paymentStatus: deleteField(),
+            fulfillmentStatus: deleteField(),
+            paidAt: deleteField(),
+            updatedAt: new Date().toISOString(),
+          });
+        } catch (dbErr) {
+          console.warn('Local dev cancel updateDoc notice:', dbErr);
+        }
+        deleteDevCardRequest(existingSubmission.activeRequestId);
+        setExistingSubmission((prev) => (prev ? {
+          ...prev,
+          status: 'Approved',
+          activeRequestId: undefined,
+          suspendedReason: undefined,
+          replacementPaid: false,
+        } : null));
+        setActiveReplacementRequest(null);
+        setExpiryToast('Replacement request cancelled. ID card reactivated.');
+        setTimeout(() => setExpiryToast(null), 4000);
+      } else if (!handledViaApi && !explicitCancel) {
+        // Fallback local dev status check
+        const targetReqId = existingSubmission.activeRequestId;
+        const localReq = getDevCardRequests().find(r => r.id === targetReqId || r.requestId === targetReqId);
+        if (localReq && localReq.fulfillmentStatus === 'payment_pending' && localReq.expireAt && localReq.expireAt <= Date.now()) {
+          const callerEmail = (currentUser.email || '').toLowerCase().trim();
+          try {
+            await updateDoc(doc(db, 'id_cards', callerEmail), {
+              status: 'Approved',
+              activeRequestId: deleteField(),
+              suspendedReason: deleteField(),
+              suspendedAt: deleteField(),
+              replacementPaid: deleteField(),
+              updatedAt: new Date().toISOString(),
+            });
+          } catch (dbErr) {
+            console.warn('Local dev expiry updateDoc notice:', dbErr);
+          }
+          deleteDevCardRequest(targetReqId);
+          setExistingSubmission((prev) => (prev ? {
+            ...prev,
+            status: 'Approved',
+            activeRequestId: undefined,
+            suspendedReason: undefined,
+            replacementPaid: false,
+          } : null));
+          setActiveReplacementRequest(null);
+          setExpiryToast('Pending invoice expired. ID card reactivated.');
+          setTimeout(() => setExpiryToast(null), 4000);
+        } else if (localReq?.fulfillmentStatus === 'queued' || existingSubmission.replacementPaid) {
+          setExpiryToast('Payment verified! Your replacement request is currently in the Super Admin re-issuance queue.');
+          setTimeout(() => setExpiryToast(null), 4500);
+        } else {
+          setExpiryToast('Request active: Replacement fee payment is currently pending.');
+          setTimeout(() => setExpiryToast(null), 4000);
+        }
+      }
+    } catch (err: any) {
+      alert('Error: ' + err.message);
+    } finally {
+      setIsCheckingExpiry(false);
+    }
+  };
+
+  // 6b. Comprehensive Status & Enquiry Modal Handler
+  const handleCheckStatusOrEnquiry = async () => {
+    setIsCheckingExpiry(true);
+    try {
+      const email = (currentUser?.email || externalUser?.email || '').toLowerCase().trim();
+      if (!email) {
+        setIsCheckingExpiry(false);
+        return;
+      }
+
+      // 1. Fetch latest card doc from Firestore
+      let cardData = existingSubmission;
+      try {
+        const cardRef = doc(db, 'id_cards', email);
+        const cardSnap = await getDoc(cardRef);
+        if (cardSnap.exists()) {
+          cardData = { id: cardSnap.id, ...cardSnap.data() } as CandidateSubmission;
+          setExistingSubmission(cardData);
+        }
+      } catch (cErr) {
+        console.warn('Card lookup notice:', cErr);
+      }
+
+      // If card has already been re-issued / reactivated:
+      if (cardData && cardData.status && cardData.status.toLowerCase() !== 'suspended') {
+        setActiveReplacementRequest(null);
+        setShowEnquiryModal(false);
+        if (cardData.requestDenied) {
+          alert('⚠️ Notice: Your previous ID card replacement request was denied by the administrator. You can try again if you still need a replacement.');
+          setExpiryToast('Previous request was denied. You can try again.');
+        } else {
+          alert('🎉 Great news! Your ID card replacement has been resolved & approved by the Super Admin! Your card is now active.');
+          setExpiryToast('ID card is active and approved.');
+        }
+        setTimeout(() => setExpiryToast(null), 5000);
+        setIsCheckingExpiry(false);
+        return;
+      }
+
+      // 2. Fetch active replacement request from local dev storage or Firestore
+      const targetReqId = cardData?.activeRequestId || existingSubmission?.activeRequestId || generateShortId('REQ');
+      let req = activeReplacementRequest;
+
+      if (!req && cardData?.activeRequestId) {
+        try {
+          const reqSnap = await getDoc(doc(db, 'id_card_requests', cardData.activeRequestId));
+          if (reqSnap.exists()) {
+            req = { id: reqSnap.id, ...reqSnap.data() } as IDCardRequest;
+          }
+        } catch (e) {
+          console.warn('Error fetching request from Firestore:', e);
+        }
+      }
+
+      if (!req) {
+        req = getDevCardRequests().find(
+          (r) => r.id === targetReqId || r.requestId === targetReqId || r.userEmail?.toLowerCase() === email
+        ) || null;
+      }
+
+      const isPaid = Boolean(
+        cardData?.replacementPaid ||
+        cardData?.paymentStatus === 'paid' ||
+        cardData?.fulfillmentStatus === 'queued' ||
+        req?.paymentStatus === 'paid' ||
+        req?.fulfillmentStatus === 'queued'
+      );
+
+      // Always ensure a valid complete request object exists so the modal is never broken
+      if (!req) {
+        const orderId = generateShortId('ORD');
+        req = {
+          id: targetReqId,
+          requestId: targetReqId,
+          userEmail: email,
+          email: email,
+          candidateName: cardData?.name || memberData?.name || currentUser?.displayName || 'Member',
+          name: cardData?.name || memberData?.name || currentUser?.displayName || 'Member',
+          registrationNumber: cardData?.registrationNumber || memberData?.registrationNumber || 'N/A',
+          phone: cardData?.phone || memberData?.phone || '',
+          team: cardData?.team || memberData?.team || 'General',
+          position: cardData?.position || memberData?.position || 'Core Member',
+          photoUrl: cardData?.photoUrl || memberData?.photoUrl || '',
+          avatarUrl: cardData?.avatarUrl || memberData?.avatarUrl || '',
+          feeAmount: dynamicReplacementFee || 150,
+          amount: dynamicReplacementFee || 150,
+          currency: 'INR',
+          paymentId: targetReqId,
+          invoiceId: targetReqId,
+          paymentStatus: isPaid ? 'paid' : 'pending',
+          fulfillmentStatus: isPaid ? 'queued' : 'payment_pending',
+          razorpayOrderId: orderId,
+          orderId: orderId,
+          createdAt: cardData?.suspendedAt || new Date().toISOString(),
+          expireAt: Date.now() + (dynamicExpiryMinutes || 60) * 60 * 1000,
+          paidAt: isPaid ? (cardData?.paidAt || new Date().toISOString()) : undefined,
+        };
+        saveDevCardRequest(req);
+      } else {
+        req = {
+          ...req,
+          paymentStatus: isPaid ? 'paid' : (req.paymentStatus || 'pending'),
+          fulfillmentStatus: isPaid ? 'queued' : (req.fulfillmentStatus || 'payment_pending'),
+          paidAt: isPaid ? (req.paidAt || cardData?.paidAt || new Date().toISOString()) : undefined,
+          amount: req.amount || req.feeAmount || dynamicReplacementFee || 150,
+        };
+        saveDevCardRequest(req);
+      }
+
+      setActiveReplacementRequest(req);
+      setEnquiryDetails({
+        card: cardData,
+        request: req,
+      });
+      setShowEnquiryModal(true);
+    } catch (err: any) {
+      console.error('Enquiry check error:', err);
+      alert('Unable to load enquiry details: ' + (err?.message || err));
+    } finally {
+      setIsCheckingExpiry(false);
+    }
+  };
+
+  // 7. Resolve Request & Issue Card (Super Administrators only)
+  const handleResolveRequest = async (requestId: string, candidateName?: string, regNo?: string, email?: string) => {
+    if (!canManageCardRequests) {
+      alert('Access Denied: Only Super Administrators have permission to review, resolve, and re-issue replacement ID cards.');
+      return;
+    }
+    const confirmed = confirm(`Confirm marking ID card request as RESOLVED and issuing a new active card for ${candidateName || 'this member'}?`);
+    if (!confirmed) return;
+
+    setResolvingRequestId(requestId);
+    try {
+      let resolvedViaApi = false;
+      try {
+        const authHeaders = await getAuthHeaders();
+        const res = await fetch('/api/idcard/resolve-request', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...authHeaders,
+          },
+          body: JSON.stringify({ requestId }),
+        });
+
+        const data = await res.json();
+        if (res.ok && data.success) {
+          resolvedViaApi = true;
+        } else if (!data?.localDevFallback && !data?.error?.includes('credentials')) {
+          throw new Error(data.error || 'Failed to resolve card request');
+        }
+      } catch (apiErr: any) {
+        if (!apiErr?.message?.includes('credentials')) {
+          console.warn('API resolve notice, using client fallback:', apiErr);
+        }
+      }
+
+      // In local dev fallback or client execution: reactivate target member's card directly in Firestore
+      if (email) {
+        try {
+          await updateDoc(doc(db, 'id_cards', email.toLowerCase().trim()), {
+            status: 'Approved',
+            activeRequestId: deleteField(),
+            suspendedReason: deleteField(),
+            suspendedAt: deleteField(),
+            replacementPaid: deleteField(),
+            paymentStatus: deleteField(),
+            fulfillmentStatus: deleteField(),
+            paidAt: deleteField(),
+            requestDenied: deleteField(),
+            denialMessage: deleteField(),
+            deniedAt: deleteField(),
+            updatedAt: new Date().toISOString(),
+          });
+        } catch (clientErr) {
+          console.warn('Client updateDoc notice on resolve:', clientErr);
+        }
+      }
+
+      // Direct Firestore deletion / resolution of id_card_requests document
+      const idsToClearOnResolve = [requestId].filter(Boolean);
+      for (const idToTry of idsToClearOnResolve) {
+        try {
+          await deleteDoc(doc(db, 'id_card_requests', idToTry));
+        } catch {
+          try {
+            await updateDoc(doc(db, 'id_card_requests', idToTry), {
+              fulfillmentStatus: 'resolved',
+              status: 'resolved',
+              resolvedAt: new Date().toISOString(),
+              resolvedBy: currentUser?.email || 'Super Admin',
+              updatedAt: new Date().toISOString(),
+            });
+          } catch (reqErr) {
+            console.warn('Notice updating id_card_requests doc on resolve:', reqErr);
+          }
+        }
+      }
+
+      if (email) {
+        try {
+          const q = query(collection(db, 'id_card_requests'), where('userEmail', '==', email.toLowerCase().trim()));
+          const snap = await getDocs(q);
+          snap.forEach(async (d) => {
+            await deleteDoc(d.ref).catch(() => {});
+          });
+        } catch (qErr) {
+          console.warn('Notice querying id_card_requests by email on resolve:', qErr);
+        }
+      }
+
+      // Mark resolved / deleted in local dev queue
+      deleteDevCardRequest(requestId, email);
+
+      // Immediately filter latestFirestoreListRef so synchronous dev updates won't resurrect this request
+      latestFirestoreListRef.current = latestFirestoreListRef.current.filter(
+        (r) => r.id !== requestId && r.requestId !== requestId && (!email || r.userEmail?.toLowerCase().trim() !== email.toLowerCase().trim())
+      );
+
+      // Update local candidates list immediately
+      setCandidates(prev => prev.map(c =>
+        ((email && c.email.toLowerCase().trim() === email.toLowerCase().trim()) || (regNo && c.registrationNumber === regNo))
+          ? {
+              ...c,
+              status: 'Approved',
+              activeRequestId: undefined,
+              suspendedReason: undefined,
+              replacementPaid: false,
+              requestDenied: false,
+              denialMessage: undefined,
+              deniedAt: undefined,
+            }
+          : c
+      ));
+
+      if (currentUser?.email && email && currentUser.email.toLowerCase().trim() === email.toLowerCase().trim()) {
+        setExistingSubmission(prev => prev ? {
+          ...prev,
+          status: 'Approved',
+          activeRequestId: undefined,
+          suspendedReason: undefined,
+          replacementPaid: false,
+          requestDenied: false,
+          denialMessage: undefined,
+          deniedAt: undefined,
+        } : null);
+        setActiveReplacementRequest(null);
+      }
+
+      setQueuedRequests((prev) =>
+        prev.filter((r) => r.id !== requestId && r.requestId !== requestId && (!email || r.userEmail?.toLowerCase().trim() !== email.toLowerCase().trim()))
+      );
+
+      setResolveSuccessMessage(`Card issued and reactivated for ${candidateName || regNo || 'member'}!`);
+      setTimeout(() => setResolveSuccessMessage(null), 4000);
+    } catch (err: any) {
+      alert('Failed to resolve request: ' + err.message);
+    } finally {
+      setResolvingRequestId(null);
+    }
+  };
+
+  // 7b. Super Admin: Waive Fee and Re-issue Card immediately
+  const handleAdminWaiveAndResolve = async (req: IDCardRequest) => {
+    const confirmed = confirm(
+      `[Super Admin Override]\n\nWaive replacement fee and APPROVE / RE-ISSUE ID card immediately for ${req.candidateName} (${req.registrationNumber})?`
+    );
+    if (!confirmed) return;
+
+    await handleResolveRequest(req.id || req.requestId || '', req.candidateName, req.registrationNumber, req.userEmail);
+  };
+
+  // 7c. Super Admin: Cancel Request and Notify Requester that Request was Denied
+  const handleAdminCancelRequest = async (req: IDCardRequest) => {
+    const confirmed = confirm(
+      `Deny and cancel replacement request for ${req.candidateName} (${req.registrationNumber})?\n\nThe user will receive a clear notice that their request was denied and they can try again.`
+    );
+    if (!confirmed) return;
+
+    const email = (req.userEmail || req.email || '').toLowerCase().trim();
+    const reqId = req.id || req.requestId || '';
+    const nowIso = new Date().toISOString();
+
+    // 1. Attempt API cancel request
+    try {
+      const authHeaders = await getAuthHeaders();
+      await fetch('/api/idcard/cancel-request', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...authHeaders,
+        },
+        body: JSON.stringify({
+          requestId: reqId,
+          reason: 'Denied by Super Administrator',
+        }),
+      });
+    } catch (apiErr) {
+      console.warn('API cancel request notice:', apiErr);
+    }
+
+    // 2. Direct Firestore update for target member's ID card (restored to Approved with denial message)
+    if (email) {
+      try {
+        await updateDoc(doc(db, 'id_cards', email), {
+          status: 'Approved',
+          activeRequestId: deleteField(),
+          suspendedReason: deleteField(),
+          suspendedAt: deleteField(),
+          replacementPaid: deleteField(),
+          paymentStatus: deleteField(),
+          fulfillmentStatus: deleteField(),
+          paidAt: deleteField(),
+          requestDenied: true,
+          denialMessage: 'Your request has been denied and you can try again.',
+          deniedAt: nowIso,
+          updatedAt: nowIso,
+        });
+      } catch (e) {
+        console.warn('Admin cancel request updateDoc notice:', e);
+      }
+    }
+
+    // 2b. Direct Firestore deletion / denial of id_card_requests document
+    const idsToClearOnCancel = [reqId, req.id, req.requestId].filter(Boolean) as string[];
+    for (const idToTry of Array.from(new Set(idsToClearOnCancel))) {
+      try {
+        await deleteDoc(doc(db, 'id_card_requests', idToTry));
+      } catch {
+        try {
+          await updateDoc(doc(db, 'id_card_requests', idToTry), {
+            fulfillmentStatus: 'denied',
+            status: 'cancelled',
+            deniedAt: nowIso,
+            deniedBy: currentUser?.email || 'Super Admin',
+            denialReason: 'Denied by Super Administrator',
+            updatedAt: nowIso,
+          });
+        } catch (reqErr) {
+          console.warn('Notice updating id_card_requests doc on cancel:', reqErr);
+        }
+      }
+    }
+
+    if (email) {
+      try {
+        const q = query(collection(db, 'id_card_requests'), where('userEmail', '==', email));
+        const snap = await getDocs(q);
+        snap.forEach(async (d) => {
+          await deleteDoc(d.ref).catch(() => {});
+        });
+      } catch (qErr) {
+        console.warn('Notice querying id_card_requests by email on cancel:', qErr);
+      }
+    }
+
+    // 3. Update dev storage
+    deleteDevCardRequest(reqId, email);
+
+    // 4. Immediately filter latestFirestoreListRef so synchronous dev updates won't resurrect this request
+    latestFirestoreListRef.current = latestFirestoreListRef.current.filter(
+      (r) => r.id !== reqId && r.requestId !== reqId && (!email || r.userEmail?.toLowerCase().trim() !== email)
+    );
+
+    // 5. Update candidates list in memory
+    setCandidates((prev) =>
+      prev.map((c) =>
+        c.email.toLowerCase().trim() === email || (req.registrationNumber && c.registrationNumber === req.registrationNumber)
+          ? {
+              ...c,
+              status: 'Approved',
+              activeRequestId: undefined,
+              suspendedReason: undefined,
+              replacementPaid: false,
+              requestDenied: true,
+              denialMessage: 'Your request has been denied and you can try again.',
+              deniedAt: nowIso,
+            }
+          : c
+      )
+    );
+
+    // 6. Update existing submission if active user is this candidate
+    if (existingSubmission && existingSubmission.email?.toLowerCase().trim() === email) {
+      setExistingSubmission((prev) =>
+        prev
+          ? {
+              ...prev,
+              status: 'Approved',
+              activeRequestId: undefined,
+              suspendedReason: undefined,
+              replacementPaid: false,
+              requestDenied: true,
+              denialMessage: 'Your request has been denied and you can try again.',
+              deniedAt: nowIso,
+            }
+          : null
+      );
+      setActiveReplacementRequest(null);
+    }
+
+    setQueuedRequests((prev) =>
+      prev.filter((r) => r.id !== reqId && r.requestId !== reqId && (!email || r.userEmail?.toLowerCase().trim() !== email))
+    );
+
+    setResolveSuccessMessage(`Replacement request denied and cancelled. Notification dispatched to ${req.candidateName}.`);
+    setTimeout(() => setResolveSuccessMessage(null), 4000);
+  };
+
+  // 7d. Requester: Dismiss Denial Notification Banner
+  const handleDismissDenialNotice = async () => {
+    const email = (currentUser?.email || externalUser?.email || existingSubmission?.email || '').toLowerCase().trim();
+    if (email) {
+      try {
+        await updateDoc(doc(db, 'id_cards', email), {
+          requestDenied: deleteField(),
+          denialMessage: deleteField(),
+          deniedAt: deleteField(),
+        });
+      } catch (err) {
+        console.warn('Dismiss denial notice error:', err);
+      }
+    }
+    setExistingSubmission((prev) =>
+      prev
+        ? {
+            ...prev,
+            requestDenied: false,
+            denialMessage: undefined,
+            deniedAt: undefined,
+          }
+        : null
+    );
+  };
+
+  // 7e. Manual Queue Refresh
+  const handleRefreshQueue = () => {
+    setIsRefreshingQueue(true);
+    window.dispatchEvent(new Event('vrgc_dev_requests_updated'));
+    setTimeout(() => {
+      setIsRefreshingQueue(false);
+      setResolveSuccessMessage('Card requests queue refreshed.');
+      setTimeout(() => setResolveSuccessMessage(null), 3000);
+    }, 600);
+  };
+
+  // 7f. Super Admin: Save ID Card Replacement Fee & Expiry Settings
+  const handleSaveFeeSettings = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const newFee = Math.max(1, Number(feeInput) || 150);
+    const newExpiry = Math.max(5, Number(expiryInput) || 60);
+
+    setIsSavingFeeSettings(true);
+    try {
+      const nowIso = new Date().toISOString();
+      const payload = {
+        idCardSettings: {
+          replacementFee: newFee,
+          expiryMinutes: newExpiry,
+        },
+        updatedAt: nowIso,
+      };
+
+      // 1. Update config/metadata and config/club_metadata in Firestore
+      await Promise.allSettled([
+        setDoc(doc(db, 'config', 'metadata'), payload, { merge: true }),
+        setDoc(doc(db, 'config', 'club_metadata'), payload, { merge: true }),
+      ]);
+
+      // 2. Update local state immediately
+      setDynamicReplacementFee(newFee);
+      setDynamicExpiryMinutes(newExpiry);
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('vrgc_dynamic_replacement_fee', String(newFee));
+      }
+
+      // Update active replacement request in memory and queuedRequests to reflect new fee
+      setActiveReplacementRequest((prev) => prev ? { ...prev, amount: newFee, feeAmount: newFee } : null);
+      setQueuedRequests((prev) => prev.map((r) => r.paymentStatus !== 'paid' ? { ...r, amount: newFee, feeAmount: newFee } : r));
+
+      // 3. Log to admin activity logs
+      try {
+        await addDoc(collection(db, 'admin_logs'), {
+          action: 'UPDATE_ID_CARD_SETTINGS',
+          adminEmail: (currentUser?.email || externalUser?.email || 'Super Admin').toLowerCase().trim(),
+          performedBy: currentUser?.displayName || currentUser?.email || 'Super Admin',
+          details: `Updated ID Card replacement fee to ₹${newFee} (Expiry: ${newExpiry}m)`,
+          timestamp: nowIso,
+        });
+      } catch (logErr) {
+        console.warn('Failed to log admin action for fee change:', logErr);
+      }
+
+      setResolveSuccessMessage(`ID Card replacement fee updated to ₹${newFee} (Expiry: ${newExpiry}m)!`);
+      setTimeout(() => setResolveSuccessMessage(null), 4000);
+      setShowFeeSettingsModal(false);
+    } catch (err: any) {
+      alert('Failed to update ID Card fee settings: ' + (err?.message || err));
+    } finally {
+      setIsSavingFeeSettings(false);
     }
   };
 
@@ -898,6 +2454,13 @@ const IDCard: React.FC<IDCardProps> = ({
   };
 
   const toggleStatus = async (candidate: CandidateSubmission) => {
+    if (candidate.status?.toLowerCase() === 'suspended') {
+      alert(
+        `Action Blocked: This ID card is currently SUSPENDED due to an active lost/damaged card replacement request (${candidate.activeRequestId || 'Active Request'}).\n\nIt cannot be directly approved or modified here. The member must complete the replacement fee payment, and only a Super Administrator can resolve and re-issue the card through the "CARD REQUESTS" queue.`
+      );
+      return;
+    }
+
     try {
       const currentStatus = candidate.status || 'Pending';
       const newStatus = currentStatus === 'Approved' ? 'Pending' : 'Approved';
@@ -1004,12 +2567,42 @@ const IDCard: React.FC<IDCardProps> = ({
       let matchesStatus = true;
       if (selectedStatus !== 'All') {
         const cStatus = (c.status || 'Pending').toLowerCase();
-        matchesStatus = cStatus === selectedStatus.toLowerCase();
+        if (selectedStatus === 'suspended') {
+          matchesStatus = cStatus === 'suspended';
+        } else if (selectedStatus === 'suspended_unpaid') {
+          const isPaid = Boolean(
+            c.replacementPaid ||
+            c.paymentStatus === 'paid' ||
+            c.fulfillmentStatus === 'queued' ||
+            queuedRequests.some(
+              (r) =>
+                (r.userEmail?.toLowerCase() === c.email?.toLowerCase() ||
+                  (c.activeRequestId && (r.id === c.activeRequestId || r.requestId === c.activeRequestId))) &&
+                (r.paymentStatus === 'paid' || r.fulfillmentStatus === 'queued')
+            )
+          );
+          matchesStatus = cStatus === 'suspended' && !isPaid;
+        } else if (selectedStatus === 'suspended_paid') {
+          const isPaid = Boolean(
+            c.replacementPaid ||
+            c.paymentStatus === 'paid' ||
+            c.fulfillmentStatus === 'queued' ||
+            queuedRequests.some(
+              (r) =>
+                (r.userEmail?.toLowerCase() === c.email?.toLowerCase() ||
+                  (c.activeRequestId && (r.id === c.activeRequestId || r.requestId === c.activeRequestId))) &&
+                (r.paymentStatus === 'paid' || r.fulfillmentStatus === 'queued')
+            )
+          );
+          matchesStatus = cStatus === 'suspended' && isPaid;
+        } else {
+          matchesStatus = cStatus === selectedStatus.toLowerCase();
+        }
       }
 
       return matchesSearch && matchesTeam && matchesStatus;
     });
-  }, [candidates, searchQuery, selectedTeam, selectedStatus]);
+  }, [candidates, searchQuery, selectedTeam, selectedStatus, queuedRequests]);
 
   const visibleCandidates = useMemo(() => {
     return filteredCandidates.slice(0, dossierPageLimit);
@@ -1143,10 +2736,139 @@ const IDCard: React.FC<IDCardProps> = ({
           <div className="space-y-6">
             {existingSubmission ? (
               <div className="flex flex-col items-center justify-center py-10 px-4 stagger-in">
+                {/* Denial Alert Banner (if previous replacement request was denied by admin) */}
+                {Boolean(existingSubmission.requestDenied && existingSubmission.status !== 'suspended') && (
+                  <div className="w-full max-w-[420px] mb-6 p-4 rounded-2xl bg-gradient-to-b from-amber-950/85 to-black/90 border border-amber-500/60 shadow-[0_0_30px_rgba(245,158,11,0.25)] space-y-3 text-center animate-in fade-in duration-300">
+                    <div className="flex items-center justify-center gap-2">
+                      <span className="material-symbols-outlined text-amber-400 text-lg">info</span>
+                      <span className="text-xs font-black tracking-widest uppercase font-mono text-amber-300">
+                        REPLACEMENT REQUEST DENIED
+                      </span>
+                    </div>
+
+                    <p className="text-xs text-amber-200/95 leading-relaxed font-medium">
+                      {existingSubmission.denialMessage || 'Your request has been denied and you can try again.'}
+                    </p>
+
+                    <div className="flex items-center justify-center gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          handleDismissDenialNotice();
+                          setReportLostError('');
+                          setShowReportLostModal(true);
+                        }}
+                        className="px-4 py-2 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-black font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-1.5 cursor-pointer shadow-md transition-all active:scale-98"
+                      >
+                        <span className="material-symbols-outlined text-sm font-bold">refresh</span>
+                        <span>Try Again</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={handleDismissDenialNotice}
+                        className="px-3.5 py-2 rounded-xl bg-black/50 hover:bg-white/10 border border-white/10 text-slate-300 hover:text-white text-xs font-mono font-bold flex items-center justify-center gap-1 cursor-pointer transition-all"
+                      >
+                        <span>Dismiss</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Suspended Alert Banner (if card is suspended) */}
+                {existingSubmission.status === 'suspended' && (() => {
+                  const isSuspendedPaid = Boolean(
+                    existingSubmission.replacementPaid ||
+                    existingSubmission.paymentStatus === 'paid' ||
+                    existingSubmission.fulfillmentStatus === 'queued' ||
+                    activeReplacementRequest?.paymentStatus === 'paid' ||
+                    activeReplacementRequest?.fulfillmentStatus === 'queued'
+                  );
+                  const feeAmount = dynamicReplacementFee > 0 ? dynamicReplacementFee : (activeReplacementRequest?.amount || 150);
+
+                  return (
+                    <div className="w-full max-w-[420px] mb-6 p-4 rounded-2xl bg-gradient-to-b from-rose-950/70 to-black/80 border border-rose-500/50 shadow-[0_0_30px_rgba(244,63,94,0.25)] space-y-3 text-center">
+                      <div className="flex items-center justify-center gap-2">
+                        <span className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-ping shrink-0" />
+                        <span className="text-xs font-black tracking-widest uppercase font-mono text-rose-300">
+                          CARD SUSPENDED • REPORTED LOST / DAMAGED
+                        </span>
+                      </div>
+
+                      <p className="text-xs text-rose-200/90 leading-relaxed">
+                        {isSuspendedPaid
+                          ? 'Your replacement fee is confirmed! Your replacement request has been forwarded to the Super Admin re-issuance queue.'
+                          : `Your card is currently deactivated. Complete the replacement fee of ₹${feeAmount} to queue your card for administrative re-issuance.`}
+                      </p>
+
+                      {!isSuspendedPaid && (
+                        <div className="space-y-2 pt-1">
+                          <div className="flex items-center justify-between text-[11px] font-mono px-3 py-1.5 rounded-xl bg-black/40 border border-rose-900/40 text-rose-300">
+                            <span>Fee Due: ₹{feeAmount}</span>
+                            <span>
+                              Status: <strong className="text-amber-400">Payment Pending</strong>
+                            </span>
+                          </div>
+
+                          {existingSubmission.activeRequestId && (
+                            <div className="flex items-center justify-between text-[10px] font-mono px-3 py-1 rounded-lg bg-black/30 border border-white/5 text-rose-300/80">
+                              <span>Request ID:</span>
+                              <span className="font-bold text-rose-200">
+                                {formatDisplayId(existingSubmission.activeRequestId, 'REQ')}
+                              </span>
+                            </div>
+                          )}
+
+                          <div className="flex flex-col sm:flex-row items-center gap-2 pt-1">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const req = activeReplacementRequest || getDevCardRequests().find(r => r.userEmail === currentUser?.email);
+                                const oid = req?.orderId || req?.razorpayOrderId || '';
+                                const amt = feeAmount;
+                                const cur = req?.currency || 'INR';
+                                const rid = req?.id || req?.requestId || existingSubmission?.activeRequestId || generateShortId('REQ');
+                                const iid = req?.invoiceId || req?.paymentId || rid;
+                                handleOpenRazorpayCheckout(oid, amt, cur, rid, iid);
+                              }}
+                              className="w-full px-4 py-2.5 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-1.5 cursor-pointer shadow-md transition-all active:scale-98"
+                            >
+                              <span className="material-symbols-outlined text-sm">payment</span>
+                              <span>Pay Replacement Fee (₹{feeAmount})</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => handleCancelOrCheckExpiry(true)}
+                              disabled={isCheckingExpiry}
+                              className="w-full sm:w-auto px-3.5 py-2.5 rounded-xl bg-black/50 hover:bg-rose-950/60 border border-rose-500/30 text-rose-300 hover:text-white text-xs font-mono font-bold flex items-center justify-center gap-1 cursor-pointer transition-all shrink-0"
+                              title="Cancel request and unlock ID card immediately"
+                            >
+                              <span className="material-symbols-outlined text-xs">close</span>
+                              <span>Cancel</span>
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      {isSuspendedPaid && (
+                        <div className="p-2.5 rounded-xl bg-indigo-950/60 border border-indigo-500/40 flex items-center justify-center gap-2 text-indigo-300 text-xs font-mono font-bold">
+                          <span className="material-symbols-outlined text-sm text-indigo-400 animate-pulse">hourglass_top</span>
+                          <span>In Super Admin Re-Issuance Queue</span>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+
                 {/* 3D Flip Card Container */}
                 <div
-                  onClick={() => setIsFlipped(!isFlipped)}
-                  className="relative w-full max-w-[340px] aspect-[2.2/3.4] cursor-pointer group [perspective:1000px]"
+                  onClick={() => existingSubmission.status !== 'suspended' && setIsFlipped(!isFlipped)}
+                  className={`relative w-full max-w-[340px] aspect-[2.2/3.4] group [perspective:1000px] ${
+                    existingSubmission.status === 'suspended'
+                      ? 'pointer-events-none grayscale opacity-60 filter contrast-75 cursor-not-allowed select-none'
+                      : 'cursor-pointer'
+                  }`}
                 >
                   <div className={`relative w-full h-full duration-700 [transform-style:preserve-3d] ${isFlipped ? '[transform:rotateY(180deg)]' : ''}`}>
 
@@ -1294,41 +3016,77 @@ const IDCard: React.FC<IDCardProps> = ({
                 </div>
 
                 <div className="border-t border-white/5 pt-4 mt-6 flex flex-col items-center gap-2">
-                  <div className="flex items-center gap-1 text-[10px] text-green-400 font-bold bg-green-500/5 px-2.5 py-1 rounded-full border border-green-500/20">
-                    <span className="material-symbols-outlined text-xs">verified</span>
-                    <span>DOSSIER ACTIVE (RESPONSE RECORDED)</span>
-                  </div>
+                  {existingSubmission.status === 'suspended' ? (
+                    <div className="flex items-center gap-1.5 text-[10px] text-rose-400 font-bold bg-rose-500/10 px-3 py-1 rounded-full border border-rose-500/30 font-mono">
+                      <span className="material-symbols-outlined text-xs text-rose-400">lock</span>
+                      <span>CARD SUSPENDED (REPLACEMENT IN PROGRESS)</span>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-1 text-[10px] text-green-400 font-bold bg-green-500/5 px-2.5 py-1 rounded-full border border-green-500/20">
+                      <span className="material-symbols-outlined text-xs">verified</span>
+                      <span>DOSSIER ACTIVE (RESPONSE RECORDED)</span>
+                    </div>
+                  )}
 
-                  <div className="flex gap-4 mt-2">
-                    <button
-                      onClick={() => handleDownload(existingSubmission)}
-                      className="group flex items-center gap-2 px-6 py-2.5 rounded-full border border-[#a855f7]/30 hover:border-[#a855f7] hover:text-white transition-all text-xs font-bold font-label-caps bg-black/40"
-                    >
-                      <span className="material-symbols-outlined text-sm">download</span>
-                      <span>DOWNLOAD PHOTO</span>
-                    </button>
-                    {existingSubmission.avatarUrl && (
+                  <div className="flex flex-wrap items-center justify-center gap-3 mt-2">
+                    {existingSubmission.status !== 'suspended' && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => handleDownload(existingSubmission)}
+                          className="group flex items-center gap-2 px-5 py-2.5 rounded-full border border-[#a855f7]/30 hover:border-[#a855f7] hover:text-white transition-all text-xs font-bold font-label-caps bg-black/40 cursor-pointer"
+                        >
+                          <span className="material-symbols-outlined text-sm">download</span>
+                          <span>DOWNLOAD PHOTO</span>
+                        </button>
+                        {existingSubmission.avatarUrl && (
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              try {
+                                const response = await fetch(existingSubmission.avatarUrl);
+                                const blob = await response.blob();
+                                const blobUrl = window.URL.createObjectURL(blob);
+                                const link = document.createElement('a');
+                                link.href = blobUrl;
+                                link.download = `${existingSubmission.registrationNumber || 'ID'}_Avatar.jpg`;
+                                document.body.appendChild(link);
+                                link.click();
+                                document.body.removeChild(link);
+                                window.URL.revokeObjectURL(blobUrl);
+                              } catch (err) {
+                                window.open(existingSubmission.avatarUrl, '_blank');
+                              }
+                            }}
+                            className="group flex items-center gap-2 px-5 py-2.5 rounded-full border border-[#a855f7]/30 hover:border-[#a855f7] hover:text-white transition-all text-xs font-bold font-label-caps bg-black/40 cursor-pointer"
+                          >
+                            <span className="material-symbols-outlined text-sm">sports_esports</span>
+                            <span>DOWNLOAD AVATAR</span>
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setReportLostError('');
+                            setShowReportLostModal(true);
+                          }}
+                          className="group flex items-center gap-2 px-5 py-2.5 rounded-full border border-rose-500/40 hover:border-rose-400 bg-rose-950/40 hover:bg-rose-900/50 text-rose-300 hover:text-white transition-all text-xs font-bold font-label-caps cursor-pointer shadow-[0_0_15px_rgba(244,63,94,0.15)]"
+                        >
+                          <span className="material-symbols-outlined text-sm text-rose-400">report_problem</span>
+                          <span>REPORT LOST / DAMAGED</span>
+                        </button>
+                      </>
+                    )}
+
+                    {existingSubmission.status === 'suspended' && (
                       <button
-                        onClick={async () => {
-                          try {
-                            const response = await fetch(existingSubmission.avatarUrl);
-                            const blob = await response.blob();
-                            const blobUrl = window.URL.createObjectURL(blob);
-                            const link = document.createElement('a');
-                            link.href = blobUrl;
-                            link.download = `${existingSubmission.registrationNumber || 'ID'}_Avatar.jpg`;
-                            document.body.appendChild(link);
-                            link.click();
-                            document.body.removeChild(link);
-                            window.URL.revokeObjectURL(blobUrl);
-                          } catch (err) {
-                            window.open(existingSubmission.avatarUrl, '_blank');
-                          }
-                        }}
-                        className="group flex items-center gap-2 px-6 py-2.5 rounded-full border border-[#a855f7]/30 hover:border-[#a855f7] hover:text-white transition-all text-xs font-bold font-label-caps bg-black/40"
+                        type="button"
+                        onClick={handleCheckStatusOrEnquiry}
+                        disabled={isCheckingExpiry}
+                        className="flex items-center gap-2 px-6 py-3 rounded-full border border-purple-500/50 hover:border-purple-400 bg-purple-950/60 hover:bg-purple-900/70 text-purple-200 hover:text-white text-xs font-mono font-bold cursor-pointer transition-all shadow-[0_0_25px_rgba(168,85,247,0.35)] hover:scale-102 active:scale-98"
                       >
-                        <span className="material-symbols-outlined text-sm">sports_esports</span>
-                        <span>DOWNLOAD AVATAR</span>
+                        <span className={`material-symbols-outlined text-sm text-purple-300 ${isCheckingExpiry ? 'animate-spin' : ''}`}>sync</span>
+                        <span>{isCheckingExpiry ? 'Checking Live Status...' : 'Check Status / Enquiry'}</span>
                       </button>
                     )}
                   </div>
@@ -1748,10 +3506,11 @@ const IDCard: React.FC<IDCardProps> = ({
             </div>
 
             {/* ADMIN SUB-SECTION TABS */}
-            <div className="flex items-center gap-2.5 border-b border-white/10 pb-3">
+            <div className="flex items-center gap-2.5 border-b border-white/10 pb-3 flex-wrap">
               <button
+                type="button"
                 onClick={() => setAdminSectionTab('dossiers')}
-                className={`px-4 py-2.5 rounded-xl text-xs font-bold font-label-caps tracking-wider flex items-center gap-2 transition-all duration-200 ${adminSectionTab === 'dossiers'
+                className={`px-4 py-2.5 rounded-xl text-xs font-bold font-label-caps tracking-wider flex items-center gap-2 transition-all duration-200 cursor-pointer ${adminSectionTab === 'dossiers'
                   ? 'bg-primary/20 border border-primary/40 text-white shadow-[0_0_15px_rgba(168,85,247,0.25)]'
                   : 'bg-black/30 border border-white/5 text-white/60 hover:text-white hover:bg-white/5'
                   }`}
@@ -1760,9 +3519,32 @@ const IDCard: React.FC<IDCardProps> = ({
                 <span>DOSSIERS ({candidates.length})</span>
               </button>
 
+              {canManageCardRequests && (
+                <button
+                  type="button"
+                  onClick={() => setAdminSectionTab('requests')}
+                  className={`px-4 py-2.5 rounded-xl text-xs font-bold font-label-caps tracking-wider flex items-center gap-2 transition-all duration-200 cursor-pointer ${adminSectionTab === 'requests'
+                    ? 'bg-indigo-600/30 border border-indigo-500 text-white shadow-[0_0_18px_rgba(99,102,241,0.35)]'
+                    : 'bg-black/30 border border-white/5 text-white/60 hover:text-white hover:bg-white/5'
+                    }`}
+                >
+                  <span className="material-symbols-outlined text-base text-indigo-400">published_with_changes</span>
+                  <span>CARD REQUESTS</span>
+                  <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                    SUPER ADMIN
+                  </span>
+                  {queuedRequests.length > 0 && (
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-indigo-500 text-white shadow-sm animate-pulse">
+                      {queuedRequests.length}
+                    </span>
+                  )}
+                </button>
+              )}
+
               <button
+                type="button"
                 onClick={() => setAdminSectionTab('logs')}
-                className={`px-4 py-2.5 rounded-xl text-xs font-bold font-label-caps tracking-wider flex items-center gap-2 transition-all duration-200 ${adminSectionTab === 'logs'
+                className={`px-4 py-2.5 rounded-xl text-xs font-bold font-label-caps tracking-wider flex items-center gap-2 transition-all duration-200 cursor-pointer ${adminSectionTab === 'logs'
                   ? 'bg-primary/20 border border-primary/40 text-white shadow-[0_0_15px_rgba(168,85,247,0.25)]'
                   : 'bg-black/30 border border-white/5 text-white/60 hover:text-white hover:bg-white/5'
                   }`}
@@ -1770,6 +3552,25 @@ const IDCard: React.FC<IDCardProps> = ({
                 <span className="material-symbols-outlined text-base">history</span>
                 <span>ACTIVITY LOGS ({adminLogs.length})</span>
               </button>
+
+              {canManageCardRequests && (
+                <div className="ml-auto">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFeeInput(dynamicReplacementFee);
+                      setExpiryInput(dynamicExpiryMinutes);
+                      setShowFeeSettingsModal(true);
+                    }}
+                    className="px-3.5 py-2 rounded-xl text-xs font-bold font-mono tracking-wider flex items-center gap-1.5 bg-gradient-to-r from-purple-950/80 to-indigo-950/80 hover:from-purple-900 hover:to-indigo-900 border border-purple-500/40 hover:border-purple-400 text-purple-200 hover:text-white transition-all cursor-pointer shadow-sm active:scale-98"
+                    title="Super Admin: Click to change ID Card replacement fee & expiry window"
+                  >
+                    <span className="material-symbols-outlined text-sm text-purple-400">payments</span>
+                    <span>ID FEE: ₹{dynamicReplacementFee}</span>
+                    <span className="material-symbols-outlined text-xs text-purple-300 opacity-80">edit</span>
+                  </button>
+                </div>
+              )}
             </div>
 
             {/* DOSSIERS SUB-TAB */}
@@ -1865,7 +3666,15 @@ const IDCard: React.FC<IDCardProps> = ({
                         className="px-3 py-2 rounded-xl bg-[#070210] border border-purple-500/30 hover:border-purple-400 text-xs font-bold font-mono text-purple-200 flex items-center gap-2 transition-all cursor-pointer shadow-sm"
                       >
                         <span className="text-[10px] text-purple-400 font-black">STATUS:</span>
-                        <span className="text-white">{selectedStatus}</span>
+                        <span className="text-white max-w-[130px] truncate">
+                          {selectedStatus === 'suspended_unpaid'
+                            ? 'Suspended (Unpaid)'
+                            : selectedStatus === 'suspended_paid'
+                            ? 'Suspended (Paid)'
+                            : selectedStatus === 'suspended'
+                            ? 'Suspended'
+                            : selectedStatus}
+                        </span>
                         <span className={`material-symbols-outlined text-xs text-purple-400 transition-transform ${isStatusDropdownOpen ? 'rotate-180' : ''}`}>
                           expand_more
                         </span>
@@ -1874,11 +3683,14 @@ const IDCard: React.FC<IDCardProps> = ({
                       {isStatusDropdownOpen && (
                         <>
                           <div className="fixed inset-0 z-40" onClick={() => setIsStatusDropdownOpen(false)} />
-                          <div className="absolute right-0 top-full mt-2 z-50 bg-[#0d041c] border border-purple-500/50 rounded-2xl p-1.5 shadow-[0_20px_50px_rgba(0,0,0,0.95)] w-44 space-y-1 text-left animate-in fade-in duration-100">
+                          <div className="absolute right-0 top-full mt-2 z-50 bg-[#0d041c] border border-purple-500/50 rounded-2xl p-1.5 shadow-[0_20px_50px_rgba(0,0,0,0.95)] w-56 space-y-1 text-left animate-in fade-in duration-100">
                             {[
                               { label: 'All Statuses', value: 'All', icon: 'list' },
                               { label: 'Approved', value: 'Approved', icon: 'verified', color: 'text-emerald-300' },
                               { label: 'Pending', value: 'Pending', icon: 'hourglass_empty', color: 'text-amber-300' },
+                              { label: 'Suspended (All)', value: 'suspended', icon: 'lock_person', color: 'text-rose-300' },
+                              { label: 'Suspended (Unpaid)', value: 'suspended_unpaid', icon: 'schedule', color: 'text-amber-400' },
+                              { label: 'Suspended (Paid)', value: 'suspended_paid', icon: 'task_alt', color: 'text-emerald-400' },
                             ].map((st) => (
                               <button
                                 key={st.value}
@@ -1946,6 +3758,23 @@ const IDCard: React.FC<IDCardProps> = ({
                           const display = getAdminDisplayRoleOrTeam(c.team, c.position);
                           const isNearBottom = index >= Math.max(1, filteredCandidates.length - 2);
 
+                          const isSusp = c.status?.toLowerCase() === 'suspended';
+                          const cReq = isSusp
+                            ? queuedRequests.find(
+                                (r) =>
+                                  r.userEmail?.toLowerCase() === c.email?.toLowerCase() ||
+                                  (c.activeRequestId && (r.id === c.activeRequestId || r.requestId === c.activeRequestId))
+                              )
+                            : null;
+                          const isSuspPaid = Boolean(
+                            c.replacementPaid ||
+                            c.paymentStatus === 'paid' ||
+                            c.fulfillmentStatus === 'queued' ||
+                            cReq?.paymentStatus === 'paid' ||
+                            cReq?.fulfillmentStatus === 'queued'
+                          );
+                          const feeVal = cReq?.amount || cReq?.feeAmount || c.replacementFee || dynamicReplacementFee || 150;
+
                           return (
                             <div
                               key={c.id || c.email}
@@ -1982,15 +3811,28 @@ const IDCard: React.FC<IDCardProps> = ({
                                   {submissionDate}
                                 </div>
 
-                                <div className="col-span-2 text-center flex justify-center">
-                                  <span
-                                    className={`px-3 py-1 rounded-full border text-[9px] font-label-caps font-bold tracking-wider ${c.status === 'Approved'
-                                      ? 'bg-green-500/10 border-green-500/30 text-green-400'
-                                      : 'bg-yellow-500/10 border-yellow-500/30 text-yellow-400'
+                                <div className="col-span-2 text-center flex items-center justify-center">
+                                  {isSusp ? (
+                                    <span className="px-3 py-1 rounded-full border border-rose-500/40 bg-rose-500/15 text-rose-300 text-[9px] font-label-caps font-bold tracking-wider flex items-center gap-1.5 animate-pulse">
+                                      <span className="w-1.5 h-1.5 rounded-full bg-rose-400" />
+                                      SUSPENDED
+                                    </span>
+                                  ) : (
+                                    <span
+                                      className={`px-3 py-1 rounded-full border text-[9px] font-label-caps font-bold tracking-wider flex items-center gap-1.5 ${
+                                        c.status === 'Approved'
+                                          ? 'bg-green-500/10 border-green-500/30 text-green-400'
+                                          : 'bg-yellow-500/10 border-yellow-500/30 text-yellow-400'
                                       }`}
-                                  >
-                                    {c.status || 'Pending'}
-                                  </span>
+                                    >
+                                      <span
+                                        className={`w-1.5 h-1.5 rounded-full ${
+                                          c.status === 'Approved' ? 'bg-green-400' : 'bg-yellow-400 animate-pulse'
+                                        }`}
+                                      />
+                                      {c.status || 'Pending'}
+                                    </span>
+                                  )}
                                 </div>
 
                                 <div className="col-span-2 flex justify-end gap-1.5 relative z-30">
@@ -2007,18 +3849,33 @@ const IDCard: React.FC<IDCardProps> = ({
                                     <span className="material-symbols-outlined text-sm">style</span>
                                   </button>
 
-                                  <button
-                                    onClick={(e) => { e.stopPropagation(); toggleStatus(c); }}
-                                    className={`p-2 rounded-lg border transition-all shrink-0 ${c.status === 'Approved'
-                                      ? 'bg-yellow-500/10 border-yellow-500/30 text-yellow-400 hover:bg-yellow-500/20'
-                                      : 'bg-green-500/10 border-green-500/30 text-green-400 hover:bg-green-500/20'
-                                      }`}
-                                    title={c.status === 'Approved' ? 'Mark as Pending' : 'Approve Dossier'}
-                                  >
-                                    <span className="material-symbols-outlined text-sm">
-                                      {c.status === 'Approved' ? 'history' : 'verified'}
-                                    </span>
-                                  </button>
+                                  {isSusp ? (
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setAdminSectionTab('requests');
+                                        setRequestSearchQuery(c.name || c.registrationNumber || c.email);
+                                      }}
+                                      className="p-2 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/35 text-amber-300 hover:text-white transition-all shrink-0 cursor-pointer shadow-sm"
+                                      title={isSuspPaid ? "Card Suspended (Fee Paid): View in Card Requests queue to Approve & Re-Issue" : "Card Suspended (Payment Not Completed): View in Card Requests queue to Waive Fee or Cancel"}
+                                    >
+                                      <span className="material-symbols-outlined text-sm">open_in_new</span>
+                                    </button>
+                                  ) : (
+                                    <button
+                                      onClick={(e) => { e.stopPropagation(); toggleStatus(c); }}
+                                      className={`p-2 rounded-lg border transition-all shrink-0 ${c.status === 'Approved'
+                                        ? 'bg-yellow-500/10 border-yellow-500/30 text-yellow-400 hover:bg-yellow-500/20'
+                                        : 'bg-green-500/10 border-green-500/30 text-green-400 hover:bg-green-500/20'
+                                        }`}
+                                      title={c.status === 'Approved' ? 'Mark as Pending' : 'Approve Dossier'}
+                                    >
+                                      <span className="material-symbols-outlined text-sm">
+                                        {c.status === 'Approved' ? 'history' : 'verified'}
+                                      </span>
+                                    </button>
+                                  )}
 
                                   <button
                                     disabled={downloadingId === c.id}
@@ -2055,14 +3912,21 @@ const IDCard: React.FC<IDCardProps> = ({
                                   </div>
 
                                   <div className="flex items-center gap-2 shrink-0">
-                                    <span
-                                      className={`px-2 py-0.5 rounded-full border text-[8px] font-label-caps font-bold tracking-wider ${c.status === 'Approved'
-                                        ? 'bg-green-500/10 border-green-500/30 text-green-400'
-                                        : 'bg-yellow-500/10 border-yellow-500/30 text-yellow-400'
+                                    {isSusp ? (
+                                      <span className="px-2 py-0.5 rounded-full border border-rose-500/40 bg-rose-500/15 text-rose-300 text-[8px] font-label-caps font-bold tracking-wider animate-pulse">
+                                        SUSPENDED
+                                      </span>
+                                    ) : (
+                                      <span
+                                        className={`px-2 py-0.5 rounded-full border text-[8px] font-label-caps font-bold tracking-wider ${
+                                          c.status === 'Approved'
+                                            ? 'bg-green-500/10 border-green-500/30 text-green-400'
+                                            : 'bg-yellow-500/10 border-yellow-500/30 text-yellow-400'
                                         }`}
-                                    >
-                                      {c.status || 'Pending'}
-                                    </span>
+                                      >
+                                        {c.status || 'Pending'}
+                                      </span>
+                                    )}
 
                                     {/* Mobile 3-Dots Menu Box */}
                                     <div className="relative">
@@ -2102,20 +3966,35 @@ const IDCard: React.FC<IDCardProps> = ({
                                             <span>3D Card View</span>
                                           </button>
 
-                                          <button
-                                            onClick={(e) => {
-                                              e.stopPropagation();
-                                              setOpenMenuId(null);
-                                              toggleStatus(c);
-                                            }}
-                                            className={`w-full px-3.5 py-2.5 text-left flex items-center gap-2.5 hover:bg-white/10 transition-colors ${c.status === 'Approved' ? 'text-yellow-400 font-bold' : 'text-green-400 font-bold'
-                                              }`}
-                                          >
-                                            <span className="material-symbols-outlined text-base">
-                                              {c.status === 'Approved' ? 'history' : 'verified'}
-                                            </span>
-                                            <span>{c.status === 'Approved' ? 'Mark Pending' : 'Approve Dossier'}</span>
-                                          </button>
+                                          {c.status?.toLowerCase() === 'suspended' ? (
+                                            <button
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                setOpenMenuId(null);
+                                                setAdminSectionTab('requests');
+                                                setRequestSearchQuery(c.name || c.registrationNumber || c.email);
+                                              }}
+                                              className="w-full px-3.5 py-2.5 text-left flex items-center gap-2.5 text-amber-300 font-bold hover:bg-white/10 transition-colors"
+                                            >
+                                              <span className="material-symbols-outlined text-base">open_in_new</span>
+                                              <span>{isSuspPaid ? 'View in Requests Queue' : 'Manage Unpaid Request'}</span>
+                                            </button>
+                                          ) : (
+                                            <button
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                setOpenMenuId(null);
+                                                toggleStatus(c);
+                                              }}
+                                              className={`w-full px-3.5 py-2.5 text-left flex items-center gap-2.5 hover:bg-white/10 transition-colors ${c.status === 'Approved' ? 'text-yellow-400 font-bold' : 'text-green-400 font-bold'
+                                                }`}
+                                            >
+                                              <span className="material-symbols-outlined text-base">
+                                                {c.status === 'Approved' ? 'history' : 'verified'}
+                                              </span>
+                                              <span>{c.status === 'Approved' ? 'Mark Pending' : 'Approve Dossier'}</span>
+                                            </button>
+                                          )}
 
                                           <button
                                             disabled={downloadingId === c.id}
@@ -2172,6 +4051,23 @@ const IDCard: React.FC<IDCardProps> = ({
                           const isFlipped = !!flippedCardsMap[cardId];
                           const displayInfo = getAdminDisplayRoleOrTeam(c.team, c.position);
 
+                          const isSusp = c.status?.toLowerCase() === 'suspended';
+                          const cReq = isSusp
+                            ? queuedRequests.find(
+                                (r) =>
+                                  r.userEmail?.toLowerCase() === c.email?.toLowerCase() ||
+                                  (c.activeRequestId && (r.id === c.activeRequestId || r.requestId === c.activeRequestId))
+                              )
+                            : null;
+                          const isSuspPaid = Boolean(
+                            c.replacementPaid ||
+                            c.paymentStatus === 'paid' ||
+                            c.fulfillmentStatus === 'queued' ||
+                            cReq?.paymentStatus === 'paid' ||
+                            cReq?.fulfillmentStatus === 'queued'
+                          );
+                          const feeVal = cReq?.amount || cReq?.feeAmount || c.replacementFee || dynamicReplacementFee || 150;
+
                           return (
                             <div key={cardId} className="flex flex-col items-center gap-3">
                               {/* 3D Flippable Card Element */}
@@ -2209,9 +4105,14 @@ const IDCard: React.FC<IDCardProps> = ({
                                             className="w-full h-full object-cover rounded-lg"
                                             referrerPolicy="no-referrer"
                                           />
-                                          <div className={`absolute bottom-1 right-1 text-white text-[5px] font-black px-1 py-0.5 rounded tracking-widest uppercase shadow-md pointer-events-none ${c.status === 'Approved' ? 'bg-green-500/80' : 'bg-yellow-500/80'
-                                            }`}>
-                                            {c.status === 'Approved' ? 'VERIFIED' : 'PENDING'}
+                                          <div className={`absolute bottom-1 right-1 text-white text-[5px] font-black px-1 py-0.5 rounded tracking-widest uppercase shadow-md pointer-events-none ${
+                                            isSusp
+                                              ? isSuspPaid ? 'bg-indigo-600/90' : 'bg-rose-600/90'
+                                              : c.status === 'Approved' ? 'bg-green-500/80' : 'bg-yellow-500/80'
+                                          }`}>
+                                            {isSusp
+                                              ? isSuspPaid ? `SUSPENDED • PAID (₹${feeVal})` : `SUSPENDED • UNPAID (₹${feeVal})`
+                                              : c.status === 'Approved' ? 'VERIFIED' : 'PENDING'}
                                           </div>
                                         </div>
                                       </div>
@@ -2333,19 +4234,33 @@ const IDCard: React.FC<IDCardProps> = ({
                                   <span>DOSSIER</span>
                                 </button>
 
-                                <button
-                                  type="button"
-                                  onClick={() => toggleStatus(c)}
-                                  className={`p-1.5 rounded-lg border transition-all ${c.status === 'Approved'
-                                    ? 'bg-yellow-500/10 border-yellow-500/30 text-yellow-400 hover:bg-yellow-500/20'
-                                    : 'bg-green-500/10 border-green-500/30 text-green-400 hover:bg-green-500/20'
-                                    }`}
-                                  title={c.status === 'Approved' ? 'Mark as Pending' : 'Approve Dossier'}
-                                >
-                                  <span className="material-symbols-outlined text-xs">
-                                    {c.status === 'Approved' ? 'history' : 'verified'}
-                                  </span>
-                                </button>
+                                {isSusp ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setAdminSectionTab('requests');
+                                      setRequestSearchQuery(c.name || c.registrationNumber || c.email);
+                                    }}
+                                    className="p-1.5 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/35 text-amber-300 hover:text-white transition-all cursor-pointer shadow-sm"
+                                    title={isSuspPaid ? "Card Suspended (Fee Paid): View in Card Requests queue to Approve & Re-Issue" : "Card Suspended (Payment Not Completed): View in Card Requests queue to Waive Fee or Cancel"}
+                                  >
+                                    <span className="material-symbols-outlined text-xs">open_in_new</span>
+                                  </button>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() => toggleStatus(c)}
+                                    className={`p-1.5 rounded-lg border transition-all ${c.status === 'Approved'
+                                      ? 'bg-yellow-500/10 border-yellow-500/30 text-yellow-400 hover:bg-yellow-500/20'
+                                      : 'bg-green-500/10 border-green-500/30 text-green-400 hover:bg-green-500/20'
+                                      }`}
+                                    title={c.status === 'Approved' ? 'Mark as Pending' : 'Approve Dossier'}
+                                  >
+                                    <span className="material-symbols-outlined text-xs">
+                                      {c.status === 'Approved' ? 'history' : 'verified'}
+                                    </span>
+                                  </button>
+                                )}
 
                                 <button
                                   type="button"
@@ -2391,6 +4306,314 @@ const IDCard: React.FC<IDCardProps> = ({
                 </div>
               </div>
             )}
+
+            {/* ID CARD REQUESTS SUB-TAB (Admins with canManageCardRequests only) */}
+            {adminSectionTab === 'requests' && canManageCardRequests && (() => {
+              const isDismissed = (r: IDCardRequest) =>
+                r.fulfillmentStatus === 'resolved' ||
+                r.fulfillmentStatus === 'denied' ||
+                r.status === 'cancelled' ||
+                r.status === 'resolved';
+
+              const activeQueuedRequests = queuedRequests.filter((r) => !isDismissed(r));
+              const paidRequests = activeQueuedRequests.filter((r) => r.paymentStatus === 'paid' || r.fulfillmentStatus === 'queued');
+              const pendingRequests = activeQueuedRequests.filter((r) => r.paymentStatus !== 'paid' && r.fulfillmentStatus !== 'queued');
+
+              const filteredRequests = activeQueuedRequests.filter((r) => {
+                // Status Filter
+                if (requestStatusFilter === 'paid' && (r.paymentStatus !== 'paid' && r.fulfillmentStatus !== 'queued')) return false;
+                if (requestStatusFilter === 'pending' && (r.paymentStatus === 'paid' || r.fulfillmentStatus === 'queued')) return false;
+
+                // Search Query
+                if (!requestSearchQuery.trim()) return true;
+                const q = requestSearchQuery.toLowerCase();
+                return (
+                  (r.candidateName || '').toLowerCase().includes(q) ||
+                  (r.registrationNumber || '').toLowerCase().includes(q) ||
+                  (r.userEmail || '').toLowerCase().includes(q) ||
+                  (r.team || '').toLowerCase().includes(q) ||
+                  (r.position || '').toLowerCase().includes(q)
+                );
+              });
+
+              return (
+                <div className="space-y-6">
+                  {/* Action & Filter Bar */}
+                  <div className="glass-panel p-4 sm:p-5 rounded-2xl border border-indigo-500/25 bg-[#090214]/90 flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-xl">
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="material-symbols-outlined text-indigo-400 text-lg">published_with_changes</span>
+                        <h2 className="text-sm font-black text-white uppercase tracking-wider">
+                          Lost &amp; Damaged Replacement Queue
+                        </h2>
+                        <span className="px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-indigo-950 border border-indigo-500/40 text-indigo-300">
+                          {queuedRequests.length} Total Requests
+                        </span>
+                        {paidRequests.length > 0 && (
+                          <span className="px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-emerald-950 border border-emerald-500/40 text-emerald-300">
+                            {paidRequests.length} Ready to Issue
+                          </span>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setFeeInput(dynamicReplacementFee);
+                            setExpiryInput(dynamicExpiryMinutes);
+                            setShowFeeSettingsModal(true);
+                          }}
+                          className="px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-purple-950/90 hover:bg-purple-900 border border-purple-500/50 text-purple-300 hover:text-white flex items-center gap-1 cursor-pointer transition-all shadow-sm active:scale-98"
+                          title="Super Admin: Click to change ID Card replacement fee & expiry window"
+                        >
+                          <span className="material-symbols-outlined text-[12px] text-purple-400">payments</span>
+                          <span>FEE: ₹{dynamicReplacementFee}</span>
+                          <span className="material-symbols-outlined text-[10px] text-purple-300">edit</span>
+                        </button>
+                      </div>
+                      <p className="text-xs text-slate-400">
+                        Review lost/damaged replacement requests. Super Admins can resolve paid requests, override &amp; waive fees, or configure dynamic re-issuance fee.
+                      </p>
+                    </div>
+
+                    {/* Filter Pills, Search Bar & Refresh */}
+                    <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 w-full md:w-auto">
+                      {/* Filter Pills */}
+                      <div className="flex items-center bg-black/40 p-1 rounded-xl border border-white/5">
+                        <button
+                          type="button"
+                          onClick={() => setRequestStatusFilter('all')}
+                          className={`px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold cursor-pointer transition-all ${
+                            requestStatusFilter === 'all'
+                              ? 'bg-indigo-600 text-white shadow-sm'
+                              : 'text-slate-400 hover:text-white'
+                          }`}
+                        >
+                          ALL ({queuedRequests.length})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setRequestStatusFilter('paid')}
+                          className={`px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold cursor-pointer transition-all ${
+                            requestStatusFilter === 'paid'
+                              ? 'bg-emerald-600 text-white shadow-sm'
+                              : 'text-slate-400 hover:text-emerald-300'
+                          }`}
+                        >
+                          PAID ({paidRequests.length})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setRequestStatusFilter('pending')}
+                          className={`px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold cursor-pointer transition-all ${
+                            requestStatusFilter === 'pending'
+                              ? 'bg-amber-600 text-white shadow-sm'
+                              : 'text-slate-400 hover:text-amber-300'
+                          }`}
+                        >
+                          PENDING ({pendingRequests.length})
+                        </button>
+                      </div>
+
+                      {/* Search Bar */}
+                      <div className="relative flex-1 sm:w-64">
+                        <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-indigo-400 text-base">search</span>
+                        <input
+                          type="text"
+                          placeholder="Search candidate..."
+                          value={requestSearchQuery}
+                          onChange={(e) => setRequestSearchQuery(e.target.value)}
+                          className="w-full bg-black/40 border border-indigo-900/60 rounded-xl pl-9 pr-4 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 font-mono transition-all"
+                        />
+                      </div>
+
+                      {/* Set Fee Button */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setFeeInput(dynamicReplacementFee);
+                          setExpiryInput(dynamicExpiryMinutes);
+                          setShowFeeSettingsModal(true);
+                        }}
+                        className="p-2 sm:px-3 sm:py-2 rounded-xl bg-purple-950/70 hover:bg-purple-900/90 border border-purple-500/40 text-purple-200 hover:text-white text-xs font-mono font-bold flex items-center justify-center gap-1.5 cursor-pointer transition-all shrink-0 active:scale-98"
+                        title="Super Admin: Configure replacement fee and expiry window"
+                      >
+                        <span className="material-symbols-outlined text-sm text-purple-400">payments</span>
+                        <span className="hidden sm:inline">SET FEE (₹{dynamicReplacementFee})</span>
+                      </button>
+
+                      {/* Refresh Button */}
+                      <button
+                        type="button"
+                        onClick={handleRefreshQueue}
+                        disabled={isRefreshingQueue}
+                        className="p-2 sm:px-3 sm:py-2 rounded-xl bg-indigo-950/60 hover:bg-indigo-900/80 border border-indigo-500/30 text-indigo-300 hover:text-white text-xs font-mono font-bold flex items-center justify-center gap-1.5 cursor-pointer transition-all shrink-0"
+                        title="Force reload all requests"
+                      >
+                        <span className={`material-symbols-outlined text-sm ${isRefreshingQueue ? 'animate-spin' : ''}`}>sync</span>
+                        <span className="hidden sm:inline">REFRESH</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Success Alert Banner */}
+                  {resolveSuccessMessage && (
+                    <div className="p-3.5 rounded-xl bg-emerald-950/80 border border-emerald-500/50 text-emerald-200 text-xs font-mono font-bold flex items-center gap-2 shadow-lg animate-fade-in">
+                      <span className="material-symbols-outlined text-emerald-400 text-base">check_circle</span>
+                      <span>{resolveSuccessMessage}</span>
+                    </div>
+                  )}
+
+                  {/* Loading State */}
+                  {loadingRequests && (
+                    <div className="flex flex-col items-center justify-center py-16 gap-3">
+                      <div className="w-8 h-8 rounded-full border-2 border-indigo-500 border-t-transparent animate-spin" />
+                      <span className="text-xs font-mono text-slate-400">Loading queued card replacement requests...</span>
+                    </div>
+                  )}
+
+                  {/* Empty State */}
+                  {!loadingRequests && filteredRequests.length === 0 && (
+                    <div className="flex flex-col items-center justify-center py-16 px-4 rounded-2xl bg-[#090214]/60 border border-white/5 space-y-3 text-center">
+                      <div className="w-14 h-14 rounded-2xl bg-indigo-950/60 border border-indigo-500/30 flex items-center justify-center text-indigo-400 shadow-[0_0_25px_rgba(99,102,241,0.2)]">
+                        <span className="material-symbols-outlined text-2xl">task_alt</span>
+                      </div>
+                      <h3 className="text-sm font-bold text-white uppercase tracking-wider">
+                        {requestSearchQuery ? 'No Matching Replacement Requests' : 'Replacement Queue is Clear'}
+                      </h3>
+                      <p className="text-xs text-slate-400 max-w-md">
+                        {requestSearchQuery
+                          ? 'No card replacement requests found matching your filter criteria.'
+                          : 'There are currently no active replacement requests for suspended cards. When a card is reported lost or damaged, it will appear here immediately.'}
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Requests Grid */}
+                  {!loadingRequests && filteredRequests.length > 0 && (
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                      {filteredRequests.map((req) => {
+                        const isReqPaid = req.paymentStatus === 'paid' || req.fulfillmentStatus === 'queued';
+
+                        return (
+                          <div
+                            key={req.id}
+                            className={`p-5 rounded-2xl border transition-all duration-300 shadow-[0_4px_25px_rgba(0,0,0,0.6)] space-y-4 flex flex-col justify-between ${
+                              isReqPaid
+                                ? 'bg-[#0e071c] border-emerald-500/30 hover:border-emerald-500/60'
+                                : 'bg-[#120815] border-amber-500/30 hover:border-amber-500/60'
+                            }`}
+                          >
+                            <div className="space-y-3">
+                              {/* Card Header: Reg No and Paid/Pending Badge */}
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="font-mono text-xs font-black px-2.5 py-1 rounded-lg bg-indigo-950/80 border border-indigo-500/40 text-indigo-300 tracking-wider">
+                                  {req.registrationNumber}
+                                </span>
+                                {isReqPaid ? (
+                                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-emerald-950/80 border border-emerald-500/50 text-emerald-300 shadow-sm">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                                    PAID ₹{req.amount || 150} • READY
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-rose-950/80 border border-rose-500/50 text-rose-300 shadow-sm">
+                                    <span className="material-symbols-outlined text-[11px] text-rose-400">hourglass_top</span>
+                                    PAYMENT NOT COMPLETED (₹{req.amount || 150})
+                                  </span>
+                                )}
+                              </div>
+
+                              {/* Candidate Details */}
+                              <div>
+                                <h3 className="font-bold text-white text-base truncate">{req.candidateName}</h3>
+                                <p className="text-xs text-slate-400 font-mono truncate">{req.userEmail}</p>
+                              </div>
+
+                              {/* Team & Position */}
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded bg-purple-950/60 border border-purple-800/50 text-purple-300 uppercase">
+                                  {req.team || 'Member'}
+                                </span>
+                                <span className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded bg-white/5 border border-white/10 text-slate-300 uppercase">
+                                  {req.position || 'Core Member'}
+                                </span>
+                              </div>
+
+                              {/* Metadata Details */}
+                              <div className="space-y-1 pt-2 border-t border-white/5 text-[11px] font-mono text-slate-400">
+                                <div className="flex items-center justify-between">
+                                  <span>Suspended At:</span>
+                                  <span className="text-slate-300 font-bold">
+                                    {req.createdAt ? new Date(req.createdAt).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }) : 'Recent'}
+                                  </span>
+                                </div>
+                                <div className="flex items-center justify-between">
+                                  <span>Request ID:</span>
+                                  <span className="text-slate-300 font-mono font-bold truncate max-w-[150px]" title={req.id}>
+                                    {formatDisplayId(req.id || req.requestId, 'REQ')}
+                                  </span>
+                                </div>
+                                {(req.orderId || req.razorpayOrderId) && (
+                                  <div className="flex items-center justify-between">
+                                    <span>Order ID:</span>
+                                    <span className="text-slate-300 font-mono font-bold truncate max-w-[150px]" title={req.orderId || req.razorpayOrderId}>
+                                      {formatDisplayId(req.orderId || req.razorpayOrderId, 'ORD')}
+                                    </span>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* Action Buttons */}
+                            <div className="pt-2 space-y-2">
+                              {isReqPaid ? (
+                                <button
+                                  type="button"
+                                  disabled={resolvingRequestId === req.id}
+                                  onClick={() => handleResolveRequest(req.id, req.candidateName, req.registrationNumber, req.userEmail)}
+                                  className="w-full py-2.5 px-4 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 disabled:opacity-40 text-white font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-1.5 cursor-pointer shadow-md transition-all active:scale-98"
+                                >
+                                  {resolvingRequestId === req.id ? (
+                                    <>
+                                      <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                                      <span>Reactivating &amp; Resolving...</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <span className="material-symbols-outlined text-sm">verified</span>
+                                      <span>Approve &amp; Re-Issue Card</span>
+                                    </>
+                                  )}
+                                </button>
+                              ) : (
+                                <button
+                                  type="button"
+                                  disabled={resolvingRequestId === req.id}
+                                  onClick={() => handleAdminWaiveAndResolve(req)}
+                                  className="w-full py-2.5 px-4 rounded-xl bg-emerald-950/70 hover:bg-emerald-900 border border-emerald-500/50 text-emerald-300 hover:text-white font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-1.5 cursor-pointer transition-all shadow-sm active:scale-98"
+                                  title="Super Admin Override: Waive replacement fee and issue active card immediately"
+                                >
+                                  <span className="material-symbols-outlined text-sm">verified_user</span>
+                                  <span>Waive Fee &amp; Re-Issue Card</span>
+                                </button>
+                              )}
+
+                              <button
+                                type="button"
+                                onClick={() => handleAdminCancelRequest(req)}
+                                className="w-full py-2 px-3 rounded-xl bg-rose-950/40 hover:bg-rose-900/60 border border-rose-500/30 text-rose-300 hover:text-white font-bold text-[11px] uppercase tracking-wider flex items-center justify-center gap-1.5 cursor-pointer transition-all active:scale-98"
+                                title="Deny request and restore member card with retry notification"
+                              >
+                                <span className="material-symbols-outlined text-xs">close</span>
+                                <span>Cancel Request</span>
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
 
             {/* ACTIVITY LOGS SUB-TAB */}
             {adminSectionTab === 'logs' && (() => {
@@ -2661,6 +4884,111 @@ const IDCard: React.FC<IDCardProps> = ({
 
       </section>
 
+      {/* Floating Expiry & Status Notification Toast */}
+      {expiryToast && (
+        <div className="fixed top-20 right-4 z-[250] max-w-md p-4 rounded-2xl bg-[#0e071c] border border-indigo-500/60 text-white text-xs font-mono shadow-[0_10px_35px_rgba(0,0,0,0.8),0_0_20px_rgba(99,102,241,0.3)] flex items-start justify-between gap-3 animate-in fade-in slide-in-from-top-4 duration-200">
+          <div className="flex items-start gap-2">
+            <span className="material-symbols-outlined text-indigo-400 text-base shrink-0">info</span>
+            <p className="leading-snug">{expiryToast}</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setExpiryToast(null)}
+            className="text-slate-400 hover:text-white shrink-0 cursor-pointer"
+          >
+            <span className="material-symbols-outlined text-sm">close</span>
+          </button>
+        </div>
+      )}
+
+      {/* Report Lost / Damaged ID Card Confirmation Modal */}
+      {showReportLostModal && (
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-[200] overflow-y-auto p-4 sm:p-6 flex min-h-full items-center justify-center animate-fade-in">
+          <div className="glass-panel p-6 md:p-8 rounded-3xl max-w-lg w-full border border-rose-500/40 bg-[#0e0618] relative space-y-5 text-left my-auto shadow-[0_0_50px_rgba(244,63,94,0.3)]">
+            {/* Header */}
+            <div className="flex justify-between items-center border-b border-rose-500/20 pb-4">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-xl bg-rose-500/20 border border-rose-500/40 flex items-center justify-center text-rose-400">
+                  <span className="material-symbols-outlined text-lg">credit_card_off</span>
+                </div>
+                <div>
+                  <h3 className="text-base text-white font-extrabold uppercase tracking-tight">
+                    Report Lost / Damaged ID Card
+                  </h3>
+                  <p className="text-[11px] text-rose-300 font-mono">Immediate Deactivation &amp; Re-issuance</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowReportLostModal(false)}
+                className="text-slate-400 hover:text-white transition-colors cursor-pointer"
+              >
+                <span className="material-symbols-outlined text-base">close</span>
+              </button>
+            </div>
+
+            {/* Explanation & Steps */}
+            <div className="space-y-3 text-xs text-slate-300 leading-relaxed">
+              <p>
+                By reporting your card as lost or damaged, you will initiate the official club replacement workflow:
+              </p>
+
+              <div className="space-y-2 p-3.5 rounded-2xl bg-black/40 border border-rose-950/60 font-mono text-[11px]">
+                <div className="flex items-start gap-2">
+                  <span className="text-rose-400 font-bold">1.</span>
+                  <span>Your current digital and physical ID card will be <strong className="text-rose-300">suspended</strong> immediately.</span>
+                </div>
+                <div className="flex items-start gap-2">
+                  <span className="text-indigo-400 font-bold">2.</span>
+                  <span>A replacement invoice for <strong className="text-white">₹{dynamicReplacementFee}</strong> will be generated with a <strong className="text-indigo-300">{dynamicExpiryMinutes}-minute</strong> window.</span>
+                </div>
+                <div className="flex items-start gap-2">
+                  <span className="text-emerald-400 font-bold">3.</span>
+                  <span>Upon fee confirmation, your request is queued for administrative reprinting, verification, and reactivation.</span>
+                </div>
+              </div>
+
+              {reportLostError && (
+                <div className="p-3 rounded-xl bg-rose-950/80 border border-rose-500/60 text-rose-200 text-xs font-mono font-bold flex items-center gap-2">
+                  <span className="material-symbols-outlined text-rose-400 text-base">error</span>
+                  <span>{reportLostError}</span>
+                </div>
+              )}
+            </div>
+
+            {/* Actions */}
+            <div className="flex items-center justify-end gap-3 pt-3 border-t border-white/10">
+              <button
+                type="button"
+                disabled={isReportingLost}
+                onClick={() => setShowReportLostModal(false)}
+                className="px-4 py-2.5 rounded-xl border border-white/10 hover:bg-white/5 text-xs font-bold text-slate-300 uppercase tracking-wider cursor-pointer transition-all"
+              >
+                Keep Card Active (Cancel)
+              </button>
+              <button
+                type="button"
+                disabled={isReportingLost}
+                onClick={handleReportLost}
+                className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-rose-600 to-red-600 hover:from-rose-500 hover:to-red-500 disabled:opacity-40 text-white font-bold text-xs uppercase tracking-wider flex items-center gap-1.5 cursor-pointer shadow-md transition-all active:scale-98"
+              >
+                {isReportingLost ? (
+                  <>
+                    <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    <span>Suspending &amp; Invoicing...</span>
+                  </>
+                ) : (
+                  <>
+                    <span className="material-symbols-outlined text-sm">lock_open</span>
+                    <span>Confirm &amp; Proceed to Pay (₹{dynamicReplacementFee})</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Mismatch report modal */}
       {showReportModal && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-[200] overflow-y-auto p-4 sm:p-6 flex min-h-full items-center justify-center">
@@ -2732,313 +5060,408 @@ const IDCard: React.FC<IDCardProps> = ({
       )}
 
       {/* Candidate detailed view modal */}
-      {previewCandidate && (
-        <div className="fixed inset-0 bg-black/90 backdrop-blur-md z-[200] overflow-y-auto p-4 sm:p-6 md:p-8 flex min-h-full items-center justify-center">
-          <div className="bg-[#0b0612]/95 border border-[#a855f7]/30 backdrop-blur-2xl p-5 sm:p-6 md:p-8 rounded-3xl max-w-2xl w-full relative text-left space-y-6 shadow-[0_0_50px_rgba(168,85,247,0.25)] my-auto max-h-[90vh] overflow-y-auto flex flex-col">
-            <div className="sticky top-0 z-50 bg-[#0b0612]/90 backdrop-blur-md flex flex-row justify-between items-center gap-3 border-b border-white/15 pb-3 pt-1 -mt-1">
-              <div className="flex items-center gap-2">
-                <span className="material-symbols-outlined text-primary text-base animate-pulse">folder_shared</span>
-                <h4 className="font-display-lg text-xs sm:text-sm text-white font-extrabold uppercase tracking-widest truncate">
-                  Candidate ID Dossier
-                </h4>
-              </div>
+      {previewCandidate && (() => {
+        const isPreviewSuspended = previewCandidate.status?.toLowerCase() === 'suspended';
+        const previewReq = isPreviewSuspended
+          ? queuedRequests.find(r => (r.registrationNumber && r.registrationNumber === previewCandidate.registrationNumber) || (r.userEmail && r.userEmail.toLowerCase() === previewCandidate.email.toLowerCase()))
+          : undefined;
+        const isPreviewPaid = previewReq ? (previewReq.paymentStatus === 'paid' || previewReq.fulfillmentStatus === 'queued') : false;
+        const previewFee = previewReq?.amount || previewCandidate.replacementFee || dynamicReplacementFee;
 
-              <div className="flex items-center gap-2 sm:gap-3 shrink-0">
-                {/* 3D Card View Push Button Switch (Logo Only) */}
-                <button
-                  type="button"
-                  onClick={() => setPreviewModalTab(prev => prev === 'card' ? 'details' : 'card')}
-                  className="p-2 rounded-lg bg-black/40 border border-white/10 text-white/80 hover:text-white hover:border-primary/50 transition-all duration-300 flex items-center justify-center shrink-0 active:scale-95"
-                  title={previewModalTab === 'card' ? 'Switch to Candidate Details' : 'Switch to Interactive 3D Card'}
-                >
-                  <span className="material-symbols-outlined text-lg">
-                    {previewModalTab === 'card' ? 'format_list_bulleted' : 'style'}
-                  </span>
-                </button>
-
-                <button
-                  onClick={() => setPreviewCandidate(null)}
-                  className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-white/70 hover:text-white flex items-center justify-center transition-all duration-200 shrink-0"
-                  title="Close Modal"
-                >
-                  <span className="material-symbols-outlined text-base">close</span>
-                </button>
-              </div>
-            </div>
-
-            {previewModalTab === 'details' ? (
-              <div className="grid grid-cols-1 md:grid-cols-12 gap-6 sm:gap-8 items-center">
-                <div className="md:col-span-5 flex flex-col items-center justify-center relative py-2 sm:py-4">
-                  <div className="w-36 h-36 sm:w-48 sm:h-48 rounded-2xl border-2 border-[#a855f7]/30 p-1 relative z-10 bg-black/40 shadow-[0_0_30px_rgba(168,85,247,0.15)] group">
-                    <div className="w-full h-full rounded-xl overflow-hidden bg-black relative">
-                      <img
-                        src={previewCandidate.photoUrl}
-                        alt="Avatar"
-                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                        referrerPolicy="no-referrer"
-                      />
-                    </div>
-                  </div>
+        return (
+          <div className="fixed inset-0 bg-black/90 backdrop-blur-md z-[200] overflow-y-auto p-4 sm:p-6 md:p-8 flex min-h-full items-center justify-center">
+            <div className="bg-[#0b0612]/95 border border-[#a855f7]/30 backdrop-blur-2xl p-5 sm:p-6 md:p-8 rounded-3xl max-w-2xl w-full relative text-left space-y-6 shadow-[0_0_50px_rgba(168,85,247,0.25)] my-auto max-h-[90vh] overflow-y-auto overflow-x-hidden flex flex-col">
+              <div className="sticky top-0 z-50 bg-[#0b0612]/90 backdrop-blur-md flex flex-row justify-between items-center gap-3 border-b border-white/15 pb-3 pt-1 -mt-1">
+                <div className="flex items-center gap-2">
+                  <span className="material-symbols-outlined text-primary text-base animate-pulse">folder_shared</span>
+                  <h4 className="font-display-lg text-xs sm:text-sm text-white font-extrabold uppercase tracking-widest truncate">
+                    Candidate ID Dossier
+                  </h4>
                 </div>
 
-                <div className="md:col-span-7 space-y-4 sm:space-y-5">
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3.5 text-xs font-body-md">
-                    <div className="border-b border-white/5 pb-2">
-                      <span className="font-code-sm text-[8px] text-[#a855f7] uppercase tracking-widest block font-bold mb-0.5">FULL NAME</span>
-                      <span className="text-white text-sm font-bold block truncate">{previewCandidate.name}</span>
+                <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+                  {/* 3D Card View Push Button Switch (Logo Only) */}
+                  <button
+                    type="button"
+                    onClick={() => setPreviewModalTab(prev => prev === 'card' ? 'details' : 'card')}
+                    className="p-2 rounded-lg bg-black/40 border border-white/10 text-white/80 hover:text-white hover:border-primary/50 transition-all duration-300 flex items-center justify-center shrink-0 active:scale-95"
+                    title={previewModalTab === 'card' ? 'Switch to Candidate Details' : 'Switch to Interactive 3D Card'}
+                  >
+                    <span className="material-symbols-outlined text-lg">
+                      {previewModalTab === 'card' ? 'format_list_bulleted' : 'style'}
+                    </span>
+                  </button>
+
+                  <button
+                    onClick={() => setPreviewCandidate(null)}
+                    className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-white/70 hover:text-white flex items-center justify-center transition-all duration-200 shrink-0"
+                    title="Close Modal"
+                  >
+                    <span className="material-symbols-outlined text-base">close</span>
+                  </button>
+                </div>
+              </div>
+
+              {previewModalTab === 'details' ? (
+                <div className="grid grid-cols-1 md:grid-cols-12 gap-6 sm:gap-8 items-center">
+                  <div className="md:col-span-5 flex flex-col items-center justify-center relative py-2 sm:py-4">
+                    <div className="w-36 h-36 sm:w-48 sm:h-48 rounded-2xl border-2 border-[#a855f7]/30 p-1 relative z-10 bg-black/40 shadow-[0_0_30px_rgba(168,85,247,0.15)] group">
+                      <div className="w-full h-full rounded-xl overflow-hidden bg-black relative">
+                        <img
+                          src={previewCandidate.photoUrl}
+                          alt="Avatar"
+                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                          referrerPolicy="no-referrer"
+                        />
+                      </div>
                     </div>
-                    <div className="border-b border-white/5 pb-2">
-                      <span className="font-code-sm text-[8px] text-[#a855f7] uppercase tracking-widest block font-bold mb-0.5">REG NO</span>
-                      <span className="text-[#ddb7ff] text-sm font-bold font-code-sm block">{previewCandidate.registrationNumber}</span>
-                    </div>
-                    {(() => {
-                      const display = getAdminDisplayRoleOrTeam(previewCandidate.team, previewCandidate.position);
-                      if (display.isSpecial) {
-                        return (
-                          <div className="col-span-1 sm:col-span-2 border-b border-white/5 pb-2">
-                            <span className="font-code-sm text-[8px] text-[#a855f7] uppercase tracking-widest block font-bold mb-0.5">ROLE / POSITION</span>
-                            <span className="text-white text-sm font-bold block uppercase">{display.value}</span>
-                          </div>
-                        );
-                      } else {
-                        return (
-                          <>
-                            <div className="border-b border-white/5 pb-2">
-                              <span className="font-code-sm text-[8px] text-[#a855f7] uppercase tracking-widest block font-bold mb-0.5">TEAM / DIVISION</span>
-                              <span className="text-white text-sm font-bold block uppercase">{previewCandidate.team}</span>
-                            </div>
-                            <div className="border-b border-white/5 pb-2">
+                  </div>
+
+                  <div className="md:col-span-7 space-y-4 sm:space-y-5">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3.5 text-xs font-body-md">
+                      <div className="border-b border-white/5 pb-2">
+                        <span className="font-code-sm text-[8px] text-[#a855f7] uppercase tracking-widest block font-bold mb-0.5">FULL NAME</span>
+                        <span className="text-white text-sm font-bold block truncate">{previewCandidate.name}</span>
+                      </div>
+                      <div className="border-b border-white/5 pb-2">
+                        <span className="font-code-sm text-[8px] text-[#a855f7] uppercase tracking-widest block font-bold mb-0.5">REG NO</span>
+                        <span className="text-[#ddb7ff] text-sm font-bold font-code-sm block">{previewCandidate.registrationNumber}</span>
+                      </div>
+                      {(() => {
+                        const display = getAdminDisplayRoleOrTeam(previewCandidate.team, previewCandidate.position);
+                        if (display.isSpecial) {
+                          return (
+                            <div className="col-span-1 sm:col-span-2 border-b border-white/5 pb-2">
                               <span className="font-code-sm text-[8px] text-[#a855f7] uppercase tracking-widest block font-bold mb-0.5">ROLE / POSITION</span>
-                              <span className="text-white text-sm font-bold block uppercase">{previewCandidate.position}</span>
+                              <span className="text-white text-sm font-bold block uppercase">{display.value}</span>
                             </div>
-                          </>
-                        );
-                      }
-                    })()}
-                    <div className="border-b border-white/5 pb-2">
-                      <span className="font-code-sm text-[8px] text-[#a855f7] uppercase tracking-widest block font-bold mb-0.5">SUBMISSION DATE</span>
-                      <span className="text-white/60 block font-code-sm">
-                        {previewCandidate.submittedAt ? new Date(previewCandidate.submittedAt).toLocaleDateString() : "N/A"}
+                          );
+                        } else {
+                          return (
+                            <>
+                              <div className="border-b border-white/5 pb-2">
+                                <span className="font-code-sm text-[8px] text-[#a855f7] uppercase tracking-widest block font-bold mb-0.5">TEAM / DIVISION</span>
+                                <span className="text-white text-sm font-bold block uppercase">{previewCandidate.team}</span>
+                              </div>
+                              <div className="border-b border-white/5 pb-2">
+                                <span className="font-code-sm text-[8px] text-[#a855f7] uppercase tracking-widest block font-bold mb-0.5">ROLE / POSITION</span>
+                                <span className="text-white text-sm font-bold block uppercase">{previewCandidate.position}</span>
+                              </div>
+                            </>
+                          );
+                        }
+                      })()}
+                      <div className="border-b border-white/5 pb-2">
+                        <span className="font-code-sm text-[8px] text-[#a855f7] uppercase tracking-widest block font-bold mb-0.5">SUBMISSION DATE</span>
+                        <span className="text-white/60 block font-code-sm">
+                          {previewCandidate.submittedAt ? new Date(previewCandidate.submittedAt).toLocaleDateString() : "N/A"}
+                        </span>
+                      </div>
+                      <div className="col-span-1 sm:col-span-2 border-b border-white/5 pb-2">
+                        <span className="font-code-sm text-[8px] text-[#a855f7] uppercase tracking-widest block mb-0.5 font-bold">EMAIL ADDRESS</span>
+                        <span className="text-white block font-code-sm text-xs font-semibold break-all">{previewCandidate.email}</span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2.5 pt-1">
+                      <span className="font-code-sm text-[8px] text-white/45 tracking-widest block font-bold uppercase">DOSSIER STATUS:</span>
+                      <span
+                        className={`px-3 py-1 rounded-full border text-[9px] font-label-caps font-black tracking-wider uppercase ${isPreviewSuspended
+                          ? 'bg-rose-500/20 border-rose-500/50 text-rose-300 animate-pulse shadow-[0_0_15px_rgba(244,63,94,0.2)]'
+                          : previewCandidate.status === 'Approved'
+                          ? 'bg-green-500/10 border-green-500/30 text-green-400 shadow-[0_0_15px_rgba(74,222,128,0.1)]'
+                          : 'bg-yellow-500/10 border-yellow-500/30 text-yellow-400 shadow-[0_0_15px_rgba(250,204,21,0.1)]'
+                          }`}
+                      >
+                        {isPreviewSuspended
+                          ? 'SUSPENDED'
+                          : (previewCandidate.status || 'Pending')}
                       </span>
                     </div>
-                    <div className="col-span-1 sm:col-span-2 border-b border-white/5 pb-2">
-                      <span className="font-code-sm text-[8px] text-[#a855f7] uppercase tracking-widest block mb-0.5 font-bold">EMAIL ADDRESS</span>
-                      <span className="text-white block font-code-sm text-xs font-semibold break-all">{previewCandidate.email}</span>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-2.5 pt-1">
-                    <span className="font-code-sm text-[8px] text-white/45 tracking-widest block font-bold uppercase">DOSSIER STATUS:</span>
-                    <span
-                      className={`px-3 py-1 rounded-full border text-[9px] font-label-caps font-black tracking-wider uppercase ${previewCandidate.status === 'Approved'
-                        ? 'bg-green-500/10 border-green-500/30 text-green-400 shadow-[0_0_15px_rgba(74,222,128,0.1)]'
-                        : 'bg-yellow-500/10 border-yellow-500/30 text-yellow-400 shadow-[0_0_15px_rgba(250,204,21,0.1)]'
-                        }`}
-                    >
-                      {previewCandidate.status || 'Pending'}
-                    </span>
                   </div>
                 </div>
-              </div>
-            ) : (
-              /* 3D FLIPPABLE CARD TAB IN MODAL */
-              <div className="flex flex-col items-center justify-center py-4 space-y-4">
-                <div
-                  onClick={() => setPreviewFlipped(!previewFlipped)}
-                  className="relative w-full max-w-[310px] aspect-[2.2/3.4] cursor-pointer group [perspective:1000px]"
-                >
-                  <div className={`relative w-full h-full duration-700 [transform-style:preserve-3d] ${previewFlipped ? '[transform:rotateY(180deg)]' : ''}`}>
+              ) : (
+                /* 3D FLIPPABLE CARD TAB IN MODAL */
+                <div className="flex flex-col items-center justify-center py-4 space-y-4">
+                  <div
+                    onClick={() => setPreviewFlipped(!previewFlipped)}
+                    className="relative w-full max-w-[310px] aspect-[2.2/3.4] cursor-pointer group [perspective:1000px]"
+                  >
+                    <div className={`relative w-full h-full duration-700 [transform-style:preserve-3d] ${previewFlipped ? '[transform:rotateY(180deg)]' : ''}`}>
 
-                    {/* FRONT OF CARD */}
-                    <div className="absolute inset-0 w-full h-full [backface-visibility:hidden] select-none">
-                      <div className="relative overflow-hidden w-full h-full rounded-3xl border border-[#a855f7]/35 bg-gradient-to-b from-[#12051e] via-[#05010a] to-[#0c0416] p-6 flex flex-col justify-between shadow-[0_0_50px_rgba(168,85,247,0.25)]">
-                        <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.005)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.005)_1px,transparent_1px)] bg-[size:12px_12px] pointer-events-none opacity-40"></div>
+                      {/* FRONT OF CARD */}
+                      <div className="absolute inset-0 w-full h-full [backface-visibility:hidden] select-none">
+                        <div className="relative overflow-hidden w-full h-full rounded-3xl border border-[#a855f7]/35 bg-gradient-to-b from-[#12051e] via-[#05010a] to-[#0c0416] p-6 flex flex-col justify-between shadow-[0_0_50px_rgba(168,85,247,0.25)]">
+                          <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.005)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.005)_1px,transparent_1px)] bg-[size:12px_12px] pointer-events-none opacity-40"></div>
 
-                        <div className="absolute top-3 left-3 w-3 h-3 border-t-2 border-l-2 border-[#a855f7]/40 pointer-events-none"></div>
-                        <div className="absolute top-3 right-3 w-3 h-3 border-t-2 border-r-2 border-[#a855f7]/40 pointer-events-none"></div>
-                        <div className="absolute bottom-3 left-3 w-3 h-3 border-b-2 border-l-2 border-[#a855f7]/40 pointer-events-none"></div>
-                        <div className="absolute bottom-3 right-3 w-3 h-3 border-b-2 border-r-2 border-[#a855f7]/40 pointer-events-none"></div>
+                          <div className="absolute top-3 left-3 w-3 h-3 border-t-2 border-l-2 border-[#a855f7]/40 pointer-events-none"></div>
+                          <div className="absolute top-3 right-3 w-3 h-3 border-t-2 border-r-2 border-[#a855f7]/40 pointer-events-none"></div>
+                          <div className="absolute bottom-3 left-3 w-3 h-3 border-b-2 border-l-2 border-[#a855f7]/40 pointer-events-none"></div>
+                          <div className="absolute bottom-3 right-3 w-3 h-3 border-b-2 border-r-2 border-[#a855f7]/40 pointer-events-none"></div>
 
-                        <div className="flex justify-between items-start border-b border-[#a855f7]/25 pb-3 relative z-10">
-                          <div className="text-left w-full">
-                            <div className="flex items-center gap-1 justify-center">
-                              <span className="material-symbols-outlined text-[14px] text-[#a855f7]">sports_esports</span>
-                              <h4 className="font-display-lg text-sm text-white font-black tracking-widest leading-none">VRGC</h4>
-                            </div>
-                            <span className="text-[#a855f7]/80 text-[5px] font-code-sm tracking-wider uppercase block mt-1 font-bold text-center">VIRTUAL REALITY & GAMING CLUB</span>
-                          </div>
-                        </div>
-
-                        <div className="flex flex-col items-center justify-center my-3 relative z-10">
-                          <div className="w-32 h-32 rounded-2xl border-2 border-[#a855f7]/30 p-1 bg-black/40 shadow-[0_0_20px_rgba(168,85,247,0.15)] relative overflow-hidden">
-                            <img
-                              src={previewCandidate.photoUrl}
-                              alt={previewCandidate.name}
-                              className="w-full h-full object-cover rounded-xl"
-                              referrerPolicy="no-referrer"
-                            />
-                            <div className={`absolute bottom-1 right-1 text-white text-[6px] font-black px-1.5 py-0.5 rounded tracking-widest uppercase shadow-md pointer-events-none ${previewCandidate.status === 'Approved' ? 'bg-green-500/80' : 'bg-yellow-500/80'
-                              }`}>
-                              {previewCandidate.status === 'Approved' ? 'VERIFIED' : 'PENDING'}
+                          <div className="flex justify-between items-start border-b border-[#a855f7]/25 pb-3 relative z-10">
+                            <div className="text-left w-full">
+                              <div className="flex items-center gap-1 justify-center">
+                                <span className="material-symbols-outlined text-[14px] text-[#a855f7]">sports_esports</span>
+                                <h4 className="font-display-lg text-sm text-white font-black tracking-widest leading-none">VRGC</h4>
+                              </div>
+                              <span className="text-[#a855f7]/80 text-[5px] font-code-sm tracking-wider uppercase block mt-1 font-bold text-center">VIRTUAL REALITY & GAMING CLUB</span>
                             </div>
                           </div>
-                        </div>
 
-                        <div className="bg-[#0b0512]/90 border border-[#a855f7]/25 p-3 rounded-2xl relative z-10 space-y-2">
-                          <div className="border-b border-white/5 pb-1.5 text-left">
-                            <span className="font-code-sm text-[6px] text-[#a855f7] uppercase tracking-widest block mb-0.5 font-extrabold">NAME</span>
-                            <h3 className="font-display-lg text-sm text-white font-extrabold tracking-wide uppercase truncate leading-none">
-                              {previewCandidate.name}
-                            </h3>
+                          <div className="flex flex-col items-center justify-center my-3 relative z-10">
+                            <div className="w-32 h-32 rounded-2xl border-2 border-[#a855f7]/30 p-1 bg-black/40 shadow-[0_0_20px_rgba(168,85,247,0.15)] relative overflow-hidden">
+                              <img
+                                src={previewCandidate.photoUrl}
+                                alt={previewCandidate.name}
+                                className="w-full h-full object-cover rounded-xl"
+                                referrerPolicy="no-referrer"
+                              />
+                              <div className={`absolute bottom-1 right-1 text-white text-[6px] font-black px-1.5 py-0.5 rounded tracking-widest uppercase shadow-md pointer-events-none ${isPreviewSuspended
+                                ? !isPreviewPaid
+                                  ? 'bg-rose-600/90'
+                                  : 'bg-amber-600/90'
+                                : previewCandidate.status === 'Approved'
+                                ? 'bg-green-500/80'
+                                : 'bg-yellow-500/80'
+                                }`}>
+                                {isPreviewSuspended
+                                  ? !isPreviewPaid
+                                    ? `SUSPENDED • UNPAID (₹${previewFee})`
+                                    : `SUSPENDED • PAID (₹${previewFee})`
+                                  : previewCandidate.status === 'Approved'
+                                  ? 'VERIFIED'
+                                  : 'PENDING'}
+                              </div>
+                            </div>
                           </div>
 
-                          <div className="grid grid-cols-2 gap-2 text-left">
-                            <div>
-                              <span className="font-code-sm text-[6px] text-[#a855f7] uppercase tracking-widest block mb-0.5 font-extrabold">REGISTRATION NO.</span>
-                              <span className="font-code-sm text-[10px] text-white font-bold tracking-wider block">
-                                {previewCandidate.registrationNumber}
+                          <div className="bg-[#0b0512]/90 border border-[#a855f7]/25 p-3 rounded-2xl relative z-10 space-y-2">
+                            <div className="border-b border-white/5 pb-1.5 text-left">
+                              <span className="font-code-sm text-[6px] text-[#a855f7] uppercase tracking-widest block mb-0.5 font-extrabold">NAME</span>
+                              <h3 className="font-display-lg text-sm text-white font-extrabold tracking-wide uppercase truncate leading-none">
+                                {previewCandidate.name}
+                              </h3>
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-2 text-left">
+                              <div>
+                                <span className="font-code-sm text-[6px] text-[#a855f7] uppercase tracking-widest block mb-0.5 font-extrabold">REGISTRATION NO.</span>
+                                <span className="font-code-sm text-[10px] text-white font-bold tracking-wider block">
+                                  {previewCandidate.registrationNumber}
+                                </span>
+                              </div>
+                              <div>
+                                {(() => {
+                                  const displayInfo = getAdminDisplayRoleOrTeam(previewCandidate.team, previewCandidate.position);
+                                  return (
+                                    <>
+                                      <span className="font-code-sm text-[6px] text-[#a855f7] uppercase tracking-widest block mb-0.5 font-extrabold">
+                                        {displayInfo.label === 'TEAM / DIVISION' ? 'TEAM' : 'ROLE'}
+                                      </span>
+                                      <span className="font-code-sm text-[10px] text-white font-bold tracking-wider block uppercase truncate">
+                                        {displayInfo.value}
+                                      </span>
+                                    </>
+                                  );
+                                })()}
+                              </div>
+                            </div>
+
+                            <div className="pt-1.5 border-t border-white/5 flex items-center gap-1.5 justify-start">
+                              <span className="w-1.5 h-1.5 rounded-full bg-[#a855f7] shadow-[0_0_8px_#a855f7] animate-pulse"></span>
+                              <span className="font-code-sm text-[8px] text-[#ddb7ff] font-extrabold uppercase tracking-widest leading-none">
+                                {(() => {
+                                  const displayInfo = getAdminDisplayRoleOrTeam(previewCandidate.team, previewCandidate.position);
+                                  return displayInfo.isSpecial ? displayInfo.value : (previewCandidate.position || 'MEMBER');
+                                })()}
                               </span>
                             </div>
-                            <div>
-                              {(() => {
-                                const displayInfo = getAdminDisplayRoleOrTeam(previewCandidate.team, previewCandidate.position);
-                                return (
-                                  <>
-                                    <span className="font-code-sm text-[6px] text-[#a855f7] uppercase tracking-widest block mb-0.5 font-extrabold">
-                                      {displayInfo.label === 'TEAM / DIVISION' ? 'TEAM' : 'ROLE'}
-                                    </span>
-                                    <span className="font-code-sm text-[10px] text-white font-bold tracking-wider block uppercase truncate">
-                                      {displayInfo.value}
-                                    </span>
-                                  </>
-                                );
-                              })()}
+                          </div>
+
+                          <div className="absolute bottom-1 right-2 text-[5px] font-bold text-white/30 font-code-sm uppercase tracking-widest pointer-events-none">
+                            TAP CARD TO FLIP 🔄
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* BACK OF CARD */}
+                      <div className="absolute inset-0 w-full h-full [backface-visibility:hidden] [transform:rotateY(180deg)] select-none">
+                        <div className="relative overflow-hidden w-full h-full rounded-3xl border border-[#a855f7]/35 bg-gradient-to-b from-[#12051e] via-[#05010a] to-[#0c0416] p-6 flex flex-col justify-between shadow-[0_0_50px_rgba(168,85,247,0.25)]">
+                          {previewCandidate.avatarUrl && (
+                            <div className="absolute inset-0 z-0 overflow-hidden pointer-events-none rounded-3xl">
+                              <img
+                                src={previewCandidate.avatarUrl}
+                                alt="Avatar Watermark"
+                                className="w-full h-full object-cover opacity-95 brightness-110 contrast-105"
+                                referrerPolicy="no-referrer"
+                              />
+                              <div className="absolute inset-0 bg-[#05010a]/10 bg-gradient-to-b from-transparent via-[#05010a]/20 to-[#05010a]/50"></div>
+                            </div>
+                          )}
+
+                          <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.005)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.005)_1px,transparent_1px)] bg-[size:12px_12px] pointer-events-none opacity-40"></div>
+
+                          <div className="absolute top-3 left-3 w-3 h-3 border-t-2 border-l-2 border-[#a855f7]/40 pointer-events-none"></div>
+                          <div className="absolute top-3 right-3 w-3 h-3 border-t-2 border-r-2 border-[#a855f7]/40 pointer-events-none"></div>
+                          <div className="absolute bottom-3 left-3 w-3 h-3 border-b-2 border-l-2 border-[#a855f7]/40 pointer-events-none"></div>
+                          <div className="absolute bottom-3 right-3 w-3 h-3 border-b-2 border-r-2 border-[#a855f7]/40 pointer-events-none"></div>
+
+                          <div className="text-center relative z-10 border-b border-[#a855f7]/25 pb-2">
+                            <h4 className="font-display-lg text-sm text-white font-black tracking-widest uppercase">VRGC</h4>
+                            <span className="font-code-sm text-[5px] text-[#a855f7]/80 tracking-wider block mt-0.5">VIRTUAL REALITY & GAMING CLUB</span>
+                          </div>
+
+                          <div className="my-3 flex flex-col items-center justify-center relative z-10">
+                            <div className="w-28 h-28 rounded-xl border border-white/10 bg-white p-1.5 shadow-[0_0_25px_rgba(168,85,247,0.25)]">
+                              <img
+                                src={`https://api.qrserver.com/v1/create-qr-code/?size=140x140&color=0-0-0&bgcolor=ffffff&data=${encodeURIComponent(`${typeof window !== 'undefined' ? window.location.origin : 'https://vrgc.club'}/card/${previewCandidate.registrationNumber || ''}`)}`}
+                                alt="Scan to Verify"
+                                className="w-full h-full object-contain"
+                              />
+                            </div>
+                            <span className="font-code-sm text-[6px] text-[#a855f7] font-black uppercase tracking-widest block mt-2">SCAN TO CONNECT</span>
+                          </div>
+
+                          <div className="space-y-1.5 border-t border-[#a855f7]/25 pt-2.5 relative z-10 text-[7px] font-code-sm text-white/70 text-left w-full pl-2">
+                            <div className="flex items-center gap-1.5">
+                              <span className="material-symbols-outlined text-[10px] text-[#a855f7]">alternate_email</span>
+                              <span>@vrgc_official</span>
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                              <span className="material-symbols-outlined text-[10px] text-[#a855f7]">forum</span>
+                              <span>discord.gg/vrgc</span>
                             </div>
                           </div>
 
-                          <div className="pt-1.5 border-t border-white/5 flex items-center gap-1.5 justify-start">
-                            <span className="w-1.5 h-1.5 rounded-full bg-[#a855f7] shadow-[0_0_8px_#a855f7] animate-pulse"></span>
-                            <span className="font-code-sm text-[8px] text-[#ddb7ff] font-extrabold uppercase tracking-widest leading-none">
-                              {(() => {
-                                const displayInfo = getAdminDisplayRoleOrTeam(previewCandidate.team, previewCandidate.position);
-                                return displayInfo.isSpecial ? displayInfo.value : (previewCandidate.position || 'MEMBER');
-                              })()}
-                            </span>
+                          <div className="text-center text-[7px] font-extrabold text-[#a855f7]/80 tracking-widest mt-2.5 uppercase relative z-10">
+                            PLAY • CREATE • INNOVATE
                           </div>
-                        </div>
 
-                        <div className="absolute bottom-1 right-2 text-[5px] font-bold text-white/30 font-code-sm uppercase tracking-widest pointer-events-none">
-                          TAP CARD TO FLIP 🔄
+                          <div className="absolute bottom-1 right-2 text-[5px] font-bold text-white/30 font-code-sm uppercase tracking-widest pointer-events-none">
+                            TAP CARD TO FLIP 🔄
+                          </div>
                         </div>
                       </div>
+
                     </div>
-
-                    {/* BACK OF CARD */}
-                    <div className="absolute inset-0 w-full h-full [backface-visibility:hidden] [transform:rotateY(180deg)] select-none">
-                      <div className="relative overflow-hidden w-full h-full rounded-3xl border border-[#a855f7]/35 bg-gradient-to-b from-[#12051e] via-[#05010a] to-[#0c0416] p-6 flex flex-col justify-between shadow-[0_0_50px_rgba(168,85,247,0.25)]">
-                        {previewCandidate.avatarUrl && (
-                          <div className="absolute inset-0 z-0 overflow-hidden pointer-events-none rounded-3xl">
-                            <img
-                              src={previewCandidate.avatarUrl}
-                              alt="Avatar Watermark"
-                              className="w-full h-full object-cover opacity-95 brightness-110 contrast-105"
-                              referrerPolicy="no-referrer"
-                            />
-                            <div className="absolute inset-0 bg-[#05010a]/10 bg-gradient-to-b from-transparent via-[#05010a]/20 to-[#05010a]/50"></div>
-                          </div>
-                        )}
-
-                        <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.005)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.005)_1px,transparent_1px)] bg-[size:12px_12px] pointer-events-none opacity-40"></div>
-
-                        <div className="absolute top-3 left-3 w-3 h-3 border-t-2 border-l-2 border-[#a855f7]/40 pointer-events-none"></div>
-                        <div className="absolute top-3 right-3 w-3 h-3 border-t-2 border-r-2 border-[#a855f7]/40 pointer-events-none"></div>
-                        <div className="absolute bottom-3 left-3 w-3 h-3 border-b-2 border-l-2 border-[#a855f7]/40 pointer-events-none"></div>
-                        <div className="absolute bottom-3 right-3 w-3 h-3 border-b-2 border-r-2 border-[#a855f7]/40 pointer-events-none"></div>
-
-                        <div className="text-center relative z-10 border-b border-[#a855f7]/25 pb-2">
-                          <h4 className="font-display-lg text-sm text-white font-black tracking-widest uppercase">VRGC</h4>
-                          <span className="font-code-sm text-[5px] text-[#a855f7]/80 tracking-wider block mt-0.5">VIRTUAL REALITY & GAMING CLUB</span>
-                        </div>
-
-                        <div className="my-3 flex flex-col items-center justify-center relative z-10">
-                          <div className="w-28 h-28 rounded-xl border border-white/10 bg-white p-1.5 shadow-[0_0_25px_rgba(168,85,247,0.25)]">
-                            <img
-                              src={`https://api.qrserver.com/v1/create-qr-code/?size=140x140&color=0-0-0&bgcolor=ffffff&data=${encodeURIComponent(`${typeof window !== 'undefined' ? window.location.origin : 'https://vrgc.club'}/card/${previewCandidate.registrationNumber || ''}`)}`}
-                              alt="Scan to Verify"
-                              className="w-full h-full object-contain"
-                            />
-                          </div>
-                          <span className="font-code-sm text-[6px] text-[#a855f7] font-black uppercase tracking-widest block mt-2">SCAN TO CONNECT</span>
-                        </div>
-
-                        <div className="space-y-1.5 border-t border-[#a855f7]/25 pt-2.5 relative z-10 text-[7px] font-code-sm text-white/70 text-left w-full pl-2">
-                          <div className="flex items-center gap-1.5">
-                            <span className="material-symbols-outlined text-[10px] text-[#a855f7]">alternate_email</span>
-                            <span>@vrgc_official</span>
-                          </div>
-                          <div className="flex items-center gap-1.5">
-                            <span className="material-symbols-outlined text-[10px] text-[#a855f7]">forum</span>
-                            <span>discord.gg/vrgc</span>
-                          </div>
-                        </div>
-
-                        <div className="text-center text-[7px] font-extrabold text-[#a855f7]/80 tracking-widest mt-2.5 uppercase relative z-10">
-                          PLAY • CREATE • INNOVATE
-                        </div>
-
-                        <div className="absolute bottom-1 right-2 text-[5px] font-bold text-white/30 font-code-sm uppercase tracking-widest pointer-events-none">
-                          TAP CARD TO FLIP 🔄
-                        </div>
-                      </div>
-                    </div>
-
                   </div>
+
+                  <button
+                    type="button"
+                    onClick={() => setPreviewFlipped(!previewFlipped)}
+                    className="px-5 py-2 rounded-full bg-primary/10 border border-primary/40 text-primary text-xs font-bold font-label-caps flex items-center gap-2 hover:bg-primary/20 transition-all"
+                  >
+                    <span className="material-symbols-outlined text-sm">flip_to_back</span>
+                    <span>FLIP CARD ({previewFlipped ? 'BACK SIDE' : 'FRONT SIDE'})</span>
+                  </button>
                 </div>
+              )}
+
+              {isPreviewSuspended && (
+                <div className={`mt-3 p-3 rounded-2xl border flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5 ${
+                  !isPreviewPaid
+                    ? 'bg-rose-950/40 border-rose-500/40 text-rose-200'
+                    : 'bg-amber-950/40 border-amber-500/40 text-amber-200'
+                }`}>
+                  <div className="flex items-start sm:items-center gap-2.5 min-w-0">
+                    <span className={`material-symbols-outlined text-base shrink-0 mt-0.5 sm:mt-0 ${!isPreviewPaid ? 'text-rose-400' : 'text-amber-400'}`}>
+                      {!isPreviewPaid ? 'warning' : 'lock_person'}
+                    </span>
+                    <div className="space-y-0.5 min-w-0">
+                      <p className={`font-bold uppercase tracking-wider text-[11px] ${!isPreviewPaid ? 'text-rose-300' : 'text-amber-300'}`}>
+                        {!isPreviewPaid
+                          ? `CARD SUSPENDED • PAYMENT NOT COMPLETED (₹${previewFee} PENDING)`
+                          : `CARD SUSPENDED • REPLACEMENT FEE PAID (₹${previewFee})`}
+                      </p>
+                      <p className="text-[10px] text-slate-300 leading-snug">
+                        {!isPreviewPaid
+                          ? `The cardholder suspended their ID card, but replacement payment has NOT been completed yet. Super Admin can waive fee & re-issue or manage it in the Card Requests queue.`
+                          : `The replacement fee has been completed. The request is currently queued and awaiting Super Admin re-issue fulfillment.`}
+                      </p>
+                    </div>
+                  </div>
+                  {canManageCardRequests && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAdminSectionTab('requests');
+                        setRequestSearchQuery(previewCandidate.registrationNumber || previewCandidate.email || '');
+                        setPreviewCandidate(null);
+                      }}
+                      className="px-3 py-1.5 rounded-xl bg-purple-600/30 hover:bg-purple-600/50 border border-purple-500/40 text-purple-200 hover:text-white text-[10px] font-mono font-bold flex items-center gap-1.5 transition-all shrink-0 cursor-pointer shadow-sm"
+                    >
+                      <span className="material-symbols-outlined text-xs">open_in_new</span>
+                      <span>OPEN IN QUEUE</span>
+                    </button>
+                  )}
+                </div>
+              )}
+
+              <div className="flex flex-col sm:flex-row gap-2.5 pt-4 border-t border-white/10 w-full items-stretch sm:items-center">
+                {isPreviewSuspended ? (
+                  canManageCardRequests ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAdminSectionTab('requests');
+                        setRequestSearchQuery(previewCandidate.registrationNumber || previewCandidate.email || '');
+                        setPreviewCandidate(null);
+                      }}
+                      className={`w-full sm:flex-1 py-2 px-4 rounded-full text-[10.5px] font-bold font-label-caps flex items-center justify-center gap-1.5 border transition-all duration-300 cursor-pointer shadow-md hover:scale-[1.01] ${
+                        !isPreviewPaid
+                          ? 'bg-rose-600/25 border-rose-500/50 text-rose-200 hover:bg-rose-600/40'
+                          : 'bg-amber-600/25 border-amber-500/50 text-amber-200 hover:bg-amber-600/40'
+                      }`}
+                    >
+                      <span className="material-symbols-outlined text-sm font-bold shrink-0">published_with_changes</span>
+                      <span className="text-center leading-tight">
+                        {!isPreviewPaid
+                          ? `MANAGE IN REQUESTS QUEUE (PAYMENT PENDING - ₹${previewFee})`
+                          : `MANAGE IN REQUESTS QUEUE (PAID - ₹${previewFee})`}
+                      </span>
+                    </button>
+                  ) : (
+                    <div className="w-full sm:flex-1 py-2 px-4 rounded-full text-[10.5px] font-bold font-label-caps flex items-center justify-center gap-1.5 border bg-rose-500/10 border-rose-500/40 text-rose-300/80 cursor-not-allowed">
+                      <span className="material-symbols-outlined text-sm font-bold shrink-0">lock</span>
+                      <span>APPROVAL LOCKED (SUSPENDED)</span>
+                    </div>
+                  )
+                ) : (
+                  <button
+                    onClick={() => toggleStatus(previewCandidate)}
+                    className={`w-full sm:flex-1 font-bold py-2 px-4 rounded-full text-[10.5px] font-bold font-label-caps flex items-center justify-center gap-1.5 border transition-all duration-300 hover:scale-[1.01] ${previewCandidate.status === 'Approved'
+                      ? 'bg-yellow-500/10 border-yellow-500/30 text-yellow-400 hover:bg-yellow-500/20 shadow-[0_0_15px_rgba(250,204,21,0.15)]'
+                      : 'bg-green-500/10 border-green-500/30 text-green-400 hover:bg-green-500/20 shadow-[0_0_20px_rgba(74,222,128,0.15)]'
+                      }`}
+                  >
+                    <span className="material-symbols-outlined text-sm font-bold shrink-0">
+                      {previewCandidate.status === 'Approved' ? 'history' : 'verified'}
+                    </span>
+                    <span>{previewCandidate.status === 'Approved' ? 'MARK PENDING' : 'APPROVE DOSSIER'}</span>
+                  </button>
+                )}
 
                 <button
-                  type="button"
-                  onClick={() => setPreviewFlipped(!previewFlipped)}
-                  className="px-5 py-2 rounded-full bg-primary/10 border border-primary/40 text-primary text-xs font-bold font-label-caps flex items-center gap-2 hover:bg-primary/20 transition-all"
+                  onClick={() => { handleDownload(previewCandidate); setPreviewCandidate(null); }}
+                  className="w-full sm:flex-1 bg-gradient-to-r from-[#a855f7] to-[#cf5cff] hover:opacity-90 text-white font-bold py-2 px-4 rounded-full text-[10.5px] font-label-caps flex items-center justify-center gap-1.5 transition-all duration-300 hover:scale-[1.01] shadow-[0_0_15px_rgba(168,85,247,0.25)]"
                 >
-                  <span className="material-symbols-outlined text-sm">flip_to_back</span>
-                  <span>FLIP CARD ({previewFlipped ? 'BACK SIDE' : 'FRONT SIDE'})</span>
+                  <span className="material-symbols-outlined text-sm font-bold shrink-0">download</span>
+                  <span>DOWNLOAD PHOTO</span>
+                </button>
+
+                <button
+                  onClick={() => { handleDelete(previewCandidate); setPreviewCandidate(null); }}
+                  className="w-full sm:w-auto bg-red-500/10 border border-red-500/20 hover:bg-red-500/20 hover:border-red-500/40 text-red-400 px-4 py-2 rounded-full text-[10.5px] font-bold font-label-caps flex items-center justify-center gap-1.5 transition-all duration-300 hover:scale-[1.01] shrink-0"
+                >
+                  <span className="material-symbols-outlined text-sm font-bold shrink-0">delete</span>
+                  <span>DELETE DOSSIER</span>
                 </button>
               </div>
-            )}
-
-            <div className="flex flex-col sm:flex-row gap-3.5 pt-6 border-t border-white/10">
-              <button
-                onClick={() => toggleStatus(previewCandidate)}
-                className={`w-full sm:flex-1 font-bold py-3 px-6 rounded-full text-xs font-bold font-label-caps flex items-center justify-center gap-2 border transition-all duration-300 hover:scale-[1.01] ${previewCandidate.status === 'Approved'
-                  ? 'bg-yellow-500/10 border-yellow-500/30 text-yellow-400 hover:bg-yellow-500/20 shadow-[0_0_20px_rgba(250,204,21,0.15)]'
-                  : 'bg-green-500/10 border-green-500/30 text-green-400 hover:bg-green-500/20 shadow-[0_0_20px_rgba(74,222,128,0.15)]'
-                  }`}
-              >
-                <span className="material-symbols-outlined text-sm font-bold">
-                  {previewCandidate.status === 'Approved' ? 'history' : 'verified'}
-                </span>
-                <span>{previewCandidate.status === 'Approved' ? 'MARK PENDING' : 'APPROVE DOSSIER'}</span>
-              </button>
-
-              <button
-                onClick={() => { handleDownload(previewCandidate); setPreviewCandidate(null); }}
-                className="w-full sm:flex-1 bg-gradient-to-r from-[#a855f7] to-[#cf5cff] hover:opacity-90 text-white font-bold py-3 px-6 rounded-full text-xs font-bold font-label-caps flex items-center justify-center gap-2 transition-all duration-300 hover:scale-[1.01] shadow-[0_0_25px_rgba(168,85,247,0.3)]"
-              >
-                <span className="material-symbols-outlined text-sm font-bold">download</span>
-                <span>DOWNLOAD PHOTO</span>
-              </button>
-
-              <button
-                onClick={() => { handleDelete(previewCandidate); setPreviewCandidate(null); }}
-                className="w-full sm:w-auto bg-red-500/10 border border-red-500/20 hover:bg-red-500/20 hover:border-red-500/40 text-red-400 px-6 py-3 rounded-full text-xs font-bold font-label-caps flex items-center justify-center gap-2 transition-all duration-300 hover:scale-[1.01]"
-              >
-                <span className="material-symbols-outlined text-sm font-bold">delete</span>
-                <span>DELETE DOSSIER</span>
-              </button>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Custom Glassmorphic Delete Confirmation Modal */}
       {candidateToDelete && (
@@ -3228,6 +5651,396 @@ const IDCard: React.FC<IDCardProps> = ({
                 CLOSE
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Replacement Request Status & Enquiry Modal */}
+      {showEnquiryModal && (
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-[300] overflow-y-auto p-4 sm:p-6 flex min-h-full items-center justify-center animate-in fade-in duration-200">
+          <div className="glass-panel p-6 sm:p-8 rounded-3xl max-w-lg w-full border border-purple-500/30 relative space-y-6 text-left my-auto shadow-[0_0_60px_rgba(168,85,247,0.25)] bg-[#0d041a]/95">
+            {/* Header */}
+            <div className="flex justify-between items-start border-b border-white/10 pb-4">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-purple-500/20 border border-purple-500/40 flex items-center justify-center text-purple-300 shadow-[0_0_20px_rgba(168,85,247,0.3)]">
+                  <span className="material-symbols-outlined text-xl">contact_support</span>
+                </div>
+                <div>
+                  <h3 className="font-display-lg text-base sm:text-lg text-white font-extrabold uppercase tracking-wider">
+                    Replacement Status Enquiry
+                  </h3>
+                  <p className="text-xs text-white/60 font-mono">
+                    ID: {formatDisplayId(enquiryDetails?.request?.id || existingSubmission?.activeRequestId, 'REQ')}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowEnquiryModal(false)}
+                className="w-8 h-8 rounded-xl bg-white/5 hover:bg-white/10 flex items-center justify-center text-white/60 hover:text-white transition-all cursor-pointer"
+              >
+                <span className="material-symbols-outlined text-base">close</span>
+              </button>
+            </div>
+
+            {/* Current Dossier Summary */}
+            <div className="p-4 rounded-2xl bg-black/40 border border-white/5 space-y-2">
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-white/60 font-mono">Member Name:</span>
+                <span className="text-white font-bold">{existingSubmission?.name || memberData?.name || currentUser?.displayName || 'Member'}</span>
+              </div>
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-white/60 font-mono">Registration No:</span>
+                <span className="text-primary font-mono font-bold">{existingSubmission?.registrationNumber || memberData?.registrationNumber || 'N/A'}</span>
+              </div>
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-white/60 font-mono">Current Card Status:</span>
+                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-rose-500/20 text-rose-300 border border-rose-500/40">
+                  SUSPENDED (IN REPLACEMENT)
+                </span>
+              </div>
+            </div>
+
+            {/* Live Progress Tracker (3 Stages) */}
+            <div className="space-y-3">
+              <span className="text-[10px] font-mono uppercase font-bold text-white/50 tracking-widest block">
+                ISSUANCE LIFECYCLE
+              </span>
+
+              <div className="space-y-3">
+                {/* Stage 1: Request Lodged */}
+                <div className="flex items-start gap-3 p-3 rounded-xl bg-emerald-950/30 border border-emerald-500/30">
+                  <div className="w-6 h-6 rounded-full bg-emerald-500/20 border border-emerald-500/50 flex items-center justify-center text-emerald-400 shrink-0 mt-0.5">
+                    <span className="material-symbols-outlined text-xs">check</span>
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-emerald-300">1. Loss / Damage Reported</span>
+                      <span className="text-[10px] font-mono text-emerald-400/80 font-bold">COMPLETED</span>
+                    </div>
+                    <p className="text-[11px] text-slate-300 mt-0.5">
+                      Card temporarily deactivated for security. Replacement record created.
+                    </p>
+                  </div>
+                </div>
+
+                {/* Stage 2: Fee Payment */}
+                {(() => {
+                  const isPaid = enquiryDetails?.request?.fulfillmentStatus === 'queued' ||
+                    enquiryDetails?.request?.paymentStatus === 'paid' ||
+                    existingSubmission?.replacementPaid;
+
+                  return (
+                    <div className={`flex items-start gap-3 p-3 rounded-xl border ${
+                      isPaid
+                        ? 'bg-emerald-950/30 border-emerald-500/30'
+                        : 'bg-amber-950/30 border-amber-500/30'
+                    }`}>
+                      <div className={`w-6 h-6 rounded-full flex items-center justify-center shrink-0 mt-0.5 ${
+                        isPaid
+                          ? 'bg-emerald-500/20 border border-emerald-500/50 text-emerald-400'
+                          : 'bg-amber-500/20 border border-amber-500/50 text-amber-400'
+                      }`}>
+                        <span className="material-symbols-outlined text-xs">
+                          {isPaid ? 'check' : 'hourglass_top'}
+                        </span>
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between">
+                          <span className={`text-xs font-bold ${isPaid ? 'text-emerald-300' : 'text-amber-300'}`}>
+                            2. Replacement Fee Payment (₹{dynamicReplacementFee > 0 ? dynamicReplacementFee : (enquiryDetails?.request?.amount || 150)})
+                          </span>
+                          <span className={`text-[10px] font-mono font-bold ${isPaid ? 'text-emerald-400' : 'text-amber-400'}`}>
+                            {isPaid ? 'PAID & VERIFIED' : 'PENDING'}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-300 mt-0.5">
+                          {isPaid
+                            ? 'Fee payment confirmed. Receipt generated and attached to request.'
+                            : 'Replacement fee is pending payment. Complete payment to forward request to issuance.'}
+                        </p>
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* Stage 3: Super Admin Re-Issuance */}
+                {(() => {
+                  const isPaid = enquiryDetails?.request?.fulfillmentStatus === 'queued' ||
+                    enquiryDetails?.request?.paymentStatus === 'paid' ||
+                    existingSubmission?.replacementPaid;
+
+                  return (
+                    <div className={`flex items-start gap-3 p-3 rounded-xl border ${
+                      isPaid
+                        ? 'bg-indigo-950/40 border-indigo-500/40'
+                        : 'bg-white/5 border-white/5 opacity-50'
+                    }`}>
+                      <div className={`w-6 h-6 rounded-full flex items-center justify-center shrink-0 mt-0.5 ${
+                        isPaid
+                          ? 'bg-indigo-500/20 border border-indigo-500/50 text-indigo-400'
+                          : 'bg-white/10 text-white/40'
+                      }`}>
+                        <span className={`material-symbols-outlined text-xs ${isPaid ? 'animate-pulse' : ''}`}>
+                          badge
+                        </span>
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between">
+                          <span className={`text-xs font-bold ${isPaid ? 'text-indigo-300' : 'text-white/60'}`}>
+                            3. Super Admin Queue & Re-Issuance
+                          </span>
+                          <span className={`text-[10px] font-mono font-bold ${isPaid ? 'text-indigo-400' : 'text-white/40'}`}>
+                            {isPaid ? 'IN QUEUE' : 'AWAITING PAYMENT'}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-300 mt-0.5">
+                          {isPaid
+                            ? 'Your request is in the Super Admin re-issuance queue. Once approved, your physical badge and active status will be restored.'
+                            : 'Pending payment confirmation before joining the issuance queue.'}
+                        </p>
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
+            </div>
+
+            {/* Action Buttons */}
+            <div className="pt-2 border-t border-white/10 flex flex-col sm:flex-row items-center gap-2.5">
+              {(() => {
+                const isPaid = enquiryDetails?.request?.fulfillmentStatus === 'queued' ||
+                  enquiryDetails?.request?.paymentStatus === 'paid' ||
+                  existingSubmission?.replacementPaid;
+
+                if (!isPaid) {
+                  return (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowEnquiryModal(false);
+                          const req = enquiryDetails?.request || activeReplacementRequest;
+                          const oid = req?.orderId || req?.razorpayOrderId || '';
+                          const amt = dynamicReplacementFee > 0 ? dynamicReplacementFee : (req?.amount || 150);
+                          const cur = req?.currency || 'INR';
+                          const rid = req?.id || req?.requestId || existingSubmission?.activeRequestId || generateShortId('REQ');
+                          const iid = req?.invoiceId || req?.paymentId || rid;
+                          handleOpenRazorpayCheckout(oid, amt, cur, rid, iid);
+                        }}
+                        className="w-full sm:flex-1 py-2.5 px-4 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2 cursor-pointer shadow-md transition-all active:scale-98"
+                      >
+                        <span className="material-symbols-outlined text-sm">payment</span>
+                        <span>Pay Fee Now (₹{dynamicReplacementFee > 0 ? dynamicReplacementFee : (enquiryDetails?.request?.amount || 150)})</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          setShowEnquiryModal(false);
+                          await handleCancelOrCheckExpiry(true);
+                        }}
+                        className="w-full sm:w-auto py-2.5 px-4 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 text-rose-300 text-xs font-mono font-bold flex items-center justify-center gap-1 cursor-pointer transition-all"
+                      >
+                        <span className="material-symbols-outlined text-sm">cancel</span>
+                        <span>Cancel Request</span>
+                      </button>
+                    </>
+                  );
+                }
+
+                return (
+                  <div className="flex flex-col sm:flex-row items-center gap-2 w-full">
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        setShowEnquiryModal(false);
+                        await handleCheckStatusOrEnquiry();
+                      }}
+                      className="w-full sm:flex-1 py-2.5 px-4 rounded-xl bg-purple-600/40 hover:bg-purple-600/60 border border-purple-500/50 text-white font-bold text-xs font-mono uppercase tracking-wider cursor-pointer transition-all flex items-center justify-center gap-1.5"
+                    >
+                      <span className="material-symbols-outlined text-sm">sync</span>
+                      <span>Check Live Admin Status</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowEnquiryModal(false)}
+                      className="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-white font-bold text-xs font-mono uppercase tracking-wider cursor-pointer transition-all"
+                    >
+                      Close
+                    </button>
+                  </div>
+                );
+              })()}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Super Admin: ID Card Fee & Settings Modal */}
+      {showFeeSettingsModal && (
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-[350] overflow-y-auto p-4 sm:p-6 flex min-h-full items-center justify-center animate-in fade-in duration-200">
+          <div className="glass-panel p-6 sm:p-8 rounded-3xl max-w-lg w-full border border-purple-500/40 relative space-y-6 text-left my-auto shadow-[0_0_60px_rgba(168,85,247,0.3)] bg-[#0d041a]/95">
+            {/* Header */}
+            <div className="flex justify-between items-start border-b border-white/10 pb-4">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-purple-500/20 border border-purple-500/40 flex items-center justify-center text-purple-300 shadow-[0_0_20px_rgba(168,85,247,0.3)]">
+                  <span className="material-symbols-outlined text-xl">payments</span>
+                </div>
+                <div>
+                  <h3 className="font-display-lg text-base sm:text-lg text-white font-extrabold uppercase tracking-wider">
+                    ID Card Fee &amp; Expiry Settings
+                  </h3>
+                  <p className="text-xs text-purple-300/70 font-mono">
+                    Super Admin Dynamic Fee Engine
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowFeeSettingsModal(false)}
+                className="w-8 h-8 rounded-xl bg-white/5 hover:bg-white/10 flex items-center justify-center text-white/60 hover:text-white transition-all cursor-pointer"
+              >
+                <span className="material-symbols-outlined text-base">close</span>
+              </button>
+            </div>
+
+            {/* Current Active Info */}
+            <div className="p-4 rounded-2xl bg-black/40 border border-purple-500/20 flex items-center justify-between text-xs font-mono">
+              <div>
+                <span className="text-white/60 block text-[10px]">CURRENT FEE</span>
+                <span className="text-emerald-400 font-bold text-sm">₹{dynamicReplacementFee}</span>
+              </div>
+              <div className="text-right">
+                <span className="text-white/60 block text-[10px]">PAYMENT WINDOW</span>
+                <span className="text-indigo-300 font-bold text-sm">{dynamicExpiryMinutes} Minutes</span>
+              </div>
+            </div>
+
+            {/* Form */}
+            <form onSubmit={handleSaveFeeSettings} className="space-y-5">
+              {/* Replacement Fee Input */}
+              <div className="space-y-2">
+                <label className="text-xs font-bold text-slate-200 uppercase tracking-wider block font-mono flex items-center justify-between">
+                  <span>Replacement Fee (₹ INR)</span>
+                  <span className="text-[10px] text-slate-400">Charged per re-issuance</span>
+                </label>
+                <div className="relative">
+                  <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-purple-400 font-bold text-sm">₹</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={10000}
+                    value={feeInput}
+                    onChange={(e) => setFeeInput(e.target.value)}
+                    required
+                    className="w-full pl-8 pr-4 py-3 bg-black/60 border border-purple-900/60 focus:border-purple-500 rounded-2xl text-white font-mono text-sm focus:outline-none transition-all shadow-inner"
+                    placeholder="e.g. 150"
+                  />
+                </div>
+                {/* Quick Presets */}
+                <div className="flex items-center gap-1.5 flex-wrap pt-1">
+                  <span className="text-[10px] text-slate-500 font-mono mr-1">Presets:</span>
+                  {[50, 100, 150, 200, 250, 300].map((preset) => (
+                    <button
+                      key={preset}
+                      type="button"
+                      onClick={() => setFeeInput(preset)}
+                      className={`px-2.5 py-1 rounded-lg text-[10px] font-mono font-bold cursor-pointer transition-all border ${
+                        Number(feeInput) === preset
+                          ? 'bg-purple-600 text-white border-purple-400 shadow-sm'
+                          : 'bg-white/5 border-white/10 text-slate-400 hover:text-white hover:bg-white/10'
+                      }`}
+                    >
+                      ₹{preset}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Expiry Window Input */}
+              <div className="space-y-2">
+                <label className="text-xs font-bold text-slate-200 uppercase tracking-wider block font-mono flex items-center justify-between">
+                  <span>Payment Window (Minutes)</span>
+                  <span className="text-[10px] text-slate-400">Auto-cancellation period</span>
+                </label>
+                <div className="relative">
+                  <span className="material-symbols-outlined absolute left-3.5 top-1/2 -translate-y-1/2 text-purple-400 text-base">schedule</span>
+                  <input
+                    type="number"
+                    min={5}
+                    max={1440}
+                    value={expiryInput}
+                    onChange={(e) => setExpiryInput(e.target.value)}
+                    required
+                    className="w-full pl-10 pr-4 py-3 bg-black/60 border border-purple-900/60 focus:border-purple-500 rounded-2xl text-white font-mono text-sm focus:outline-none transition-all shadow-inner"
+                    placeholder="e.g. 60"
+                  />
+                </div>
+                {/* Quick Presets */}
+                <div className="flex items-center gap-1.5 flex-wrap pt-1">
+                  <span className="text-[10px] text-slate-500 font-mono mr-1">Presets:</span>
+                  {[
+                    { label: '30m', val: 30 },
+                    { label: '60m', val: 60 },
+                    { label: '120m', val: 120 },
+                    { label: '24h', val: 1440 },
+                  ].map((preset) => (
+                    <button
+                      key={preset.val}
+                      type="button"
+                      onClick={() => setExpiryInput(preset.val)}
+                      className={`px-2.5 py-1 rounded-lg text-[10px] font-mono font-bold cursor-pointer transition-all border ${
+                        Number(expiryInput) === preset.val
+                          ? 'bg-indigo-600 text-white border-indigo-400 shadow-sm'
+                          : 'bg-white/5 border-white/10 text-slate-400 hover:text-white hover:bg-white/10'
+                      }`}
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Summary Note */}
+              <div className="p-3.5 rounded-xl bg-purple-950/30 border border-purple-500/20 text-xs text-purple-200/90 leading-relaxed font-sans">
+                <div className="flex items-start gap-2">
+                  <span className="material-symbols-outlined text-sm text-purple-400 shrink-0 mt-0.5">info</span>
+                  <span>
+                    When members report a lost or damaged ID card, they will be billed{' '}
+                    <strong className="text-white">₹{feeInput || 150}</strong>. Unpaid requests will automatically expire after{' '}
+                    <strong className="text-indigo-300">{expiryInput || 60} minutes</strong>.
+                  </span>
+                </div>
+              </div>
+
+              {/* Actions */}
+              <div className="flex items-center gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowFeeSettingsModal(false)}
+                  className="w-1/3 py-3 px-4 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 hover:text-white font-bold text-xs uppercase font-mono cursor-pointer transition-all"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSavingFeeSettings}
+                  className="w-2/3 py-3 px-4 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 disabled:opacity-40 text-white font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2 cursor-pointer shadow-lg shadow-purple-900/30 transition-all active:scale-98"
+                >
+                  {isSavingFeeSettings ? (
+                    <>
+                      <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                      <span>Saving Settings...</span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="material-symbols-outlined text-sm">save</span>
+                      <span>Save Fee Settings</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

@@ -86,6 +86,22 @@ export async function POST(request: Request) {
             error_description: '',
           });
 
+          // Promote ID card replacement request if applicable
+          try {
+            if (pData.metadata?.type === 'id_replacement' && pData.metadata?.requestId) {
+              const reqRef = adminDb.collection('id_card_requests').doc(pData.metadata.requestId);
+              await reqRef.update({
+                paymentStatus: 'paid',
+                fulfillmentStatus: 'queued',
+                paidAt: paidAtTime,
+                razorpayPaymentId: razorpayPaymentId,
+                updatedAt: paidAtTime,
+              });
+            }
+          } catch (repErr) {
+            console.warn('Webhook ID card replacement request update warning:', repErr);
+          }
+
           // Log transaction attempt subdocument
           try {
             const attemptsCol = adminDb.collection('payments').doc(docId).collection('attempts');

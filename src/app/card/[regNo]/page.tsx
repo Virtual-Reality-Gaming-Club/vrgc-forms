@@ -244,6 +244,7 @@ export default async function VerifyCardPage({ params }: PageProps) {
     specialization: `${member.team || 'VRGC Member'} • ${member.position || 'Core'}`,
     fromFirestore: true,
     fromCsv: false,
+    status: member.status || 'active',
   } : null;
 
   return (

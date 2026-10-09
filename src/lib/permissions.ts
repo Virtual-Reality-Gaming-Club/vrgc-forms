@@ -1,5 +1,6 @@
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { db } from './firebase';
+import { IDCardSettings, DEFAULT_ID_CARD_SETTINGS } from '@/types/idcard';
 
 export type PageId =
   | 'members'
@@ -17,6 +18,7 @@ export interface PagePermission {
   canView: boolean;
   canEdit: boolean;
   bypassMaintenance: boolean;
+  canManageCardRequests?: boolean;
 }
 
 export interface PermissionsConfig {
@@ -36,6 +38,7 @@ export interface PermissionsConfig {
 export interface ClubMetadata {
   domains: string[];
   positions: string[];
+  idCardSettings?: IDCardSettings;
   updatedAt?: string;
 }
 
@@ -85,64 +88,72 @@ export const DEFAULT_POSITIONS = [
 export const createDefaultPagePermission = (
   canView = true,
   canEdit = false,
-  bypassMaintenance = false
+  bypassMaintenance = false,
+  canManageCardRequests = false
 ): PagePermission => ({
   canView,
   canEdit,
   bypassMaintenance,
+  canManageCardRequests,
 });
 
 export const createDefaultPagePermissionsMap = (
   canView = true,
   canEdit = false,
-  bypassMaintenance = false
+  bypassMaintenance = false,
+  canManageCardRequests = false
 ): Record<PageId, PagePermission> => {
   const map: Partial<Record<PageId, PagePermission>> = {};
   ALL_PAGE_IDS.forEach((page) => {
-    map[page.id] = createDefaultPagePermission(canView, canEdit, bypassMaintenance);
+    map[page.id] = createDefaultPagePermission(
+      canView,
+      canEdit,
+      bypassMaintenance,
+      page.id === 'idcard' ? canManageCardRequests : false
+    );
   });
   return map as Record<PageId, PagePermission>;
 };
 
 export const DEFAULT_PERMISSIONS_CONFIG: PermissionsConfig = {
   roles: {
-    Admin: createDefaultPagePermissionsMap(true, true, true),
+    Admin: createDefaultPagePermissionsMap(true, true, true, true),
     'Payment Admin': {
-      ...createDefaultPagePermissionsMap(true, false, true),
-      payments: createDefaultPagePermission(true, true, true),
+      ...createDefaultPagePermissionsMap(true, false, true, false),
+      payments: createDefaultPagePermission(true, true, true, false),
     },
     Technical: {
-      ...createDefaultPagePermissionsMap(true, true, true),
+      ...createDefaultPagePermissionsMap(true, true, true, true),
     },
     Caster: {
-      ...createDefaultPagePermissionsMap(false, false, false),
-      live_admin: createDefaultPagePermission(true, true, true),
+      ...createDefaultPagePermissionsMap(false, false, false, false),
+      live_admin: createDefaultPagePermission(true, true, true, false),
     },
   },
   tiers: {
     members: {
-      members: createDefaultPagePermission(true, false, false),
-      planned_events: createDefaultPagePermission(true, false, false),
-      referrals: createDefaultPagePermission(true, true, false),
-      idcard: createDefaultPagePermission(true, true, false),
-      payments: createDefaultPagePermission(true, true, false),
-      tickets: createDefaultPagePermission(false, false, false),
-      maintenance: createDefaultPagePermission(false, false, false),
-      documents: createDefaultPagePermission(true, false, false),
-      ideahub: createDefaultPagePermission(true, true, false),
-      live_admin: createDefaultPagePermission(false, false, false),
+      members: createDefaultPagePermission(true, false, false, false),
+      planned_events: createDefaultPagePermission(true, false, false, false),
+      referrals: createDefaultPagePermission(true, true, false, false),
+      idcard: createDefaultPagePermission(true, true, false, false),
+      payments: createDefaultPagePermission(true, true, false, false),
+      tickets: createDefaultPagePermission(false, false, false, false),
+      maintenance: createDefaultPagePermission(false, false, false, false),
+      documents: createDefaultPagePermission(true, false, false, false),
+      ideahub: createDefaultPagePermission(true, true, false, false),
+      live_admin: createDefaultPagePermission(false, false, false, false),
     },
     faculty: {
-      members: createDefaultPagePermission(true, false, false),
-      planned_events: createDefaultPagePermission(true, true, false),
-      referrals: createDefaultPagePermission(true, false, false),
-      idcard: createDefaultPagePermission(true, true, false),
-      payments: createDefaultPagePermission(true, false, false),
-      tickets: createDefaultPagePermission(false, false, false),
-      maintenance: createDefaultPagePermission(false, false, false),
-      documents: createDefaultPagePermission(true, false, false),
-      ideahub: createDefaultPagePermission(true, true, false),
-      live_admin: createDefaultPagePermission(false, false, false),
+      members: createDefaultPagePermission(true, false, false, false),
+      planned_events: createDefaultPagePermission(true, true, false, false),
+      referrals: createDefaultPagePermission(true, false, false, false),
+      idcard: createDefaultPagePermission(true, true, false, false),
+      payments: createDefaultPagePermission(true, false, false, false),
+      tickets: createDefaultPagePermission(false, false, false, false),
+      maintenance: createDefaultPagePermission(false, false, false, false),
+      documents: createDefaultPagePermission(true, false, false, false),
+      ideahub: createDefaultPagePermission(true, true, false, false),
+      live_admin: createDefaultPagePermission(false, false, false, false),
     },
   },
   customRoles: [],
@@ -155,6 +166,7 @@ export const DEFAULT_PERMISSIONS_CONFIG: PermissionsConfig = {
 export const DEFAULT_CLUB_METADATA: ClubMetadata = {
   domains: DEFAULT_DOMAINS,
   positions: DEFAULT_POSITIONS,
+  idCardSettings: DEFAULT_ID_CARD_SETTINGS,
 };
 
 // ─── Firestore Data Accessors ────────────────────────────────────────────────
@@ -193,12 +205,20 @@ export async function savePermissionsConfig(config: PermissionsConfig): Promise<
 
 export async function fetchClubMetadata(): Promise<ClubMetadata> {
   try {
-    const snap = await getDoc(doc(db, 'config', 'club_metadata'));
+    // Check config/metadata first, then fallback to config/club_metadata
+    let snap = await getDoc(doc(db, 'config', 'metadata'));
+    if (!snap.exists()) {
+      snap = await getDoc(doc(db, 'config', 'club_metadata'));
+    }
     if (snap.exists()) {
       const data = snap.data() as ClubMetadata;
       const domains = Array.from(new Set([...(data.domains || []), ...DEFAULT_DOMAINS]));
       const positions = Array.from(new Set([...(data.positions || []), ...DEFAULT_POSITIONS]));
-      return { domains, positions, updatedAt: data.updatedAt };
+      const idCardSettings: IDCardSettings = {
+        replacementFee: Number(data.idCardSettings?.replacementFee) || DEFAULT_ID_CARD_SETTINGS.replacementFee,
+        expiryMinutes: Number(data.idCardSettings?.expiryMinutes) || DEFAULT_ID_CARD_SETTINGS.expiryMinutes,
+      };
+      return { domains, positions, idCardSettings, updatedAt: data.updatedAt };
     }
   } catch (err) {
     console.warn('Error fetching club metadata from Firestore, using defaults:', err);
@@ -207,10 +227,15 @@ export async function fetchClubMetadata(): Promise<ClubMetadata> {
 }
 
 export async function saveClubMetadata(metadata: ClubMetadata): Promise<void> {
-  await setDoc(doc(db, 'config', 'club_metadata'), {
+  const payload = {
     ...metadata,
     updatedAt: new Date().toISOString(),
-  }, { merge: true });
+  };
+  // Save to both config/metadata and config/club_metadata for complete parity
+  await Promise.allSettled([
+    setDoc(doc(db, 'config', 'metadata'), payload, { merge: true }),
+    setDoc(doc(db, 'config', 'club_metadata'), payload, { merge: true }),
+  ]);
 }
 
 // ─── Permission Evaluator ────────────────────────────────────────────────────
@@ -229,14 +254,14 @@ export function resolveUserPagePermission(
 
   // Super Admin always bypasses all restrictions with full authority
   if (isSuperAdmin || cleanRole === 'super admin' || cleanRole === 'super_admin') {
-    return { canView: true, canEdit: true, bypassMaintenance: true };
+    return { canView: true, canEdit: true, bypassMaintenance: true, canManageCardRequests: true };
   }
 
   // Live Broadcast Hub (Caster / Broadcast Manager access gate)
   if (pageId === 'live_admin') {
     // 1. Direct Caster role
     if (cleanRole === 'caster') {
-      return { canView: true, canEdit: true, bypassMaintenance: true };
+      return { canView: true, canEdit: true, bypassMaintenance: true, canManageCardRequests: false };
     }
 
     // 2. Caster Manager by role
@@ -244,7 +269,7 @@ export function resolveUserPagePermission(
       r.trim().toLowerCase()
     );
     if (userRole && managerRoles.includes(cleanRole || '')) {
-      return { canView: true, canEdit: true, bypassMaintenance: true };
+      return { canView: true, canEdit: true, bypassMaintenance: true, canManageCardRequests: false };
     }
 
     // 3. Caster Manager by explicit email delegated by SuperAdmin
@@ -252,49 +277,72 @@ export function resolveUserPagePermission(
       e.trim().toLowerCase()
     );
     if (cleanEmail && managerEmails.includes(cleanEmail)) {
-      return { canView: true, canEdit: true, bypassMaintenance: true };
+      return { canView: true, canEdit: true, bypassMaintenance: true, canManageCardRequests: false };
     }
 
     // 4. Role-specific configured permission in config.roles
     if (userRole && config.roles) {
       if (config.roles[userRole]?.live_admin?.canView) {
-        return config.roles[userRole].live_admin;
+        return {
+          ...config.roles[userRole].live_admin,
+          canManageCardRequests: false,
+        };
       }
       const matchingKey = Object.keys(config.roles).find(
         (k) => k.trim().toLowerCase() === cleanRole
       );
       if (matchingKey && config.roles[matchingKey]?.live_admin?.canView) {
-        return config.roles[matchingKey].live_admin;
+        return {
+          ...config.roles[matchingKey].live_admin,
+          canManageCardRequests: false,
+        };
       }
     }
 
     // Fallback: Denied for standard members / non-casters
-    return { canView: false, canEdit: false, bypassMaintenance: false };
+    return { canView: false, canEdit: false, bypassMaintenance: false, canManageCardRequests: false };
   }
 
   // If user has a specific assigned administrative/custom role
   if (userRole && config.roles) {
     if (config.roles[userRole]?.[pageId]) {
-      return config.roles[userRole][pageId];
+      const p = config.roles[userRole][pageId];
+      return {
+        ...p,
+        canManageCardRequests: false,
+      };
     }
     // Case-insensitive and trimmed lookup
     const matchingKey = Object.keys(config.roles).find(
       (k) => k.trim().toLowerCase() === cleanRole
     );
     if (matchingKey && config.roles[matchingKey]?.[pageId]) {
-      return config.roles[matchingKey][pageId];
+      const p = config.roles[matchingKey][pageId];
+      return {
+        ...p,
+        canManageCardRequests: false,
+      };
     }
   }
 
   // If user is Faculty
   if (isFaculty) {
-    return config.tiers.faculty?.[pageId] || createDefaultPagePermission(false, false, false);
+    return config.tiers.faculty?.[pageId] || createDefaultPagePermission(false, false, false, false);
   }
 
   // Otherwise, fallback to General Member tier
   if (isAuthorized) {
-    return config.tiers.members?.[pageId] || createDefaultPagePermission(true, false, false);
+    return config.tiers.members?.[pageId] || createDefaultPagePermission(true, false, false, false);
   }
 
-  return createDefaultPagePermission(false, false, false);
+  return createDefaultPagePermission(false, false, false, false);
+}
+
+export function resolveCanManageCardRequests(
+  config: PermissionsConfig,
+  userRole: string | null | undefined,
+  isSuperAdmin: boolean
+): boolean {
+  // Exclusively restricted to Super Admin
+  return Boolean(isSuperAdmin);
 }
