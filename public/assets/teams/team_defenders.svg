@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120">
+  <defs>
+    <linearGradient id="defGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00f0ff" />
+      <stop offset="50%" stop-color="#06b6d4" />
+      <stop offset="100%" stop-color="#0284c7" />
+    </linearGradient>
+    <linearGradient id="defGlow" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#22d3ee" stop-opacity="0.8" />
+      <stop offset="100%" stop-color="#0c4a6e" stop-opacity="0.2" />
+    </linearGradient>
+  </defs>
+  <!-- Background Badge Shield -->
+  <rect width="120" height="120" rx="20" fill="#040c17" />
+  <path d="M 60 12 L 102 32 L 92 84 L 60 108 L 28 84 L 18 32 Z" fill="url(#defGlow)" stroke="#06b6d4" stroke-width="2.5" />
+  <!-- Sentinel Shield Aegis -->
+  <path d="M 60 26 L 86 42 L 78 78 L 60 94 L 42 78 L 34 42 Z" fill="none" stroke="#ffffff" stroke-width="3" />
+  <path d="M 60 36 L 78 48 L 72 74 L 60 84 L 48 74 L 42 48 Z" fill="url(#defGrad)" />
+  <!-- Center Core Star -->
+  <polygon points="60,48 63,58 73,58 65,64 68,74 60,68 52,74 55,64 47,58 57,58" fill="#ffffff" opacity="0.95" />
+  <circle cx="60" cy="62" r="3" fill="#06b6d4" />
+</svg>
+

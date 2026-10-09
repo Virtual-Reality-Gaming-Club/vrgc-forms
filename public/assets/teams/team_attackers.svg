@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120">
+  <defs>
+    <linearGradient id="atkGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ff1744" />
+      <stop offset="50%" stop-color="#ef4444" />
+      <stop offset="100%" stop-color="#b91c1c" />
+    </linearGradient>
+    <linearGradient id="atkGlow" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#ff4655" stop-opacity="0.8" />
+      <stop offset="100%" stop-color="#7f1d1d" stop-opacity="0.2" />
+    </linearGradient>
+  </defs>
+  <!-- Background Badge Shield -->
+  <rect width="120" height="120" rx="20" fill="#130308" />
+  <path d="M 60 12 L 102 32 L 92 84 L 60 108 L 28 84 L 18 32 Z" fill="url(#atkGlow)" stroke="#ff4655" stroke-width="2.5" />
+  <!-- Dual Tactical Strike Blades / Chevron -->
+  <path d="M 60 26 L 76 56 L 68 56 L 60 40 L 52 56 L 44 56 Z" fill="#ffffff" />
+  <path d="M 60 46 L 82 82 L 74 82 L 60 58 L 46 82 L 38 82 Z" fill="url(#atkGrad)" />
+  <!-- Center Core Star -->
+  <polygon points="60,62 63,72 73,72 65,78 68,88 60,82 52,88 55,78 47,72 57,72" fill="#ffffff" opacity="0.95" />
+  <circle cx="60" cy="76" r="3" fill="#ff4655" />
+</svg>
+

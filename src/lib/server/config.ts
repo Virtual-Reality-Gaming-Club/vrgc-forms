@@ -22,12 +22,30 @@ if (typeof window !== 'undefined') {
 export const SERVER_CONFIG = {
   /**
    * Super Admin email list — read from SUPER_ADMIN_EMAILS env var.
-   * This is the ONLY env-var-controlled role. It is part of the hidden Super Admin
-   * mechanism and must remain exactly as-is. Do not add other roles here.
    */
   SUPER_ADMIN_EMAILS: (process.env.SUPER_ADMIN_EMAILS || '')
     .split(',')
     .map((e) => e.trim().toLowerCase())
     .filter(Boolean),
+
+  /**
+   * Base authorized admin roles — read from ADMIN_ROLES env var.
+   */
+  ADMIN_ROLES: (process.env.ADMIN_ROLES || 'Super Administrator,Admin,Technical')
+    .split(',')
+    .map((r) => r.trim())
+    .filter(Boolean),
 };
+
+export function isServerSuperAdmin(email: string | null | undefined): boolean {
+  if (!email) return false;
+  const clean = email.trim().toLowerCase();
+  return SERVER_CONFIG.SUPER_ADMIN_EMAILS.includes(clean);
+}
+
+export function isServerAdminRole(role: string | null | undefined): boolean {
+  if (!role) return false;
+  const clean = role.trim().toLowerCase();
+  return SERVER_CONFIG.ADMIN_ROLES.some((r) => r.toLowerCase() === clean);
+}
 

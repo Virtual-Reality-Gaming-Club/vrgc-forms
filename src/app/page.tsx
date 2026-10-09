@@ -19,6 +19,7 @@ import MaintenanceModal, {
 } from '@/components/MaintenanceModal';
 import PlannedEvents from '@/components/PlannedEvents';
 import IdeaHub from '@/components/IdeaHub';
+import LiveBroadcastControl from '@/components/LiveBroadcastControl';
 import SuperAdminManagementModal from '@/components/SuperAdminManagementModal';
 import SuperAdminControlCenter from '@/components/SuperAdminControlCenter';
 import UnderMaintenanceCard from '@/components/UnderMaintenanceCard';
@@ -163,7 +164,8 @@ function AppContent() {
       userRole,
       isSuperAdmin,
       isFaculty,
-      isAuthorized
+      isAuthorized,
+      userEmail
     );
   };
 
@@ -240,7 +242,7 @@ function AppContent() {
       const path = window.location.pathname.replace(/^\//, '');
       const params = new URLSearchParams(window.location.search);
       const tabParam = params.get('tab');
-      const validPaths = ['referrals', 'idcard', 'payments', 'dashboard', 'members', 'planned_events', 'superadmin', 'documents', 'ideahub'];
+      const validPaths = ['referrals', 'idcard', 'payments', 'dashboard', 'members', 'planned_events', 'superadmin', 'documents', 'ideahub', 'live_admin'];
 
       if (path && validPaths.includes(path)) {
         setActivePage(path);
@@ -281,6 +283,7 @@ function AppContent() {
       case 'superadmin': return 'Super Admin Enclave';
       case 'documents': return 'Documents';
       case 'tickets': return 'Tickets';
+      case 'live_admin': return 'Live Broadcast Hub';
       default: return 'Command Center';
     }
   };
@@ -454,6 +457,7 @@ function AppContent() {
           isFaculty={isFaculty}
           isAuthorized={isAuthorized}
           userRole={userRole}
+          userEmail={userEmail}
           permissionsConfig={permissionsConfig}
         />
 
@@ -622,6 +626,17 @@ function AppContent() {
               />
             ) : (
               <Tickets onRedirect={() => handlePageChange('dashboard')} />
+            )
+          )}
+
+          {activePage === 'live_admin' && getPagePermission('live_admin').canView && (
+            isSectionLocked('live_admin') ? (
+              <MaintenanceScreen
+                section="Live Broadcast Hub"
+                onBack={() => handlePageChange('dashboard')}
+              />
+            ) : (
+              <LiveBroadcastControl />
             )
           )}
         </main>
