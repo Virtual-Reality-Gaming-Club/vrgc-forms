@@ -22,7 +22,8 @@ export async function POST(request: Request) {
 
     const callerEmail = (user.email || '').toLowerCase().trim();
     const body = await request.json().catch(() => ({}));
-    const { requestId, forceCancel = false, sweep = false } = body;
+    const { requestId, forceCancel = false, cancelIfUnpaid = false, cancel = false, sweep = false } = body;
+    const shouldCancel = Boolean(forceCancel || cancelIfUnpaid || cancel);
 
     const now = Date.now();
     let revertedCount = 0;
@@ -57,11 +58,11 @@ export async function POST(request: Request) {
           );
         }
 
-        // Only revert if payment is still pending and it is expired (or forceCancel is explicitly requested)
+        // Only revert if payment is still pending and it is expired (or cancellation was requested)
         const isPaymentPending = reqData.fulfillmentStatus === 'payment_pending';
         const isExpired = reqData.expireAt ? reqData.expireAt <= now : true;
 
-        if (isPaymentPending && (isExpired || forceCancel)) {
+        if (isPaymentPending && (isExpired || shouldCancel)) {
           const batch = adminDb.batch();
           const targetEmail = (reqData.userEmail || callerEmail).toLowerCase().trim();
 
@@ -77,11 +78,36 @@ export async function POST(request: Request) {
             status: 'Approved',
             activeRequestId: null,
             suspendedReason: null,
+            suspendedAt: null,
+            replacementPaid: null,
+            paymentStatus: null,
+            fulfillmentStatus: null,
+            paidAt: null,
+            requestDenied: null,
+            denialMessage: null,
+            deniedAt: null,
             updated_at: FieldValue.serverTimestamp(),
           });
 
-          // 3. Delete or cancel request
+          // 3. Delete request from id_card_requests
           batch.delete(reqRef);
+
+          // 4. Sweep any other orphan pending requests for this user email
+          try {
+            const orphanSnap = await adminDb.collection('id_card_requests')
+              .where('userEmail', '==', targetEmail)
+              .get();
+            for (const d of orphanSnap.docs) {
+              if (d.id !== targetRequestId) {
+                const dData = d.data();
+                if (dData.paymentStatus !== 'paid' || dData.fulfillmentStatus === 'payment_pending') {
+                  batch.delete(d.ref);
+                }
+              }
+            }
+          } catch (sweepErr) {
+            console.warn('Notice sweeping orphan requests:', sweepErr);
+          }
 
           await batch.commit();
           revertedCount++;
@@ -89,6 +115,7 @@ export async function POST(request: Request) {
           return NextResponse.json({
             success: true,
             reverted: true,
+            cardReactivated: true,
             message: 'Pending replacement request expired/cancelled. ID card reactivated.',
             requestId: targetRequestId,
           });

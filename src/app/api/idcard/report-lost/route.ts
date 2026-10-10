@@ -199,6 +199,24 @@ export async function POST(request: Request) {
     // 6. Atomically update Firestore via Batch
     const batch = adminDb.batch();
 
+    // Clean up any old pending request documents for callerEmail before creating the new one
+    try {
+      const oldReqsSnap = await adminDb.collection('id_card_requests')
+        .where('userEmail', '==', callerEmail)
+        .get();
+      for (const d of oldReqsSnap.docs) {
+        const dData = d.data();
+        if (dData.paymentStatus !== 'paid' || dData.fulfillmentStatus === 'payment_pending') {
+          batch.delete(d.ref);
+          if (dData.paymentId) {
+            batch.delete(adminDb.collection('payments').doc(dData.paymentId));
+          }
+        }
+      }
+    } catch (cleanErr) {
+      console.warn('Notice cleaning old requests in report-lost:', cleanErr);
+    }
+
     // a. id_cards/{email}: set status: 'suspended', activeRequestId, suspendedReason, payment pending
     batch.update(cardDocRef, {
       status: 'suspended',

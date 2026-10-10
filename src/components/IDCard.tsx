@@ -801,8 +801,10 @@ const IDCard: React.FC<IDCardProps> = ({
       const map = new Map<string, IDCardRequest>();
 
       const isDismissed = (r: Partial<IDCardRequest>) =>
+        !r ||
         r.fulfillmentStatus === 'resolved' ||
         r.fulfillmentStatus === 'denied' ||
+        r.fulfillmentStatus === 'cancelled' ||
         r.status === 'cancelled' ||
         r.status === 'resolved';
 
@@ -813,9 +815,14 @@ const IDCard: React.FC<IDCardProps> = ({
         }
       });
 
-      // 2. Add dev localStorage requests
+      // 2. Add dev localStorage requests (skip if the card is already approved)
       devRequests.forEach((r) => {
         if (!isDismissed(r)) {
+          const cleanEmail = (r.userEmail || r.email || '').toLowerCase().trim();
+          const cardCandidate = candidates.find(c => (c.email || '').toLowerCase().trim() === cleanEmail);
+          if (cardCandidate && cardCandidate.status && cardCandidate.status.toLowerCase() !== 'suspended') {
+            return;
+          }
           const key = r.id || r.requestId || '';
           if (!map.has(key)) {
             map.set(key, r);
@@ -824,11 +831,11 @@ const IDCard: React.FC<IDCardProps> = ({
       });
 
       // 3. Cross-reference ALL candidates in 'candidates' who are currently suspended
-      // Every suspended ID MUST appear in Super Admin's queue for review, UNLESS already dismissed/resolved/denied!
+      // Every suspended ID with an active request MUST appear in Super Admin's queue for review, UNLESS already dismissed/resolved/denied!
       candidates.forEach((c) => {
-        if (c.status?.toLowerCase() === 'suspended' && !c.requestDenied) {
+        if (c.status?.toLowerCase() === 'suspended' && !c.requestDenied && c.activeRequestId) {
           const cleanEmail = (c.email || '').toLowerCase().trim();
-          const reqId = c.activeRequestId || generateShortId('REQ');
+          const reqId = c.activeRequestId;
 
           // If a request for this candidate was already marked dismissed in Dev storage, skip!
           const dismissedInDev = devRequests.find(
@@ -912,6 +919,7 @@ const IDCard: React.FC<IDCardProps> = ({
           const item = { id: d.id, ...d.data() } as IDCardRequest;
           const isDismissed = item.fulfillmentStatus === 'resolved' ||
                               item.fulfillmentStatus === 'denied' ||
+                              item.fulfillmentStatus === 'cancelled' ||
                               item.status === 'cancelled' ||
                               item.status === 'resolved';
           if (!isDismissed) {
@@ -1330,6 +1338,25 @@ const IDCard: React.FC<IDCardProps> = ({
         console.warn('Notice updating id_cards doc to suspended:', dbErr);
       }
 
+      // Clean up previous pending request for callerEmail if exists to prevent duplicate entries
+      try {
+        const prevQ = query(
+          collection(db, 'id_card_requests'),
+          where('userEmail', '==', callerEmail)
+        );
+        const prevSnap = await getDocs(prevQ);
+        for (const docD of prevSnap.docs) {
+          if (docD.id !== effectiveRequestId) {
+            const docData = docD.data();
+            if (docData.paymentStatus !== 'paid' || docData.fulfillmentStatus === 'payment_pending') {
+              await deleteDoc(docD.ref).catch(() => {});
+            }
+          }
+        }
+      } catch (prevErr) {
+        console.warn('Notice cleaning previous requests in handleReportLost:', prevErr);
+      }
+
       // 2. Unconditionally write to Firestore id_card_requests so Super Admin Replacement Queue receives this pending request
       try {
         await setDoc(doc(db, 'id_card_requests', effectiveRequestId), newRequestItem, { merge: true });
@@ -1406,33 +1433,225 @@ const IDCard: React.FC<IDCardProps> = ({
 
   // 6. Cancel Request or Check Expiry
   const handleCancelOrCheckExpiry = async (explicitCancel = false) => {
-    if (!currentUser || !existingSubmission?.activeRequestId) return;
+    const callerEmail = (currentUser?.email || externalUser?.email || '').toLowerCase().trim();
+    const targetReqId = existingSubmission?.activeRequestId ||
+      activeReplacementRequest?.id ||
+      activeReplacementRequest?.requestId ||
+      (callerEmail ? getDevCardRequests().find(r => (r.userEmail && r.userEmail.toLowerCase().trim() === callerEmail))?.id : '') ||
+      '';
+
+    if (!callerEmail) return;
+
     if (explicitCancel) {
-      const confirmed = confirm('Are you sure you want to cancel this replacement request? Your ID card will be reactivated and the pending invoice will be deleted.');
+      const confirmed = confirm(
+        'Are you sure you want to cancel this replacement request?\n\nYour physical ID card will be reactivated immediately and the request will be removed from the Super Admin queue.'
+      );
       if (!confirmed) return;
     }
 
     setIsCheckingExpiry(true);
     try {
-      let handledViaApi = false;
-      try {
-        const authHeaders = await getAuthHeaders();
-        const res = await fetch('/api/idcard/check-expiry', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            ...authHeaders,
-          },
-          body: JSON.stringify({
-            requestId: existingSubmission.activeRequestId,
-            cancelIfUnpaid: explicitCancel,
-          }),
-        });
+      if (explicitCancel) {
+        // 1. Call server API (/api/idcard/cancel-request)
+        try {
+          const authHeaders = await getAuthHeaders();
+          await fetch('/api/idcard/cancel-request', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              ...authHeaders,
+            },
+            body: JSON.stringify({
+              requestId: targetReqId,
+              reason: 'Cancelled by requester',
+            }),
+          });
+        } catch (apiErr) {
+          console.warn('Cancel request API notice, proceeding with direct synchronization:', apiErr);
+        }
 
-        const data = await res.json();
-        if (res.ok && data.success) {
-          handledViaApi = true;
-          if (data.cardReactivated) {
+        const nowIso = new Date().toISOString();
+
+        // 2. Direct Firestore deletion/cleanup of id_card_requests document
+        const idsToClear = [
+          targetReqId,
+          existingSubmission?.activeRequestId,
+          activeReplacementRequest?.id,
+          activeReplacementRequest?.requestId,
+        ].filter(Boolean) as string[];
+
+        for (const reqIdToTry of Array.from(new Set(idsToClear))) {
+          try {
+            await deleteDoc(doc(db, 'id_card_requests', reqIdToTry));
+          } catch {
+            try {
+              await updateDoc(doc(db, 'id_card_requests', reqIdToTry), {
+                fulfillmentStatus: 'cancelled',
+                status: 'cancelled',
+                cancelledAt: nowIso,
+                updatedAt: nowIso,
+              });
+            } catch (e) {
+              console.warn('Notice updating id_card_requests doc on user cancel:', e);
+            }
+          }
+        }
+
+        // Also query id_card_requests for any matching userEmail and delete
+        if (callerEmail) {
+          try {
+            const q = query(collection(db, 'id_card_requests'), where('userEmail', '==', callerEmail));
+            const snap = await getDocs(q);
+            for (const d of snap.docs) {
+              const dData = d.data();
+              if (dData.paymentStatus !== 'paid' || dData.fulfillmentStatus === 'payment_pending') {
+                await deleteDoc(d.ref).catch(async () => {
+                  await updateDoc(d.ref, {
+                    fulfillmentStatus: 'cancelled',
+                    status: 'cancelled',
+                    cancelledAt: nowIso,
+                    updatedAt: nowIso,
+                  }).catch(() => {});
+                });
+              }
+            }
+          } catch (qErr) {
+            console.warn('Notice querying id_card_requests on user cancel:', qErr);
+          }
+        }
+
+        // 3. Directly restore id_cards doc in Firestore
+        if (callerEmail) {
+          try {
+            await updateDoc(doc(db, 'id_cards', callerEmail), {
+              status: 'Approved',
+              activeRequestId: deleteField(),
+              suspendedReason: deleteField(),
+              suspendedAt: deleteField(),
+              replacementPaid: deleteField(),
+              paymentStatus: deleteField(),
+              fulfillmentStatus: deleteField(),
+              paidAt: deleteField(),
+              requestDenied: deleteField(),
+              denialMessage: deleteField(),
+              deniedAt: deleteField(),
+              updatedAt: nowIso,
+            });
+          } catch (dbErr) {
+            console.warn('User cancel updateDoc notice for id_cards:', dbErr);
+          }
+        }
+
+        // 4. Clear dev storage
+        deleteDevCardRequest(targetReqId, callerEmail);
+        if (existingSubmission?.activeRequestId) {
+          deleteDevCardRequest(existingSubmission.activeRequestId, callerEmail);
+        }
+
+        // 5. Update latestFirestoreListRef immediately
+        latestFirestoreListRef.current = latestFirestoreListRef.current.filter(
+          (r) => r.id !== targetReqId && r.requestId !== targetReqId && (!callerEmail || (r.userEmail && r.userEmail.toLowerCase().trim() !== callerEmail))
+        );
+
+        // 6. Update queuedRequests immediately
+        setQueuedRequests((prev) =>
+          prev.filter(
+            (r) => r.id !== targetReqId && r.requestId !== targetReqId && (!callerEmail || (r.userEmail && r.userEmail.toLowerCase().trim() !== callerEmail))
+          )
+        );
+
+        // 7. Update candidates list in memory
+        setCandidates((prev) =>
+          prev.map((c) =>
+            c.email?.toLowerCase().trim() === callerEmail || (existingSubmission?.registrationNumber && c.registrationNumber === existingSubmission.registrationNumber)
+              ? {
+                  ...c,
+                  status: 'Approved',
+                  activeRequestId: undefined,
+                  suspendedReason: undefined,
+                  replacementPaid: false,
+                  paymentStatus: undefined,
+                  fulfillmentStatus: undefined,
+                }
+              : c
+          )
+        );
+
+        // 8. Update existingSubmission & activeReplacementRequest
+        setExistingSubmission((prev) => (prev ? {
+          ...prev,
+          status: 'Approved',
+          activeRequestId: undefined,
+          suspendedReason: undefined,
+          replacementPaid: false,
+          paymentStatus: undefined,
+          fulfillmentStatus: undefined,
+          requestDenied: false,
+          denialMessage: undefined,
+          deniedAt: undefined,
+        } : null));
+        setActiveReplacementRequest(null);
+
+        setExpiryToast('Replacement request cancelled. ID card reactivated.');
+        setTimeout(() => setExpiryToast(null), 4000);
+        window.dispatchEvent(new Event('vrgc_dev_requests_updated'));
+      } else {
+        // Checking expiry (not explicit cancel)
+        let handledViaApi = false;
+        try {
+          const authHeaders = await getAuthHeaders();
+          const res = await fetch('/api/idcard/check-expiry', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              ...authHeaders,
+            },
+            body: JSON.stringify({
+              requestId: targetReqId,
+              forceCancel: false,
+            }),
+          });
+
+          const data = await res.json();
+          if (res.ok && data.success) {
+            handledViaApi = true;
+            if (data.cardReactivated || data.reverted) {
+              setExistingSubmission((prev) => (prev ? {
+                ...prev,
+                status: 'Approved',
+                activeRequestId: undefined,
+                suspendedReason: undefined,
+                replacementPaid: false,
+              } : null));
+              setActiveReplacementRequest(null);
+              setExpiryToast('Pending invoice expired. ID card reactivated.');
+              setTimeout(() => setExpiryToast(null), 4000);
+            } else {
+              setExpiryToast(`Request is active: Status is ${data.fulfillmentStatus || 'Payment Pending'}.`);
+              setTimeout(() => setExpiryToast(null), 4000);
+            }
+          }
+        } catch (apiErr) {
+          console.warn('Check expiry API notice, using fallback:', apiErr);
+        }
+
+        if (!handledViaApi) {
+          // Fallback local dev status check
+          const localReq = getDevCardRequests().find(r => r.id === targetReqId || r.requestId === targetReqId);
+          if (localReq && localReq.fulfillmentStatus === 'payment_pending' && localReq.expireAt && localReq.expireAt <= Date.now()) {
+            try {
+              await updateDoc(doc(db, 'id_cards', callerEmail), {
+                status: 'Approved',
+                activeRequestId: deleteField(),
+                suspendedReason: deleteField(),
+                suspendedAt: deleteField(),
+                replacementPaid: deleteField(),
+                updatedAt: new Date().toISOString(),
+              });
+            } catch (dbErr) {
+              console.warn('Local dev expiry updateDoc notice:', dbErr);
+            }
+            deleteDevCardRequest(targetReqId);
             setExistingSubmission((prev) => (prev ? {
               ...prev,
               status: 'Approved',
@@ -1441,80 +1660,15 @@ const IDCard: React.FC<IDCardProps> = ({
               replacementPaid: false,
             } : null));
             setActiveReplacementRequest(null);
-            setExpiryToast(explicitCancel ? 'Replacement request cancelled. ID card reactivated.' : 'Pending invoice expired. ID card reactivated.');
+            setExpiryToast('Pending invoice expired. ID card reactivated.');
             setTimeout(() => setExpiryToast(null), 4000);
+          } else if (localReq?.fulfillmentStatus === 'queued' || existingSubmission?.replacementPaid) {
+            setExpiryToast('Payment verified! Your replacement request is currently in the Super Admin re-issuance queue.');
+            setTimeout(() => setExpiryToast(null), 4500);
           } else {
-            setExpiryToast(`Request is active: Status is ${data.fulfillmentStatus || 'Payment Pending'}.`);
+            setExpiryToast('Request active: Replacement fee payment is currently pending.');
             setTimeout(() => setExpiryToast(null), 4000);
           }
-        }
-      } catch (apiErr) {
-        console.warn('Check expiry API notice, using fallback:', apiErr);
-      }
-
-      if (!handledViaApi && explicitCancel) {
-        const callerEmail = (currentUser.email || '').toLowerCase().trim();
-        try {
-          await updateDoc(doc(db, 'id_cards', callerEmail), {
-            status: 'Approved',
-            activeRequestId: deleteField(),
-            suspendedReason: deleteField(),
-            suspendedAt: deleteField(),
-            replacementPaid: deleteField(),
-            paymentStatus: deleteField(),
-            fulfillmentStatus: deleteField(),
-            paidAt: deleteField(),
-            updatedAt: new Date().toISOString(),
-          });
-        } catch (dbErr) {
-          console.warn('Local dev cancel updateDoc notice:', dbErr);
-        }
-        deleteDevCardRequest(existingSubmission.activeRequestId);
-        setExistingSubmission((prev) => (prev ? {
-          ...prev,
-          status: 'Approved',
-          activeRequestId: undefined,
-          suspendedReason: undefined,
-          replacementPaid: false,
-        } : null));
-        setActiveReplacementRequest(null);
-        setExpiryToast('Replacement request cancelled. ID card reactivated.');
-        setTimeout(() => setExpiryToast(null), 4000);
-      } else if (!handledViaApi && !explicitCancel) {
-        // Fallback local dev status check
-        const targetReqId = existingSubmission.activeRequestId;
-        const localReq = getDevCardRequests().find(r => r.id === targetReqId || r.requestId === targetReqId);
-        if (localReq && localReq.fulfillmentStatus === 'payment_pending' && localReq.expireAt && localReq.expireAt <= Date.now()) {
-          const callerEmail = (currentUser.email || '').toLowerCase().trim();
-          try {
-            await updateDoc(doc(db, 'id_cards', callerEmail), {
-              status: 'Approved',
-              activeRequestId: deleteField(),
-              suspendedReason: deleteField(),
-              suspendedAt: deleteField(),
-              replacementPaid: deleteField(),
-              updatedAt: new Date().toISOString(),
-            });
-          } catch (dbErr) {
-            console.warn('Local dev expiry updateDoc notice:', dbErr);
-          }
-          deleteDevCardRequest(targetReqId);
-          setExistingSubmission((prev) => (prev ? {
-            ...prev,
-            status: 'Approved',
-            activeRequestId: undefined,
-            suspendedReason: undefined,
-            replacementPaid: false,
-          } : null));
-          setActiveReplacementRequest(null);
-          setExpiryToast('Pending invoice expired. ID card reactivated.');
-          setTimeout(() => setExpiryToast(null), 4000);
-        } else if (localReq?.fulfillmentStatus === 'queued' || existingSubmission.replacementPaid) {
-          setExpiryToast('Payment verified! Your replacement request is currently in the Super Admin re-issuance queue.');
-          setTimeout(() => setExpiryToast(null), 4500);
-        } else {
-          setExpiryToast('Request active: Replacement fee payment is currently pending.');
-          setTimeout(() => setExpiryToast(null), 4000);
         }
       }
     } catch (err: any) {
@@ -1888,6 +2042,11 @@ const IDCard: React.FC<IDCardProps> = ({
     latestFirestoreListRef.current = latestFirestoreListRef.current.filter(
       (r) => r.id !== reqId && r.requestId !== reqId && (!email || r.userEmail?.toLowerCase().trim() !== email)
     );
+    setQueuedRequests((prev) =>
+      prev.filter(
+        (r) => r.id !== reqId && r.requestId !== reqId && (!email || r.userEmail?.toLowerCase().trim() !== email)
+      )
+    );
 
     // 5. Update candidates list in memory
     setCandidates((prev) =>
@@ -1961,14 +2120,32 @@ const IDCard: React.FC<IDCardProps> = ({
   };
 
   // 7e. Manual Queue Refresh
-  const handleRefreshQueue = () => {
+  const handleRefreshQueue = async () => {
     setIsRefreshingQueue(true);
+    try {
+      const snap = await getDocs(collection(db, 'id_card_requests'));
+      const list: IDCardRequest[] = [];
+      snap.forEach((d) => {
+        const item = { id: d.id, ...d.data() } as IDCardRequest;
+        const isDismissed = item.fulfillmentStatus === 'resolved' ||
+                            item.fulfillmentStatus === 'denied' ||
+                            item.fulfillmentStatus === 'cancelled' ||
+                            item.status === 'cancelled' ||
+                            item.status === 'resolved';
+        if (!isDismissed) {
+          list.push(item);
+        }
+      });
+      latestFirestoreListRef.current = list;
+    } catch (e) {
+      console.warn('Refresh queue snapshot notice:', e);
+    }
     window.dispatchEvent(new Event('vrgc_dev_requests_updated'));
     setTimeout(() => {
       setIsRefreshingQueue(false);
       setResolveSuccessMessage('Card requests queue refreshed.');
       setTimeout(() => setResolveSuccessMessage(null), 3000);
-    }, 600);
+    }, 400);
   };
 
   // 7f. Super Admin: Save ID Card Replacement Fee & Expiry Settings
@@ -4310,8 +4487,10 @@ const IDCard: React.FC<IDCardProps> = ({
             {/* ID CARD REQUESTS SUB-TAB (Admins with canManageCardRequests only) */}
             {adminSectionTab === 'requests' && canManageCardRequests && (() => {
               const isDismissed = (r: IDCardRequest) =>
+                !r ||
                 r.fulfillmentStatus === 'resolved' ||
                 r.fulfillmentStatus === 'denied' ||
+                r.fulfillmentStatus === 'cancelled' ||
                 r.status === 'cancelled' ||
                 r.status === 'resolved';
 
