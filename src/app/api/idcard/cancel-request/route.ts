@@ -46,58 +46,70 @@ export async function POST(request: Request) {
     }
 
     const callerEmail = (user.email || '').toLowerCase().trim();
-    const isAllowed = await isAuthorizedSuperAdmin(callerEmail);
-    if (!isAllowed) {
-      return NextResponse.json(
-        { success: false, error: 'Forbidden: Only Super Administrators can cancel or deny ID card replacement requests.' },
-        { status: 403 }
-      );
-    }
+    const isSuperAdmin = await isAuthorizedSuperAdmin(callerEmail);
 
     const body = await request.json().catch(() => ({}));
     const { requestId, reason } = body;
 
-    if (!requestId || typeof requestId !== 'string') {
+    const cleanRequestId = typeof requestId === 'string' ? requestId.trim() : '';
+
+    // 2. Fetch the request document
+    let requestDocRef = cleanRequestId ? adminDb.collection('id_card_requests').doc(cleanRequestId) : null;
+    let requestSnap = requestDocRef ? await requestDocRef.get() : null;
+
+    if (!requestSnap || !requestSnap.exists) {
+      // Fallback: look up pending request for callerEmail
+      const userReqs = await adminDb.collection('id_card_requests')
+        .where('userEmail', '==', callerEmail)
+        .limit(1)
+        .get();
+      if (!userReqs.empty) {
+        requestDocRef = userReqs.docs[0].ref;
+        requestSnap = userReqs.docs[0];
+      }
+    }
+
+    const reqData = requestSnap?.exists ? (requestSnap.data() || {}) : {};
+    const targetEmail = (reqData.userEmail || reqData.email || callerEmail).toLowerCase().trim();
+    const isOwner = targetEmail === callerEmail;
+
+    if (!isSuperAdmin && !isOwner) {
       return NextResponse.json(
-        { success: false, error: 'requestId is required.' },
-        { status: 400 }
+        { success: false, error: 'Forbidden: You are not authorized to cancel this ID card replacement request.' },
+        { status: 403 }
       );
     }
 
-    const cleanRequestId = requestId.trim();
-
-    // 2. Fetch the request
-    const requestDocRef = adminDb.collection('id_card_requests').doc(cleanRequestId);
-    const requestSnap = await requestDocRef.get();
-
-    if (!requestSnap.exists) {
-      return NextResponse.json(
-        { success: false, error: 'ID card replacement request not found.' },
-        { status: 404 }
-      );
-    }
-
-    const reqData = requestSnap.data() || {};
-    const targetEmail = (reqData.userEmail || '').toLowerCase().trim();
-    if (!targetEmail) {
-      return NextResponse.json(
-        { success: false, error: 'Invalid user email in request document.' },
-        { status: 400 }
-      );
+    // If regular requester is cancelling, verify payment is not completed
+    if (isOwner && !isSuperAdmin) {
+      if (reqData.paymentStatus === 'paid' || reqData.fulfillmentStatus === 'queued') {
+        return NextResponse.json(
+          { success: false, error: 'Payment is already completed. Please contact Super Admin to cancel or re-issue.' },
+          { status: 400 }
+        );
+      }
     }
 
     const nowIso = new Date().toISOString();
     const batch = adminDb.batch();
 
-    // a. Mark request as cancelled/denied
-    batch.update(requestDocRef, {
-      fulfillmentStatus: 'denied',
-      status: 'cancelled',
-      deniedAt: nowIso,
-      deniedBy: callerEmail,
-      denialReason: reason || 'Cancelled by Super Administrator',
-      updatedAt: nowIso,
-    });
+    // a. Delete or mark request as cancelled
+    if (requestDocRef && requestSnap?.exists) {
+      if (isOwner && !isSuperAdmin) {
+        // When requester cancels, completely delete the request so it vanishes from the super admin queue
+        batch.delete(requestDocRef);
+      } else {
+        // Super admin cancellation / denial
+        batch.update(requestDocRef, {
+          fulfillmentStatus: 'denied',
+          status: 'cancelled',
+          deniedAt: nowIso,
+          deniedBy: callerEmail,
+          denialReason: reason || 'Cancelled by Super Administrator',
+          updatedAt: nowIso,
+        });
+      }
+    }
 
     // b. Delete pending payment if unpaid
     if (reqData.paymentId && reqData.paymentStatus !== 'paid') {
@@ -105,7 +117,24 @@ export async function POST(request: Request) {
       batch.delete(payRef);
     }
 
-    // c. Restore ID card to 'Approved' and mark requestDenied: true
+    // Also sweep any other orphan pending requests for this user email
+    try {
+      const pendingSnap = await adminDb.collection('id_card_requests')
+        .where('userEmail', '==', targetEmail)
+        .get();
+      for (const d of pendingSnap.docs) {
+        if (d.id !== cleanRequestId) {
+          const dData = d.data();
+          if (dData.paymentStatus !== 'paid' || dData.fulfillmentStatus === 'payment_pending') {
+            batch.delete(d.ref);
+          }
+        }
+      }
+    } catch (sweepErr) {
+      console.warn('Notice sweeping user pending requests:', sweepErr);
+    }
+
+    // c. Restore ID card to 'Approved'
     let cardDocRef = adminDb.collection('id_cards').doc(targetEmail);
     const cardSnap = await cardDocRef.get();
     if (!cardSnap.exists) {
@@ -115,7 +144,7 @@ export async function POST(request: Request) {
       }
     }
 
-    batch.update(cardDocRef, {
+    const cardUpdates: Record<string, any> = {
       status: 'Approved',
       activeRequestId: null,
       suspendedReason: null,
@@ -124,24 +153,35 @@ export async function POST(request: Request) {
       paymentStatus: null,
       fulfillmentStatus: null,
       paidAt: null,
-      requestDenied: true,
-      denialMessage: 'Your request has been denied and you can try again.',
-      deniedAt: nowIso,
       updated_at: FieldValue.serverTimestamp(),
-    });
+    };
+
+    if (isSuperAdmin) {
+      cardUpdates.requestDenied = true;
+      cardUpdates.denialMessage = reason || 'Your request has been denied and you can try again.';
+      cardUpdates.deniedAt = nowIso;
+    } else {
+      cardUpdates.requestDenied = null;
+      cardUpdates.denialMessage = null;
+      cardUpdates.deniedAt = null;
+    }
+
+    batch.update(cardDocRef, cardUpdates);
 
     await batch.commit();
 
-    // d. Log admin action
+    // d. Log action
     try {
       await adminDb.collection('admin_logs').add({
-        action: 'DENY_CARD_REPLACEMENT',
+        action: isSuperAdmin ? 'DENY_CARD_REPLACEMENT' : 'USER_CANCEL_CARD_REPLACEMENT',
         adminEmail: callerEmail,
         performedBy: user.token.name || callerEmail.split('@')[0],
         targetEmail: targetEmail,
         targetName: reqData.candidateName || null,
         targetRegNo: reqData.registrationNumber || null,
-        details: `Replacement request ${cleanRequestId} denied. Card reactivated with retry permission.`,
+        details: isSuperAdmin
+          ? `Replacement request ${cleanRequestId || 'N/A'} denied by admin. Card reactivated.`
+          : `Replacement request cancelled by requester. Card reactivated.`,
         timestamp: FieldValue.serverTimestamp(),
       });
     } catch (logErr) {
@@ -150,8 +190,10 @@ export async function POST(request: Request) {
 
     return NextResponse.json({
       success: true,
-      message: 'ID Card replacement request denied and cancelled. Card reactivated with retry notice.',
-      requestId: cleanRequestId,
+      message: isSuperAdmin
+        ? 'ID Card replacement request denied and cancelled. Card reactivated with retry notice.'
+        : 'Replacement request cancelled successfully. ID card reactivated.',
+      requestId: cleanRequestId || reqData.id || null,
       targetEmail,
     });
   } catch (err: any) {

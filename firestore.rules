@@ -135,10 +135,16 @@ service cloud.firestore {
     // ID Card Replacement Requests:
     // Queued requests readable by active members & admins for request tracking and admin queue.
     // Active members can submit requests; Admins can update fulfillment or delete requests.
+    // Requesters can also cancel/delete or update their own requests.
     match /id_card_requests/{requestId} {
       allow read: if isActiveMember();
       allow create: if isActiveMember();
-      allow update, delete: if isAdmin();
+      allow update, delete: if isAdmin() || (
+        isActiveMember() && (
+          resource.data.userEmail == request.auth.token.email ||
+          resource.data.email == request.auth.token.email
+        )
+      );
     }
 
     // =========================================================================
