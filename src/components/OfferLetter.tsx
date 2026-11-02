@@ -94,15 +94,15 @@ const OfferLetter: React.FC<OfferLetterProps> = ({ onPageChange }) => {
   const handleDownloadPdf = useCallback(async () => {
     if (!letterRef.current || !memberData) return;
     setIsGeneratingPdf(true);
-    
+
     try {
       const original = letterRef.current;
       const clone = original.cloneNode(true) as HTMLElement;
-      
+
       // 1. Create a dedicated A4 PDF rendering container
       const A4_W = 794;
       const A4_H = 1123;
-      
+
       clone.style.position = 'absolute';
       clone.style.top = '-9999px';
       clone.style.left = '-9999px';
@@ -114,7 +114,7 @@ const OfferLetter: React.FC<OfferLetterProps> = ({ onPageChange }) => {
       clone.style.overflow = 'hidden';
       clone.style.transform = 'none';
       clone.style.margin = '0';
-      
+
       // Remove box shadow / rounding for clean print
       clone.style.boxShadow = 'none';
       clone.style.borderRadius = '0';
@@ -127,7 +127,7 @@ const OfferLetter: React.FC<OfferLetterProps> = ({ onPageChange }) => {
       colorCanvas.width = 1;
       colorCanvas.height = 1;
       const ctx = colorCanvas.getContext('2d', { willReadFrequently: true });
-      
+
       const toRgba = (colorStr: string) => {
         if (!ctx) return colorStr;
         const lower = colorStr.toLowerCase();
@@ -150,25 +150,25 @@ const OfferLetter: React.FC<OfferLetterProps> = ({ onPageChange }) => {
 
       const origNodes = [original, ...Array.from(original.querySelectorAll('*'))] as HTMLElement[];
       const cloneNodes = [clone, ...Array.from(clone.querySelectorAll('*'))] as HTMLElement[];
-      
+
       const propsToSanitize = [
         'color', 'backgroundColor', 'borderColor',
         'borderTopColor', 'borderRightColor', 'borderBottomColor', 'borderLeftColor',
         'boxShadow', 'textShadow', 'outlineColor'
       ];
-      
+
       for (let i = 0; i < origNodes.length; i++) {
         const o = origNodes[i];
         const c = cloneNodes[i];
         const computed = window.getComputedStyle(o);
-        
+
         propsToSanitize.forEach(prop => {
           const val = computed[prop as any];
           if (val) {
             c.style[prop as any] = sanitizeComplexString(val);
           }
         });
-        
+
         c.style.transition = 'none';
         c.style.animation = 'none';
       }
@@ -195,7 +195,7 @@ const OfferLetter: React.FC<OfferLetterProps> = ({ onPageChange }) => {
         wrapper.style.transform = `scale(${scale})`;
         wrapper.style.transformOrigin = 'top center';
         wrapper.style.width = '100%';
-        
+
         while (clone.firstChild) {
           wrapper.appendChild(clone.firstChild);
         }
@@ -204,7 +204,7 @@ const OfferLetter: React.FC<OfferLetterProps> = ({ onPageChange }) => {
 
       // 5. Capture with html2canvas forcing desktop media queries
       const canvas = await html2canvas(clone, {
-        scale: 2, 
+        scale: 2,
         useCORS: true,
         backgroundColor: '#07020F',
         logging: false,
@@ -224,7 +224,7 @@ const OfferLetter: React.FC<OfferLetterProps> = ({ onPageChange }) => {
 
       const regNo = memberData.registrationNumber || 'MEMBER';
       pdf.save(`VRGC_Offer_Letter_${regNo.replace(/[^a-zA-Z0-9]/g, '_')}.pdf`);
-      
+
     } catch (err) {
       console.error('PDF generation failed:', err);
     } finally {
@@ -283,9 +283,9 @@ const OfferLetter: React.FC<OfferLetterProps> = ({ onPageChange }) => {
   const { registrationNumber, name } = memberData;
   const position = sanitizeClubPosition(origPosition) || sanitizeClubPosition(memberData.position) || 'Core Member';
   const team = origTeam || memberData.team;
-  
+
   const deptKey = normalizeDepartment(team);
-  
+
   if (!deptKey) {
     return (
       <div className="flex-1 flex items-center justify-center p-4">
@@ -310,7 +310,7 @@ const OfferLetter: React.FC<OfferLetterProps> = ({ onPageChange }) => {
 
   return (
     <div className="flex-1 p-4 sm:p-6 md:p-8 w-full mx-auto flex flex-col items-center">
-      
+
       {/* ── Page header (Not part of PDF) ────────────────────────────────── */}
       <div className="w-full max-w-4xl mb-6">
         <button
@@ -333,28 +333,54 @@ const OfferLetter: React.FC<OfferLetterProps> = ({ onPageChange }) => {
       </div>
 
       {/* ── Official Offer Letter Document ───────────────────────────────── */}
-      <div 
+      <div
         ref={letterRef}
         className="w-full bg-[#07020F] shadow-[0_0_50px_rgba(147,51,234,0.15)] rounded-sm overflow-hidden relative mx-auto"
-        style={{ 
+        style={{
           containerType: 'inline-size',
-          aspectRatio: '1 / 1.414', 
+          aspectRatio: '1 / 1.414',
           maxWidth: '800px',
           backgroundSize: '100% 100%',
-          backgroundImage: 'url("/offerLetters/offer-letter-background.jpeg")'
+          // New background (VRGC header centred). "?v=2" makes browsers fetch it instead of the old cached image.
+          backgroundImage: 'url("/offerLetters/offer-letter-background.jpeg?v=2")'
         }}
       >
-        {/* VIT Bhopal Logo Overlay */}
-        <div className="absolute top-[3.5%] right-[4.8%] w-[22%] pointer-events-none">
-          <Image unoptimized src="/offerLetters/vit-bhopal-logo.png" alt="VIT Bhopal Logo" width={300} height={100} className="w-full h-auto object-contain" />
+        {/* Header logos — symmetric pair above the centred VRGC wordmark.
+            Both share the same height (the VIT logo's original size: 22cqi wide ≈ 8.95cqi tall), top
+            offset and side margin (mirrored), and the same white-on-dark treatment. Heights are in
+            cqi so they scale with the letter. */}
+        {/* VIT Bhopal – Office of Students' Welfare Logo (top-left) */}
+        <div className="absolute top-[3.5%] left-[4.8%] pointer-events-none">
+          <Image
+            unoptimized
+            src="/offerLetters/osw-logo-white.png"
+            alt="Office of Students' Welfare, VIT Bhopal University"
+            width={984}
+            height={305}
+            style={{ height: '8.95cqi', width: 'auto' }}
+            className="object-contain block"
+          />
+        </div>
+
+        {/* VIT Bhopal Logo Overlay (top-right) — original size */}
+        <div className="absolute top-[3.5%] right-[4.8%] pointer-events-none">
+          <Image
+            unoptimized
+            src="/offerLetters/vit-bhopal-logo.png"
+            alt="VIT Bhopal Logo"
+            width={354}
+            height={144}
+            style={{ height: '8.95cqi', width: 'auto' }}
+            className="object-contain block"
+          />
         </div>
 
         {/* Document Content Container */}
-        <div className="absolute z-10 top-[25%] left-[26%] right-[9%] bottom-[8%] flex flex-col justify-between">
-          
+        <div className="absolute z-10 top-[26.5%] left-[26%] right-[9%] bottom-[8%] flex flex-col justify-between">
+
           {/* Body Content */}
           <div className="text-[#f8f9fa] leading-[1.6] font-medium tracking-wide" style={{ fontSize: '1.45cqi' }}>
-            
+
             <h3 className="font-black text-white mb-[3%] tracking-tight" style={{ fontSize: '2.4cqi' }}>
               CONGRATULATIONS!
             </h3>
@@ -384,12 +410,12 @@ const OfferLetter: React.FC<OfferLetterProps> = ({ onPageChange }) => {
             {/* Position Box */}
             <div className="inline-block border-l-[4px] border-purple-500 bg-purple-950/40 px-[4%] py-[2.5%] mb-[3%]">
               <p className="m-0" style={{ fontSize: '1.5cqi' }}>
-                <span className="text-slate-300 mr-2">Position:</span> 
+                <span className="text-slate-300 mr-2">Position:</span>
                 <span className="font-bold text-white">{position}</span>
               </p>
               <div className="h-1.5" />
               <p className="m-0" style={{ fontSize: '1.5cqi' }}>
-                <span className="text-slate-300 mr-2">Department:</span> 
+                <span className="text-slate-300 mr-2">Department:</span>
                 <span className="font-bold text-white">{template.displayName}</span>
               </p>
             </div>
@@ -435,7 +461,7 @@ const OfferLetter: React.FC<OfferLetterProps> = ({ onPageChange }) => {
               <p className="text-slate-400" style={{ fontSize: '0.95cqi' }}>Co-President, VRGC</p>
             </div>
           </div>
-          
+
         </div>
       </div>
 
