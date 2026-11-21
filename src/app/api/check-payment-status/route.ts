@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import Razorpay from 'razorpay';
-import { adminDb } from '@/lib/firebase-admin';
+import { adminDb, hasAdminCredentials } from '@/lib/firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
 import { authenticateRequest } from '@/lib/server/auth';
 import { SERVER_CONFIG } from '@/lib/server/config';
@@ -17,14 +17,16 @@ async function isAuthorizedAdmin(email: string | null): Promise<boolean> {
   }
 
   // 2. Firestore: admins and super_admins collections (managed by Super Admin Console)
-  try {
-    const adminDoc = await adminDb.collection('admins').doc(normalized).get();
-    if (adminDoc.exists) return true;
+  if (hasAdminCredentials()) {
+    try {
+      const adminDoc = await adminDb.collection('admins').doc(normalized).get();
+      if (adminDoc.exists) return true;
 
-    const superDoc = await adminDb.collection('super_admins').doc(normalized).get();
-    if (superDoc.exists) return true;
-  } catch (err) {
-    console.warn('Admin authorization check notice:', err);
+      const superDoc = await adminDb.collection('super_admins').doc(normalized).get();
+      if (superDoc.exists) return true;
+    } catch (err) {
+      console.warn('Admin authorization check notice:', err);
+    }
   }
 
   return false;

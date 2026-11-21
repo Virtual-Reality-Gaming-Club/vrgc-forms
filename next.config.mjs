@@ -1,11 +1,11 @@
 const contentSecurityPolicy = `
   default-src 'self';
-  script-src 'self' 'unsafe-inline' 'unsafe-eval' https://checkout.razorpay.com https://apis.google.com;
+  script-src 'self' 'unsafe-inline' 'unsafe-eval' https://checkout.razorpay.com https://*.razorpay.com https://apis.google.com;
   style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
   font-src 'self' https://fonts.gstatic.com data:;
-  img-src 'self' data: blob: https://*.supabase.co https://api.dicebear.com https://api.qrserver.com https://*.googleusercontent.com https://ui-avatars.com https://www.gravatar.com https://*.giphy.com https://media.giphy.com https://checkout.razorpay.com;
-  connect-src 'self' https://*.firebaseio.com wss://*.firebaseio.com https://firestore.googleapis.com https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://*.googleapis.com https://*.firebaseapp.com https://*.supabase.co https://api.razorpay.com https://lumberjack.razorpay.com https://api.dicebear.com https://api.qrserver.com;
-  frame-src 'self' https://checkout.razorpay.com https://api.razorpay.com https://*.firebaseapp.com https://accounts.google.com;
+  img-src 'self' data: blob: https://*.supabase.co https://api.dicebear.com https://api.qrserver.com https://*.googleusercontent.com https://ui-avatars.com https://www.gravatar.com https://*.giphy.com https://media.giphy.com https://checkout.razorpay.com https://*.razorpay.com;
+  connect-src 'self' https://*.firebaseio.com wss://*.firebaseio.com https://firestore.googleapis.com https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://*.googleapis.com https://*.firebaseapp.com https://*.supabase.co https://api.razorpay.com https://*.razorpay.com https://lumberjack.razorpay.com https://lumberjack-cx.razorpay.com https://api.dicebear.com https://api.qrserver.com;
+  frame-src 'self' https://checkout.razorpay.com https://api.razorpay.com https://*.razorpay.com https://*.firebaseapp.com https://accounts.google.com https:;
   media-src 'self' https://*.supabase.co;
   worker-src 'self' blob:;
   object-src 'none';
@@ -35,7 +35,8 @@ const nextConfig = {
     FIREBASE_MESSAGING_SENDER_ID: process.env.FIREBASE_MESSAGING_SENDER_ID,
     FIREBASE_APP_ID: process.env.FIREBASE_APP_ID,
     FIREBASE_MEASUREMENT_ID: process.env.FIREBASE_MEASUREMENT_ID,
-    RAZORPAY_KEY_ID: process.env.RAZORPAY_KEY_ID,
+    RAZORPAY_KEY_ID: process.env.RAZORPAY_KEY_ID || process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID,
+    NEXT_PUBLIC_RAZORPAY_KEY_ID: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || process.env.RAZORPAY_KEY_ID,
   },
 
   images: {
