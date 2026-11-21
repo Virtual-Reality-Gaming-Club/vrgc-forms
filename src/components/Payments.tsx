@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { PaymentItem, PaymentStatus } from '@/types/payment';
 import {
@@ -67,6 +67,7 @@ import {
   ArrowUpRight,
   Pencil,
   Lock,
+  Upload,
 } from 'lucide-react';
 
 interface PaymentsProps {
@@ -85,6 +86,88 @@ interface MemberOption {
   regNo: string;
   email: string;
   team: string;
+}
+
+export interface BulkParseResult {
+  matchedEmails: string[];
+  unmatchedTokens: string[];
+  matchedMembers: MemberOption[];
+  totalParsedCount: number;
+}
+
+export function parseBulkMemberIdentifiers(
+  inputText: string,
+  membersList: MemberOption[],
+  membersMap: Map<string, MemberOption>
+): BulkParseResult {
+  if (!inputText || !inputText.trim()) {
+    return { matchedEmails: [], unmatchedTokens: [], matchedMembers: [], totalParsedCount: 0 };
+  }
+
+  const regNoToMember = new Map<string, MemberOption>();
+  membersList.forEach((m) => {
+    if (m.regNo) {
+      regNoToMember.set(m.regNo.toUpperCase().trim(), m);
+    }
+  });
+
+  const matchedEmailsSet = new Set<string>();
+  const matchedMembersSet = new Map<string, MemberOption>();
+  const unmatchedSet = new Set<string>();
+
+  const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
+  const emailsFound: string[] = Array.from(inputText.match(emailRegex) || []);
+
+  const regRegex = /\b\d{2}[A-Za-z]{2,5}\d{4,5}\b/g;
+  const regNosFound: string[] = Array.from(inputText.match(regRegex) || []);
+
+  for (const email of emailsFound) {
+    const cleanEmail = email.toLowerCase().trim();
+    const foundMember = membersMap.get(cleanEmail);
+    if (foundMember) {
+      matchedEmailsSet.add(foundMember.email.toLowerCase());
+      matchedMembersSet.set(foundMember.email.toLowerCase(), foundMember);
+    } else {
+      unmatchedSet.add(cleanEmail);
+    }
+  }
+
+  for (const reg of regNosFound) {
+    const cleanReg = reg.toUpperCase().trim();
+    const foundMember = regNoToMember.get(cleanReg);
+    if (foundMember) {
+      matchedEmailsSet.add(foundMember.email.toLowerCase());
+      matchedMembersSet.set(foundMember.email.toLowerCase(), foundMember);
+    } else {
+      const isPartOfEmail = emailsFound.some((e) => e.toUpperCase().includes(cleanReg));
+      if (!isPartOfEmail) {
+        unmatchedSet.add(cleanReg);
+      }
+    }
+  }
+
+  const rawTokens = inputText
+    .split(/[\r\n,;\t]+/)
+    .map((t) => t.trim().replace(/^["']|["']$/g, ''))
+    .filter((t) => t.length > 0);
+
+  for (const token of rawTokens) {
+    const lowerToken = token.toLowerCase();
+    const upperToken = token.toUpperCase();
+    if (membersMap.has(lowerToken) || regNoToMember.has(upperToken)) {
+      continue;
+    }
+    if (token.includes('@') && !unmatchedSet.has(lowerToken)) {
+      unmatchedSet.add(lowerToken);
+    }
+  }
+
+  return {
+    matchedEmails: Array.from(matchedEmailsSet),
+    unmatchedTokens: Array.from(unmatchedSet),
+    matchedMembers: Array.from(matchedMembersSet.values()),
+    totalParsedCount: matchedEmailsSet.size + unmatchedSet.size,
+  };
 }
 
 interface CampaignGroup {
@@ -284,6 +367,11 @@ const Payments: React.FC<PaymentsProps> = ({
   const [selectedMultiMemberEmails, setSelectedMultiMemberEmails] = useState<string[]>([]);
   const [multiSearch, setMultiSearch] = useState<string>('');
   const [assigningMulti, setAssigningMulti] = useState<boolean>(false);
+  const [multiAssignMode, setMultiAssignMode] = useState<'picker' | 'bulk'>('picker');
+  const [multiBulkInput, setMultiBulkInput] = useState<string>('');
+  const [multiBulkFileName, setMultiBulkFileName] = useState<string | null>(null);
+  const [multiIncludeUnmatched, setMultiIncludeUnmatched] = useState<boolean>(false);
+  const multiFileInputRef = useRef<HTMLInputElement | null>(null);
 
   // Edit Campaign (Batch Invoice) Modal State
   const [editCampaignGroup, setEditCampaignGroup] = useState<CampaignGroup | null>(null);
@@ -300,6 +388,20 @@ const Payments: React.FC<PaymentsProps> = ({
   const [selectedAddMemberEmails, setSelectedAddMemberEmails] = useState<string[]>([]);
   const [addingMembers, setAddingMembers] = useState<boolean>(false);
   const [showRosterAddMembersModal, setShowRosterAddMembersModal] = useState<boolean>(false);
+  const [addMembersMode, setAddMembersMode] = useState<'picker' | 'bulk'>('picker');
+  const [addMembersBulkInput, setAddMembersBulkInput] = useState<string>('');
+  const [addMembersBulkFileName, setAddMembersBulkFileName] = useState<string | null>(null);
+  const [addMembersIncludeUnmatched, setAddMembersIncludeUnmatched] = useState<boolean>(false);
+  const addMembersFileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Parsed bulk inputs
+  const multiBulkParsed = useMemo(() => {
+    return parseBulkMemberIdentifiers(multiBulkInput, membersList, membersMap);
+  }, [multiBulkInput, membersList, membersMap]);
+
+  const addMembersBulkParsed = useMemo(() => {
+    return parseBulkMemberIdentifiers(addMembersBulkInput, membersList, membersMap);
+  }, [addMembersBulkInput, membersList, membersMap]);
 
   // Helper to recompute campaign metrics
   const recalculateCampaignGroup = (group: CampaignGroup, newItems: PaymentItem[]): CampaignGroup => {
@@ -451,6 +553,7 @@ const Payments: React.FC<PaymentsProps> = ({
     const loadMembers = async () => {
       try {
         const fetchedMembersMap = new Map<string, MemberOption>();
+        const knownRegNos = new Set<string>();
 
         // 1. Fetch from 'members' bucket collection
         try {
@@ -459,13 +562,17 @@ const Payments: React.FC<PaymentsProps> = ({
           membersSnap.forEach((docSnap) => {
             const data = docSnap.data();
             const email = (data.email || data.Email || docSnap.id || '').toLowerCase().trim();
+            const regNo = (data.registrationNumber || data['Registration Number'] || data.regNo || '').trim();
             if (email && email.includes('@')) {
               fetchedMembersMap.set(email, {
                 name: data.name || data.Name || data.fullName || 'Member',
-                regNo: data.registrationNumber || data['Registration Number'] || data.regNo || '',
+                regNo: regNo,
                 email: email,
                 team: data.team || data.Team || data.domain || 'VRGC Crew',
               });
+              if (regNo) {
+                knownRegNos.add(regNo.toUpperCase());
+              }
             }
           });
         } catch (mErr) {
@@ -479,13 +586,19 @@ const Payments: React.FC<PaymentsProps> = ({
           idCardsSnap.forEach((docSnap) => {
             const data = docSnap.data();
             const email = (data.email || data.Email || docSnap.id || '').toLowerCase().trim();
-            if (email && email.includes('@') && !fetchedMembersMap.has(email)) {
+            const regNo = (data.regNo || data.registrationNumber || data['Registration Number'] || '').trim();
+            const regUpper = regNo.toUpperCase();
+            // Avoid adding phantom duplicates if either email is already known or regNo matches an existing member
+            if (email && email.includes('@') && !fetchedMembersMap.has(email) && (!regUpper || !knownRegNos.has(regUpper))) {
               fetchedMembersMap.set(email, {
                 name: data.fullName || data.name || data.Name || 'Member',
-                regNo: data.regNo || data.registrationNumber || data['Registration Number'] || '',
+                regNo: regNo,
                 email: email,
                 team: data.team || data.Team || data.domain || 'VRGC Crew',
               });
+              if (regUpper) {
+                knownRegNos.add(regUpper);
+              }
             }
           });
         } catch (idErr) {
@@ -2698,52 +2811,229 @@ const Payments: React.FC<PaymentsProps> = ({
               </p>
             </div>
 
-            {/* Selection controls & search */}
+            {/* Selection controls & mode switcher */}
             <div className="space-y-2">
               <div className="flex items-center justify-between text-xs">
                 <span className="text-slate-300 font-bold">
                   Select Members ({selectedAddMemberEmails.length} selected)
                 </span>
                 <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const existingSet = new Set(activeRosterCampaign.items.map((i) => (i.user_email || '').toLowerCase()));
-                      const filteredEmails = membersList
-                        .filter((m) => {
-                          if (existingSet.has(m.email.toLowerCase())) return false;
-                          if (!addMembersSearch.trim()) return true;
-                          const q = addMembersSearch.toLowerCase();
-                          return m.name.toLowerCase().includes(q) || m.regNo.toLowerCase().includes(q) || m.email.toLowerCase().includes(q) || m.team.toLowerCase().includes(q);
-                        })
-                        .map((m) => m.email);
-                      setSelectedAddMemberEmails(Array.from(new Set([...selectedAddMemberEmails, ...filteredEmails])));
-                    }}
-                    className="text-[10px] text-purple-400 hover:text-purple-300 underline font-semibold cursor-pointer"
-                  >
-                    Select All Filtered
-                  </button>
-                  <span className="text-slate-600">|</span>
-                  <button
-                    type="button"
-                    onClick={() => setSelectedAddMemberEmails([])}
-                    className="text-[10px] text-rose-400 hover:text-rose-300 underline font-semibold cursor-pointer"
-                  >
-                    Deselect All
-                  </button>
+                  {selectedAddMemberEmails.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setSelectedAddMemberEmails([])}
+                      className="text-[10px] text-rose-400 hover:text-rose-300 underline font-semibold cursor-pointer"
+                    >
+                      Deselect All
+                    </button>
+                  )}
                 </div>
               </div>
 
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
-                <input
-                  type="text"
-                  placeholder="Search available members by name, regNo, team..."
-                  value={addMembersSearch}
-                  onChange={(e) => setAddMembersSearch(e.target.value)}
-                  className="w-full pl-9 pr-3 py-2 rounded-xl bg-black/50 border border-white/10 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-purple-500"
-                />
+              {/* Sub-tabs: Directory Picker vs Bulk Feeder */}
+              <div className="grid grid-cols-2 p-1 rounded-xl bg-black/40 border border-white/10 gap-1 text-xs">
+                <button
+                  type="button"
+                  onClick={() => setAddMembersMode('picker')}
+                  className={`py-1.5 px-3 rounded-lg font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                    addMembersMode === 'picker'
+                      ? 'bg-purple-600 text-white shadow-md'
+                      : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
+                  }`}
+                >
+                  <Search className="w-3.5 h-3.5" />
+                  Directory Picker
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAddMembersMode('bulk')}
+                  className={`py-1.5 px-3 rounded-lg font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                    addMembersMode === 'bulk'
+                      ? 'bg-purple-600 text-white shadow-md'
+                      : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
+                  }`}
+                >
+                  <FileSpreadsheet className="w-3.5 h-3.5" />
+                  Bulk Feeder (Paste / CSV)
+                </button>
               </div>
+
+              {addMembersMode === 'picker' ? (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-[11px] text-slate-400">Search available crew members:</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const existingSet = new Set(activeRosterCampaign.items.map((i) => (i.user_email || '').toLowerCase()));
+                        const filteredEmails = membersList
+                          .filter((m) => {
+                            if (existingSet.has(m.email.toLowerCase())) return false;
+                            if (!addMembersSearch.trim()) return true;
+                            const q = addMembersSearch.toLowerCase();
+                            return m.name.toLowerCase().includes(q) || m.regNo.toLowerCase().includes(q) || m.email.toLowerCase().includes(q) || m.team.toLowerCase().includes(q);
+                          })
+                          .map((m) => m.email);
+                        setSelectedAddMemberEmails(Array.from(new Set([...selectedAddMemberEmails, ...filteredEmails])));
+                      }}
+                      className="text-[10px] text-purple-400 hover:text-purple-300 underline font-semibold cursor-pointer"
+                    >
+                      Select All Filtered
+                    </button>
+                  </div>
+
+                  <div className="relative">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
+                    <input
+                      type="text"
+                      placeholder="Search available members by name, regNo, team..."
+                      value={addMembersSearch}
+                      onChange={(e) => setAddMembersSearch(e.target.value)}
+                      className="w-full pl-9 pr-3 py-2 rounded-xl bg-black/50 border border-white/10 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-purple-500"
+                    />
+                  </div>
+                </div>
+              ) : (
+                /* Bulk Feeder Mode for Add Members */
+                <div className="space-y-3 p-3 rounded-2xl bg-black/40 border border-purple-500/30">
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between text-[11px]">
+                      <span className="text-slate-300 font-semibold flex items-center gap-1.5">
+                        <Upload className="w-3.5 h-3.5 text-purple-400" />
+                        <span>Attach CSV or Text File</span>
+                      </span>
+                      {addMembersBulkFileName && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setAddMembersBulkFileName(null);
+                            setAddMembersBulkInput('');
+                            if (addMembersFileInputRef.current) addMembersFileInputRef.current.value = '';
+                          }}
+                          className="text-[10px] text-rose-400 hover:text-rose-300 underline cursor-pointer"
+                        >
+                          Remove File
+                        </button>
+                      )}
+                    </div>
+                    <label className="flex items-center justify-center gap-2 p-3 rounded-xl border border-dashed border-purple-500/40 hover:border-purple-400 bg-purple-500/5 hover:bg-purple-500/10 cursor-pointer transition-all text-xs text-purple-300 font-medium">
+                      <input
+                        type="file"
+                        ref={addMembersFileInputRef}
+                        accept=".csv,.txt"
+                        className="hidden"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) {
+                            setAddMembersBulkFileName(file.name);
+                            const reader = new FileReader();
+                            reader.onload = (event) => {
+                              const text = event.target?.result as string;
+                              if (text) setAddMembersBulkInput(text);
+                            };
+                            reader.readAsText(file);
+                          }
+                        }}
+                      />
+                      <FileSpreadsheet className="w-4 h-4 text-purple-400 flex-shrink-0" />
+                      {addMembersBulkFileName ? (
+                        <span className="font-bold text-white truncate max-w-[260px]">{addMembersBulkFileName}</span>
+                      ) : (
+                        <span>Click to attach CSV (e.g. <code>unpaid_members.csv</code>)</span>
+                      )}
+                    </label>
+                  </div>
+
+                  <div className="space-y-1">
+                    <div className="flex items-center justify-between text-[11px]">
+                      <span className="text-slate-300 font-semibold">Or Paste Emails / Reg Numbers:</span>
+                      <span className="text-[10px] text-slate-500">Comma, newline or space separated</span>
+                    </div>
+                    <textarea
+                      rows={3}
+                      placeholder="e.g.&#10;lokesh.23bcg10015@vitbhopal.ac.in&#10;24BAC10038, 24BAI10199"
+                      value={addMembersBulkInput}
+                      onChange={(e) => setAddMembersBulkInput(e.target.value)}
+                      className="w-full px-3 py-2 rounded-xl bg-surface-container-lowest border border-white/10 text-white placeholder-slate-500 focus:outline-none focus:border-purple-500 font-mono text-xs resize-none"
+                    />
+                  </div>
+
+                  {addMembersBulkInput.trim().length > 0 && (() => {
+                    const existingSet = new Set(activeRosterCampaign.items.map((i) => (i.user_email || '').toLowerCase()));
+                    const eligibleEmails = addMembersBulkParsed.matchedEmails.filter((e) => !existingSet.has(e.toLowerCase()));
+                    const alreadyIssuedCount = addMembersBulkParsed.matchedEmails.length - eligibleEmails.length;
+
+                    return (
+                      <div className="p-2.5 rounded-xl bg-[#140b2b] border border-purple-500/40 space-y-2 text-xs">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-1.5 text-emerald-400 font-bold text-xs">
+                            <CheckCircle2 className="w-4 h-4" />
+                            <span>{eligibleEmails.length} Eligible to Add</span>
+                          </div>
+                          {alreadyIssuedCount > 0 && (
+                            <span className="text-[10px] text-slate-400 font-semibold">
+                              ({alreadyIssuedCount} already have this invoice)
+                            </span>
+                          )}
+                        </div>
+
+                        {addMembersBulkParsed.unmatchedTokens.length > 0 && (
+                          <div className="space-y-1 pt-1 border-t border-white/10 text-[10px]">
+                            <span className="text-amber-400 font-semibold">
+                              ⚠️ {addMembersBulkParsed.unmatchedTokens.length} unrecognized in roster:
+                            </span>
+                            <div className="flex flex-wrap gap-1 max-h-12 overflow-y-auto no-scrollbar">
+                              {addMembersBulkParsed.unmatchedTokens.slice(0, 6).map((tok, i) => (
+                                <span key={i} className="px-1.5 py-0.5 rounded text-[9px] bg-amber-500/10 text-amber-300 border border-amber-500/20 font-mono">
+                                  {tok}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        <div className="flex gap-2 pt-1">
+                          <button
+                            type="button"
+                            disabled={eligibleEmails.length === 0}
+                            onClick={() => {
+                              setSelectedAddMemberEmails((prev) => Array.from(new Set([...prev, ...eligibleEmails])));
+                              showToast(`Added ${eligibleEmails.length} member(s) to selection!`, 'success');
+                            }}
+                            className="flex-1 py-1.5 px-3 rounded-lg bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs transition-all disabled:opacity-40 cursor-pointer flex items-center justify-center gap-1.5"
+                          >
+                            <PlusCircle className="w-3.5 h-3.5" />
+                            <span>Add to Selected ({eligibleEmails.length})</span>
+                          </button>
+                          <button
+                            type="button"
+                            disabled={eligibleEmails.length === 0}
+                            onClick={() => {
+                              setSelectedAddMemberEmails(Array.from(new Set(eligibleEmails)));
+                              showToast(`Selection replaced with ${eligibleEmails.length} member(s)!`, 'success');
+                            }}
+                            className="flex-1 py-1.5 px-3 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs transition-all disabled:opacity-40 cursor-pointer flex items-center justify-center gap-1.5"
+                          >
+                            <Check className="w-3.5 h-3.5" />
+                            <span>Replace Selection</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setAddMembersBulkInput('');
+                              setAddMembersBulkFileName(null);
+                              if (addMembersFileInputRef.current) addMembersFileInputRef.current.value = '';
+                            }}
+                            className="py-1.5 px-2.5 rounded-lg bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white text-xs font-semibold cursor-pointer"
+                          >
+                            Clear
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </div>
+              )}
             </div>
 
             {/* Unassigned members scroll list */}
@@ -3587,96 +3877,300 @@ const Payments: React.FC<PaymentsProps> = ({
                 />
               </div>
 
-              {/* Specific Member Selection List */}
-              <div className="space-y-2 pt-1 border-t border-white/10">
+              {/* Specific Member Selection Section */}
+              <div className="space-y-3 pt-2 border-t border-white/10">
                 <div className="flex items-center justify-between">
                   <label className="block text-slate-200 font-bold">
-                    Select Specific Persons ({selectedMultiMemberEmails.length} selected)
+                    Select Specific Persons
                   </label>
                   <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const filteredEmails = membersList
-                          .filter((m) => {
-                            if (!multiSearch.trim()) return true;
-                            const q = multiSearch.toLowerCase();
-                            return m.name.toLowerCase().includes(q) || m.regNo.toLowerCase().includes(q) || m.email.toLowerCase().includes(q) || m.team.toLowerCase().includes(q);
-                          })
-                          .map((m) => m.email);
-                        setSelectedMultiMemberEmails(Array.from(new Set([...selectedMultiMemberEmails, ...filteredEmails])));
-                      }}
-                      className="text-[10px] text-indigo-400 hover:text-indigo-300 underline font-semibold"
-                    >
-                      Select All Filtered
-                    </button>
-                    <span className="text-slate-600">|</span>
-                    <button
-                      type="button"
-                      onClick={() => setSelectedMultiMemberEmails([])}
-                      className="text-[10px] text-rose-400 hover:text-rose-300 underline font-semibold"
-                    >
-                      Deselect All
-                    </button>
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+                      {selectedMultiMemberEmails.length} selected
+                    </span>
+                    {selectedMultiMemberEmails.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setSelectedMultiMemberEmails([])}
+                        className="text-[10px] text-rose-400 hover:text-rose-300 underline font-semibold cursor-pointer"
+                      >
+                        Clear All
+                      </button>
+                    )}
                   </div>
                 </div>
 
-                {/* Filter Search inside modal */}
-                <div className="relative">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
-                  <input
-                    type="text"
-                    placeholder="Search crew members by name, regNo, team..."
-                    value={multiSearch}
-                    onChange={(e) => setMultiSearch(e.target.value)}
-                    className="w-full pl-9 pr-3 py-1.5 rounded-lg bg-[#0a0315] border border-white/10 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
-                  />
+                {/* Sub-tabs: Directory Picker vs Bulk Feeder */}
+                <div className="grid grid-cols-2 p-1 rounded-xl bg-black/40 border border-white/10 gap-1 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => setMultiAssignMode('picker')}
+                    className={`py-1.5 px-3 rounded-lg font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                      multiAssignMode === 'picker'
+                        ? 'bg-indigo-600 text-white shadow-md'
+                        : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
+                    }`}
+                  >
+                    <Search className="w-3.5 h-3.5" />
+                    Directory Picker
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setMultiAssignMode('bulk')}
+                    className={`py-1.5 px-3 rounded-lg font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                      multiAssignMode === 'bulk'
+                        ? 'bg-indigo-600 text-white shadow-md'
+                        : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
+                    }`}
+                  >
+                    <FileSpreadsheet className="w-3.5 h-3.5" />
+                    Bulk Feeder (Paste / CSV)
+                  </button>
                 </div>
 
-                {/* Scrollable Members Checkbox List */}
-                <div className="max-h-48 overflow-y-auto custom-scrollbar border border-white/10 rounded-xl bg-black/40 p-2 space-y-1">
-                  {membersList
-                    .filter((m) => {
-                      if (!multiSearch.trim()) return true;
-                      const q = multiSearch.toLowerCase();
-                      return m.name.toLowerCase().includes(q) || m.regNo.toLowerCase().includes(q) || m.email.toLowerCase().includes(q) || m.team.toLowerCase().includes(q);
-                    })
-                    .map((m) => {
-                      const isSelected = selectedMultiMemberEmails.includes(m.email);
-                      return (
-                        <div
-                          key={m.email}
-                          onClick={() => {
-                            if (isSelected) {
-                              setSelectedMultiMemberEmails((prev) => prev.filter((e) => e !== m.email));
-                            } else {
-                              setSelectedMultiMemberEmails((prev) => [...prev, m.email]);
+                {multiAssignMode === 'picker' ? (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-[11px] text-slate-400">Search directory by name, regNo, team:</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const filteredEmails = membersList
+                            .filter((m) => {
+                              if (!multiSearch.trim()) return true;
+                              const q = multiSearch.toLowerCase();
+                              return m.name.toLowerCase().includes(q) || m.regNo.toLowerCase().includes(q) || m.email.toLowerCase().includes(q) || m.team.toLowerCase().includes(q);
+                            })
+                            .map((m) => m.email);
+                          setSelectedMultiMemberEmails(Array.from(new Set([...selectedMultiMemberEmails, ...filteredEmails])));
+                        }}
+                        className="text-[10px] text-indigo-400 hover:text-indigo-300 underline font-semibold cursor-pointer"
+                      >
+                        Select All Filtered
+                      </button>
+                    </div>
+
+                    {/* Filter Search inside modal */}
+                    <div className="relative">
+                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
+                      <input
+                        type="text"
+                        placeholder="Search crew members by name, regNo, team..."
+                        value={multiSearch}
+                        onChange={(e) => setMultiSearch(e.target.value)}
+                        className="w-full pl-9 pr-3 py-1.5 rounded-lg bg-[#0a0315] border border-white/10 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
+                      />
+                    </div>
+
+                    {/* Scrollable Members Checkbox List */}
+                    <div className="max-h-48 overflow-y-auto custom-scrollbar border border-white/10 rounded-xl bg-black/40 p-2 space-y-1">
+                      {membersList
+                        .filter((m) => {
+                          if (!multiSearch.trim()) return true;
+                          const q = multiSearch.toLowerCase();
+                          return m.name.toLowerCase().includes(q) || m.regNo.toLowerCase().includes(q) || m.email.toLowerCase().includes(q) || m.team.toLowerCase().includes(q);
+                        })
+                        .map((m) => {
+                          const isSelected = selectedMultiMemberEmails.includes(m.email);
+                          return (
+                            <div
+                              key={m.email}
+                              onClick={() => {
+                                if (isSelected) {
+                                  setSelectedMultiMemberEmails((prev) => prev.filter((e) => e !== m.email));
+                                } else {
+                                  setSelectedMultiMemberEmails((prev) => [...prev, m.email]);
+                                }
+                              }}
+                              className={`flex items-center justify-between p-2 rounded-lg cursor-pointer transition-all ${
+                                isSelected
+                                  ? 'bg-indigo-600/20 border border-indigo-500/40 text-white'
+                                  : 'hover:bg-white/5 border border-transparent text-slate-300'
+                              }`}
+                            >
+                              <div className="flex items-center gap-2.5 min-w-0">
+                                <input
+                                  type="checkbox"
+                                  checked={isSelected}
+                                  onChange={() => { }}
+                                  className="w-4 h-4 rounded accent-indigo-500 cursor-pointer"
+                                />
+                                <div className="min-w-0 text-left">
+                                  <div className="font-bold text-xs truncate text-white">{m.name} <span className="text-[10px] text-indigo-300 font-normal">({m.regNo})</span></div>
+                                  <div className="text-[10px] text-slate-400 truncate">{m.email}</div>
+                                </div>
+                              </div>
+                              <span className="text-[9px] font-bold px-2 py-0.5 rounded bg-white/5 text-purple-300 border border-white/10 shrink-0">
+                                {m.team || 'Member'}
+                              </span>
+                            </div>
+                          );
+                        })}
+                    </div>
+                  </div>
+                ) : (
+                  /* Bulk Feeder Mode */
+                  <div className="space-y-3 p-3 rounded-2xl bg-black/40 border border-indigo-500/30">
+                    {/* CSV / File Attachment */}
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between text-[11px]">
+                        <span className="text-slate-300 font-semibold flex items-center gap-1.5">
+                          <Upload className="w-3.5 h-3.5 text-indigo-400" />
+                          <span>Attach CSV / Text File</span>
+                        </span>
+                        {multiBulkFileName && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setMultiBulkFileName(null);
+                              setMultiBulkInput('');
+                              if (multiFileInputRef.current) multiFileInputRef.current.value = '';
+                            }}
+                            className="text-[10px] text-rose-400 hover:text-rose-300 underline cursor-pointer"
+                          >
+                            Remove File
+                          </button>
+                        )}
+                      </div>
+                      <label className="flex items-center justify-center gap-2 p-3 rounded-xl border border-dashed border-indigo-500/40 hover:border-indigo-400 bg-indigo-500/5 hover:bg-indigo-500/10 cursor-pointer transition-all text-xs text-indigo-300 font-medium">
+                        <input
+                          type="file"
+                          ref={multiFileInputRef}
+                          accept=".csv,.txt"
+                          className="hidden"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (file) {
+                              setMultiBulkFileName(file.name);
+                              const reader = new FileReader();
+                              reader.onload = (event) => {
+                                const text = event.target?.result as string;
+                                if (text) setMultiBulkInput(text);
+                              };
+                              reader.readAsText(file);
                             }
                           }}
-                          className={`flex items-center justify-between p-2 rounded-lg cursor-pointer transition-all ${isSelected
-                              ? 'bg-indigo-600/20 border border-indigo-500/40 text-white'
-                              : 'hover:bg-white/5 border border-transparent text-slate-300'
-                            }`}
-                        >
-                          <div className="flex items-center gap-2.5 min-w-0">
-                            <input
-                              type="checkbox"
-                              checked={isSelected}
-                              onChange={() => { }}
-                              className="w-4 h-4 rounded accent-indigo-500 cursor-pointer"
-                            />
-                            <div className="min-w-0 text-left">
-                              <div className="font-bold text-xs truncate text-white">{m.name} <span className="text-[10px] text-indigo-300 font-normal">({m.regNo})</span></div>
-                              <div className="text-[10px] text-slate-400 truncate">{m.email}</div>
+                        />
+                        <FileSpreadsheet className="w-4 h-4 text-indigo-400 flex-shrink-0" />
+                        {multiBulkFileName ? (
+                          <span className="font-bold text-white truncate max-w-[260px]">{multiBulkFileName}</span>
+                        ) : (
+                          <span>Click to attach CSV (e.g. <code>unpaid_members.csv</code>)</span>
+                        )}
+                      </label>
+                    </div>
+
+                    {/* Or Paste Raw Text */}
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between text-[11px]">
+                        <span className="text-slate-300 font-semibold">Or Paste Email IDs / Reg Numbers:</span>
+                        <span className="text-[10px] text-slate-500">Comma, newline or space separated</span>
+                      </div>
+                      <textarea
+                        rows={3}
+                        placeholder="e.g.&#10;lokesh.23bcg10015@vitbhopal.ac.in&#10;24BAC10038, 24BAI10199"
+                        value={multiBulkInput}
+                        onChange={(e) => setMultiBulkInput(e.target.value)}
+                        className="w-full px-3 py-2 rounded-xl bg-surface-container-lowest border border-white/10 text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 font-mono text-xs resize-none"
+                      />
+                    </div>
+
+                    {/* Live Match Engine Preview */}
+                    {multiBulkInput.trim().length > 0 && (
+                      <div className="p-2.5 rounded-xl bg-[#140b2b] border border-indigo-500/40 space-y-2 text-xs">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-1.5 text-emerald-400 font-bold text-xs">
+                            <CheckCircle2 className="w-4 h-4" />
+                            <span>{multiBulkParsed.matchedEmails.length} Roster Member{multiBulkParsed.matchedEmails.length !== 1 ? 's' : ''} Recognized</span>
+                          </div>
+                          {multiBulkParsed.unmatchedTokens.length > 0 && (
+                            <div className="flex items-center gap-1 text-amber-400 text-[11px] font-semibold">
+                              <AlertCircle className="w-3.5 h-3.5" />
+                              <span>{multiBulkParsed.unmatchedTokens.length} Unmatched</span>
+                            </div>
+                          )}
+                        </div>
+
+                        {multiBulkParsed.unmatchedTokens.length > 0 && (
+                          <div className="space-y-1.5 pt-1.5 border-t border-white/10">
+                            <div className="text-[10px] text-slate-400 flex items-center justify-between">
+                              <span>Unrecognized in roster:</span>
+                              {multiBulkParsed.unmatchedTokens.some((t) => t.includes('@')) && (
+                                <label className="flex items-center gap-1 cursor-pointer text-indigo-300 hover:text-white">
+                                  <input
+                                    type="checkbox"
+                                    checked={multiIncludeUnmatched}
+                                    onChange={(e) => setMultiIncludeUnmatched(e.target.checked)}
+                                    className="w-3 h-3 rounded accent-indigo-500 cursor-pointer"
+                                  />
+                                  <span>Include {multiBulkParsed.unmatchedTokens.filter((t) => t.includes('@')).length} unlisted email(s)</span>
+                                </label>
+                              )}
+                            </div>
+                            <div className="flex flex-wrap gap-1 max-h-16 overflow-y-auto no-scrollbar">
+                              {multiBulkParsed.unmatchedTokens.slice(0, 8).map((tok, i) => (
+                                <span key={i} className="px-1.5 py-0.5 rounded text-[9px] bg-amber-500/10 text-amber-300 border border-amber-500/20 font-mono">
+                                  {tok}
+                                </span>
+                              ))}
+                              {multiBulkParsed.unmatchedTokens.length > 8 && (
+                                <span className="text-[9px] text-slate-400 self-center">
+                                  +{multiBulkParsed.unmatchedTokens.length - 8} more
+                                </span>
+                              )}
                             </div>
                           </div>
-                          <span className="text-[9px] font-bold px-2 py-0.5 rounded bg-white/5 text-purple-300 border border-white/10 shrink-0">
-                            {m.team || 'Member'}
-                          </span>
+                        )}
+
+                        {/* Action buttons */}
+                        <div className="flex gap-2 pt-1">
+                          <button
+                            type="button"
+                            disabled={multiBulkParsed.matchedEmails.length === 0 && (!multiIncludeUnmatched || multiBulkParsed.unmatchedTokens.filter((t) => t.includes('@')).length === 0)}
+                            onClick={() => {
+                              const toAdd = [...multiBulkParsed.matchedEmails];
+                              if (multiIncludeUnmatched) {
+                                toAdd.push(...multiBulkParsed.unmatchedTokens.filter((t) => t.includes('@')));
+                              }
+                              setSelectedMultiMemberEmails((prev) => Array.from(new Set([...prev, ...toAdd])));
+                              showToast(`Added ${toAdd.length} member(s) to selection!`, 'success');
+                            }}
+                            className="flex-1 py-1.5 px-3 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs transition-all disabled:opacity-40 cursor-pointer flex items-center justify-center gap-1.5"
+                          >
+                            <PlusCircle className="w-3.5 h-3.5" />
+                            <span>Add to Selected</span>
+                          </button>
+                          <button
+                            type="button"
+                            disabled={multiBulkParsed.matchedEmails.length === 0 && (!multiIncludeUnmatched || multiBulkParsed.unmatchedTokens.filter((t) => t.includes('@')).length === 0)}
+                            onClick={() => {
+                              const toSet = [...multiBulkParsed.matchedEmails];
+                              if (multiIncludeUnmatched) {
+                                toSet.push(...multiBulkParsed.unmatchedTokens.filter((t) => t.includes('@')));
+                              }
+                              setSelectedMultiMemberEmails(Array.from(new Set(toSet)));
+                              showToast(`Selection replaced with ${toSet.length} member(s)!`, 'success');
+                            }}
+                            className="flex-1 py-1.5 px-3 rounded-lg bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs transition-all disabled:opacity-40 cursor-pointer flex items-center justify-center gap-1.5"
+                          >
+                            <Check className="w-3.5 h-3.5" />
+                            <span>Replace Selection</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setMultiBulkInput('');
+                              setMultiBulkFileName(null);
+                              if (multiFileInputRef.current) multiFileInputRef.current.value = '';
+                            }}
+                            className="py-1.5 px-2.5 rounded-lg bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white text-xs font-semibold cursor-pointer"
+                          >
+                            Clear
+                          </button>
                         </div>
-                      );
-                    })}
-                </div>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
 
