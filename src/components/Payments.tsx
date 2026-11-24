@@ -1290,19 +1290,30 @@ const Payments: React.FC<PaymentsProps> = ({
   };
 
   // Export CSV helper
-  const handleExportCSV = (campaignTitle?: string, paidOnly: boolean = false) => {
+  const handleExportCSV = (campaignTitle?: string, paidOnly: boolean = false, statusFilter?: string) => {
     let exportItems = payments;
 
     if (campaignTitle) {
       exportItems = exportItems.filter((p) => p.title.toLowerCase() === campaignTitle.toLowerCase());
     }
 
-    if (paidOnly) {
+    if (statusFilter && statusFilter !== 'All') {
+      exportItems = exportItems.filter((p) => {
+        const isExp = isInvoiceExpired(p);
+        if (statusFilter === 'Paid') return p.status === 'Paid';
+        if (statusFilter === 'Expired') return isExp;
+        if (statusFilter === 'Pending') return p.status === 'Pending' && !isExp;
+        if (statusFilter === 'Processing') return p.status === 'Processing' && !isExp;
+        if (statusFilter === 'Failed') return p.status === 'Failed' && !isExp;
+        return true;
+      });
+    } else if (paidOnly) {
       exportItems = exportItems.filter((p) => p.status === 'Paid');
     }
 
     if (exportItems.length === 0) {
-      showToast('No payment records to export for this filter.', 'info');
+      const tag = statusFilter && statusFilter !== 'All' ? `${statusFilter} ` : paidOnly ? 'Paid ' : '';
+      showToast(`No ${tag.toLowerCase()}payment records to export for this filter.`, 'info');
       return;
     }
 
@@ -1327,6 +1338,8 @@ const Payments: React.FC<PaymentsProps> = ({
       const name = member ? member.name : 'Unknown Member';
       const regNo = member ? member.regNo : '';
       const team = member ? member.team : '';
+      const isExp = isInvoiceExpired(p);
+      const displayStatus = isExp ? 'Expired' : p.status;
 
       return [
         `"${name.replace(/"/g, '""')}"`,
@@ -1336,7 +1349,7 @@ const Payments: React.FC<PaymentsProps> = ({
         `"${(p.title || '').replace(/"/g, '""')}"`,
         `"${p.category || ''}"`,
         p.amount,
-        p.status,
+        `"${displayStatus}"`,
         `"${p.paid_at ? new Date(p.paid_at).toLocaleString('en-IN') : ''}"`,
         `"${p.razorpay_payment_id || ''}"`,
         `"${p.razorpay_order_id || ''}"`,
@@ -1350,12 +1363,17 @@ const Payments: React.FC<PaymentsProps> = ({
     const link = document.createElement('a');
     link.href = url;
     const cleanTitle = (campaignTitle || 'All_Payments').replace(/[^a-zA-Z0-9]/g, '_');
-    link.setAttribute('download', `VRGC_${cleanTitle}_${paidOnly ? 'PaidOnly' : 'FullReport'}_${Date.now()}.csv`);
+    const exportTag = statusFilter && statusFilter !== 'All' 
+      ? statusFilter 
+      : paidOnly 
+        ? 'PaidOnly' 
+        : 'FullReport';
+    link.setAttribute('download', `VRGC_${cleanTitle}_${exportTag}_${Date.now()}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
 
-    showToast(`Exported CSV report with ${exportItems.length} records! 📊`, 'success');
+    showToast(`Exported ${exportTag} CSV report with ${exportItems.length} records! 📊`, 'success');
   };
 
   // Razorpay Checkout Handler
@@ -1694,6 +1712,34 @@ const Payments: React.FC<PaymentsProps> = ({
     const paidCount = payments.filter((p) => p.status === 'Paid').length;
     return { totalPending, totalPaid, pendingCount, failedCount, paidCount, total: payments.length };
   }, [payments]);
+
+  // Filtered items for the Active Campaign Roster modal
+  const filteredRosterItems = useMemo(() => {
+    if (!activeRosterCampaign) return [];
+    return activeRosterCampaign.items.filter((item) => {
+      const email = item.user_email ? item.user_email.toLowerCase() : '';
+      const member = membersMap.get(email);
+      const name = member ? member.name : '';
+      const regNo = member ? member.regNo : '';
+
+      const matchesSearch =
+        !rosterSearch.trim() ||
+        name.toLowerCase().includes(rosterSearch.toLowerCase()) ||
+        regNo.toLowerCase().includes(rosterSearch.toLowerCase()) ||
+        email.includes(rosterSearch.toLowerCase());
+
+      const isExp = isInvoiceExpired(item);
+      const matchesStatus =
+        rosterStatusFilter === 'All' ||
+        (rosterStatusFilter === 'Paid' && item.status === 'Paid') ||
+        (rosterStatusFilter === 'Expired' && isExp) ||
+        (rosterStatusFilter === 'Pending' && item.status === 'Pending' && !isExp) ||
+        (rosterStatusFilter === 'Processing' && item.status === 'Processing' && !isExp) ||
+        (rosterStatusFilter === 'Failed' && item.status === 'Failed' && !isExp);
+
+      return matchesSearch && matchesStatus;
+    });
+  }, [activeRosterCampaign, rosterSearch, rosterStatusFilter, membersMap]);
 
   // Helper badge generator
   const renderStatusBadge = (status: PaymentStatus) => {
@@ -2500,43 +2546,47 @@ const Payments: React.FC<PaymentsProps> = ({
 
       {/* ADMIN CAMPAIGN MEMBER ROSTER MODAL */}
       {activeRosterCampaign && (
-        <div className="fixed inset-0 z-[130] bg-black/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-200">
-          <div className="bg-[#0e0518] border border-purple-500/40 rounded-2xl sm:rounded-3xl max-w-4xl w-full p-4 sm:p-6 md:p-8 space-y-4 sm:space-y-6 shadow-[0_0_60px_rgba(168,85,247,0.3)] relative max-h-[92vh] flex flex-col mx-1 sm:mx-auto">
+        <div className="fixed inset-0 z-[130] bg-black/85 backdrop-blur-md flex items-center justify-center p-2.5 sm:p-4 md:p-6 animate-in fade-in duration-200">
+          <div className="bg-[#0e0518] border border-purple-500/40 rounded-2xl sm:rounded-3xl max-w-5xl lg:max-w-6xl w-full p-4 sm:p-5 md:p-6 space-y-3.5 sm:space-y-4 md:space-y-5 shadow-[0_0_60px_rgba(168,85,247,0.3)] relative max-h-[92vh] flex flex-col mx-auto">
             {/* Modal Header */}
             <button
               onClick={() => setActiveRosterCampaign(null)}
-              className="absolute top-3.5 right-3.5 sm:top-4 sm:right-4 p-2 text-slate-400 hover:text-white rounded-full bg-white/5 hover:bg-white/10 transition-all"
+              className="absolute top-3.5 right-3.5 sm:top-4 sm:right-4 p-2 text-slate-400 hover:text-white rounded-full bg-white/5 hover:bg-white/10 transition-all z-10"
+              title="Close Roster"
             >
               <X className="w-4 h-4 sm:w-5 sm:h-5" />
             </button>
 
-            <div className="space-y-1 pr-6">
+            <div className="space-y-1 pr-10">
               <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded text-[10px] font-bold bg-purple-500/20 text-purple-300 border border-purple-500/30">
                 <Layers className="w-3.5 h-3.5 text-purple-400" /> CAMPAIGN ROSTER &amp; COMPLIANCE
               </div>
-              <h3 className="text-xl sm:text-2xl font-bold text-white leading-tight">{activeRosterCampaign.title}</h3>
-              <p className="text-[11px] sm:text-xs text-slate-400">
-                Category: <strong>{activeRosterCampaign.category}</strong> | Amount:{' '}
-                <strong className="text-white">₹{activeRosterCampaign.amount} INR</strong>
+              <h3 className="text-xl sm:text-2xl font-bold text-white leading-tight break-words">{activeRosterCampaign.title}</h3>
+              <p className="text-[11px] sm:text-xs text-slate-400 flex flex-wrap items-center gap-x-2 gap-y-1">
+                <span>Category: <strong className="text-slate-200">{activeRosterCampaign.category}</strong></span>
+                <span className="text-slate-600">•</span>
+                <span>Amount: <strong className="text-white">₹{activeRosterCampaign.amount} INR</strong></span>
+                <span className="text-slate-600">•</span>
+                <span>Showing: <strong className="text-purple-300">{filteredRosterItems.length}</strong> of <strong className="text-slate-300">{activeRosterCampaign.items.length}</strong> members</span>
               </p>
             </div>
 
             {/* Roster Toolbar */}
-            <div className="flex flex-col sm:flex-row gap-2.5 sm:gap-3 items-stretch sm:items-center justify-between bg-surface-container-lowest/60 p-3 rounded-2xl border border-white/5">
-              <div className="relative w-full sm:w-72">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+            <div className="flex flex-col md:flex-row gap-2.5 sm:gap-3 items-stretch md:items-center justify-between bg-surface-container-lowest/60 p-2.5 sm:p-3 rounded-2xl border border-white/5">
+              <div className="relative w-full md:max-w-xs flex-1">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
                 <input
                   type="text"
                   placeholder="Filter roster by member name, reg no or email..."
                   value={rosterSearch}
                   onChange={(e) => setRosterSearch(e.target.value)}
-                  className="w-full pl-9 pr-3 py-2 rounded-xl bg-black/40 border border-white/10 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-purple-500"
+                  className="w-full pl-9 pr-3 py-2 rounded-xl bg-black/40 border border-white/10 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-purple-500 transition-colors"
                 />
               </div>
 
-              <div className="grid grid-cols-1 sm:flex items-center gap-2.5 w-full sm:w-auto">
+              <div className="flex flex-wrap sm:flex-nowrap items-center gap-2 sm:gap-2.5 w-full md:w-auto">
                 {/* Roster Status Dropdown Filter */}
-                <div className="relative w-full sm:w-44">
+                <div className="relative flex-1 sm:flex-initial sm:w-44 min-w-[130px]">
                   <select
                     value={rosterStatusFilter}
                     onChange={(e) => setRosterStatusFilter(e.target.value)}
@@ -2560,229 +2610,235 @@ const Payments: React.FC<PaymentsProps> = ({
                       setAddMembersSearch('');
                       setShowRosterAddMembersModal(true);
                     }}
-                    className="px-3 py-2 rounded-xl bg-purple-600/30 hover:bg-purple-600/50 text-purple-200 border border-purple-500/40 text-xs font-bold transition-all flex items-center justify-center gap-1.5 shrink-0 cursor-pointer"
+                    className="flex-1 sm:flex-initial px-3 py-2 rounded-xl bg-purple-600/30 hover:bg-purple-600/50 text-purple-200 border border-purple-500/40 text-xs font-bold transition-all flex items-center justify-center gap-1.5 shrink-0 cursor-pointer"
                   >
                     <UserPlus className="w-3.5 h-3.5 text-purple-300" />
                     <span>Add Members</span>
                   </button>
                 )}
 
-                <button
-                  onClick={() => handleExportCSV(activeRosterCampaign.title, true)}
-                  className="px-3 py-2 rounded-xl bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/40 text-xs font-bold transition-all flex items-center justify-center gap-1.5 shrink-0"
-                >
-                  <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>Download Paid CSV</span>
-                </button>
+                {/* Dynamic CSV Download Button based on current filter */}
+                {(() => {
+                  const filter = rosterStatusFilter || 'All';
+                  let btnColorClass = 'bg-purple-600/20 hover:bg-purple-600/30 text-purple-300 border-purple-500/40';
+                  let iconColorClass = 'text-purple-400';
+                  let btnLabel = 'Download All CSV';
+
+                  if (filter === 'Paid') {
+                    btnColorClass = 'bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border-emerald-500/40';
+                    iconColorClass = 'text-emerald-400';
+                    btnLabel = 'Download Paid CSV';
+                  } else if (filter === 'Pending') {
+                    btnColorClass = 'bg-amber-600/20 hover:bg-amber-600/30 text-amber-300 border-amber-500/40';
+                    iconColorClass = 'text-amber-400';
+                    btnLabel = 'Download Pending CSV';
+                  } else if (filter === 'Processing') {
+                    btnColorClass = 'bg-blue-600/20 hover:bg-blue-600/30 text-blue-300 border-blue-500/40';
+                    iconColorClass = 'text-blue-400';
+                    btnLabel = 'Download Processing CSV';
+                  } else if (filter === 'Failed') {
+                    btnColorClass = 'bg-rose-600/20 hover:bg-rose-600/30 text-rose-300 border-rose-500/40';
+                    iconColorClass = 'text-rose-400';
+                    btnLabel = 'Download Failed CSV';
+                  } else if (filter === 'Expired') {
+                    btnColorClass = 'bg-slate-700/40 hover:bg-slate-700/60 text-slate-300 border-slate-500/40';
+                    iconColorClass = 'text-slate-400';
+                    btnLabel = 'Download Expired CSV';
+                  }
+
+                  return (
+                    <button
+                      onClick={() => handleExportCSV(activeRosterCampaign.title, false, filter)}
+                      title={`Export ${btnLabel}`}
+                      className={`flex-1 sm:flex-initial px-3 py-2 rounded-xl border text-xs font-bold transition-all flex items-center justify-center gap-1.5 shrink-0 cursor-pointer ${btnColorClass}`}
+                    >
+                      <FileSpreadsheet className={`w-3.5 h-3.5 ${iconColorClass}`} />
+                      <span>{btnLabel}</span>
+                    </button>
+                  );
+                })()}
               </div>
             </div>
 
             {/* Roster List Section */}
-            <div className="overflow-y-auto flex-1 custom-scrollbar">
-              {/* Mobile View: Cards */}
-              <div className="block md:hidden space-y-2.5 pr-1">
-                {activeRosterCampaign.items
-                  .filter((item) => {
-                    const email = item.user_email ? item.user_email.toLowerCase() : '';
-                    const member = membersMap.get(email);
-                    const name = member ? member.name : '';
-                    const regNo = member ? member.regNo : '';
+            <div className="overflow-y-auto flex-1 custom-scrollbar min-h-0 pr-0.5">
+              {filteredRosterItems.length === 0 ? (
+                <div className="p-8 text-center text-slate-400 text-xs border border-white/5 rounded-2xl bg-white/[0.02]">
+                  No members found matching the selected filter ({rosterStatusFilter}).
+                </div>
+              ) : (
+                <>
+                  {/* Mobile View: Cards */}
+                  <div className="block md:hidden space-y-2.5 pr-0.5">
+                    {filteredRosterItems.map((item) => {
+                      const email = item.user_email ? item.user_email.toLowerCase() : '';
+                      const member = membersMap.get(email);
+                      const name = member ? member.name : 'Unknown Member';
+                      const regNo = member ? member.regNo : 'N/A';
 
-                    const matchesSearch =
-                      !rosterSearch.trim() ||
-                      name.toLowerCase().includes(rosterSearch.toLowerCase()) ||
-                      regNo.toLowerCase().includes(rosterSearch.toLowerCase()) ||
-                      email.includes(rosterSearch.toLowerCase());
-
-                    const isExp = isInvoiceExpired(item);
-                    const matchesStatus =
-                      rosterStatusFilter === 'All' ||
-                      (rosterStatusFilter === 'Paid' && item.status === 'Paid') ||
-                      (rosterStatusFilter === 'Expired' && isExp) ||
-                      (rosterStatusFilter === 'Pending' && item.status === 'Pending' && !isExp) ||
-                      (rosterStatusFilter === 'Processing' && item.status === 'Processing' && !isExp) ||
-                      (rosterStatusFilter === 'Failed' && item.status === 'Failed' && !isExp);
-
-                    return matchesSearch && matchesStatus;
-                  })
-                  .map((item) => {
-                    const email = item.user_email ? item.user_email.toLowerCase() : '';
-                    const member = membersMap.get(email);
-                    const name = member ? member.name : 'Unknown Member';
-                    const regNo = member ? member.regNo : 'N/A';
-
-                    return (
-                      <div key={item.id} className="p-3.5 rounded-2xl bg-white/[0.03] border border-white/10 space-y-2.5">
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="min-w-0 flex-1">
-                            <h4 className="font-bold text-xs text-white truncate">{name}</h4>
-                            <p className="text-[10px] text-purple-300 font-mono mt-0.5">{regNo}</p>
-                            <p className="text-[10px] text-slate-400 font-mono truncate">{email}</p>
-                          </div>
-                          <div className="shrink-0">
-                            {renderStatusBadge(isInvoiceExpired(item) ? 'Expired' : paymentStatusToString(item.status))}
-                          </div>
-                        </div>
-                        <div className="flex items-center justify-between pt-2 border-t border-white/5 text-[10px]">
-                          <div className="font-mono">
-                            {item.status === 'Paid' && item.paid_at ? (
-                              <div className="text-[10px] text-emerald-400">
-                                <span className="font-bold">{item.razorpay_payment_id || 'Paid'}</span>
-                                <span className="text-[9px] text-slate-500 ml-1.5">{new Date(item.paid_at).toLocaleDateString('en-IN')}</span>
-                              </div>
-                            ) : (
-                              <span className="text-amber-400 font-bold">Unpaid</span>
-                            )}
-                          </div>
-                          <div className="flex items-center gap-1">
-                            {isAdminState && (
-                              <button
-                                onClick={() => handleOpenEditSingle(item)}
-                                className="px-2 py-1 text-purple-300 hover:bg-purple-500/10 rounded-lg flex items-center gap-1 font-bold text-[10px]"
-                              >
-                                <Pencil className="w-3 h-3" /> Edit
-                              </button>
-                            )}
-                            <button
-                              onClick={() => handleOpenAuditModal(item)}
-                              className="px-2 py-1 text-amber-400 hover:bg-amber-500/10 rounded-lg flex items-center gap-1 font-bold text-[10px]"
-                            >
-                              <FileText className="w-3 h-3" /> Audit Logs
-                            </button>
-                            {isAdminState && (
-                              <button
-                                onClick={() =>
-                                  setDeleteTarget({
-                                    type: 'single',
-                                    title: item.title,
-                                    itemIds: [item.id],
-                                    memberName: name || item.user_email,
-                                    isPaid: item.status === 'Paid',
-                                    amount: item.amount,
-                                  })
-                                }
-                                className="p-1 text-slate-500 hover:text-rose-400 rounded-lg transition-all"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-              </div>
-
-              {/* Desktop View: Table */}
-              <div className="hidden md:block border border-white/10 rounded-2xl overflow-hidden">
-                <table className="w-full text-left text-xs">
-                  <thead className="bg-[#180a2b] text-slate-400 font-semibold sticky top-0 border-b border-white/10">
-                    <tr>
-                      <th className="p-3.5">Member Name</th>
-                      <th className="p-3.5">Registration No</th>
-                      <th className="p-3.5">Email</th>
-                      <th className="p-3.5">Status</th>
-                      <th className="p-3.5 text-right">Payment Ref / Date</th>
-                      <th className="p-3.5 text-center">{isAdminState ? 'Action' : 'Audit Logs'}</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-white/5 font-mono text-slate-300">
-                    {activeRosterCampaign.items
-                      .filter((item) => {
-                        const email = item.user_email ? item.user_email.toLowerCase() : '';
-                        const member = membersMap.get(email);
-                        const name = member ? member.name : '';
-                        const regNo = member ? member.regNo : '';
-
-                        const matchesSearch =
-                          !rosterSearch.trim() ||
-                          name.toLowerCase().includes(rosterSearch.toLowerCase()) ||
-                          regNo.toLowerCase().includes(rosterSearch.toLowerCase()) ||
-                          email.includes(rosterSearch.toLowerCase());
-
-                        const isExp = isInvoiceExpired(item);
-                        const matchesStatus =
-                          rosterStatusFilter === 'All' ||
-                          (rosterStatusFilter === 'Paid' && item.status === 'Paid') ||
-                          (rosterStatusFilter === 'Expired' && isExp) ||
-                          (rosterStatusFilter === 'Pending' && item.status === 'Pending' && !isExp) ||
-                          (rosterStatusFilter === 'Processing' && item.status === 'Processing' && !isExp) ||
-                          (rosterStatusFilter === 'Failed' && item.status === 'Failed' && !isExp);
-
-                        return matchesSearch && matchesStatus;
-                      })
-                      .map((item) => {
-                        const email = item.user_email ? item.user_email.toLowerCase() : '';
-                        const member = membersMap.get(email);
-                        const name = member ? member.name : 'Unknown Member';
-                        const regNo = member ? member.regNo : 'N/A';
-
-                        return (
-                          <tr key={item.id} className="hover:bg-white/5 transition-colors">
-                            <td className="p-3.5 font-sans font-bold text-white">{name}</td>
-                            <td className="p-3.5 text-purple-300 font-semibold">{regNo}</td>
-                            <td className="p-3.5 text-slate-400">{email}</td>
-                            <td className="p-3.5 font-sans">
+                      return (
+                        <div key={item.id} className="p-3.5 rounded-2xl bg-white/[0.03] border border-white/10 space-y-2.5">
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="min-w-0 flex-1">
+                              <h4 className="font-bold text-xs text-white truncate" title={name}>{name}</h4>
+                              <p className="text-[10px] text-purple-300 font-mono mt-0.5">{regNo}</p>
+                              <p className="text-[10px] text-slate-400 font-mono truncate" title={email}>{email}</p>
+                            </div>
+                            <div className="shrink-0">
                               {renderStatusBadge(isInvoiceExpired(item) ? 'Expired' : paymentStatusToString(item.status))}
-                            </td>
-                            <td className="p-3.5 text-right">
+                            </div>
+                          </div>
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-2.5 border-t border-white/5 text-[10px]">
+                            <div className="font-mono min-w-0">
                               {item.status === 'Paid' && item.paid_at ? (
-                                <div className="text-[11px] text-emerald-400 font-mono">
-                                  <div>{item.razorpay_payment_id || 'Paid'}</div>
-                                  <div className="text-[9px] text-slate-400">
+                                <div className="flex items-center gap-1.5 flex-wrap text-[10px] text-emerald-400">
+                                  <span className="font-bold font-mono truncate max-w-[140px]" title={item.razorpay_payment_id || 'Paid'}>
+                                    {item.razorpay_payment_id || 'Paid'}
+                                  </span>
+                                  <span className="text-[9px] text-slate-500 shrink-0">
                                     {new Date(item.paid_at).toLocaleDateString('en-IN')}
-                                  </div>
+                                  </span>
                                 </div>
                               ) : (
-                                <span className="text-amber-400 text-[11px]">Unpaid</span>
+                                <span className="text-amber-400 font-bold">Unpaid</span>
                               )}
-                            </td>
-                            <td className="p-3.5 text-center">
-                              <div className="flex items-center justify-center gap-1">
-                                {isAdminState && (
-                                  <button
-                                    onClick={() => handleOpenEditSingle(item)}
-                                    title="Edit Invoice Details"
-                                    className="p-1.5 text-purple-300 hover:text-purple-200 hover:bg-purple-500/10 rounded-lg transition-all flex items-center gap-1 text-[10px] font-bold"
-                                  >
-                                    <Pencil className="w-3.5 h-3.5" />
-                                    <span>Edit</span>
-                                  </button>
-                                )}
+                            </div>
+                            <div className="flex items-center justify-end gap-1.5 shrink-0 flex-wrap">
+                              {isAdminState && (
                                 <button
-                                  onClick={() => handleOpenAuditModal(item)}
-                                  title="View Audit & Attempt Logs"
-                                  className="p-1.5 text-amber-400 hover:text-amber-300 hover:bg-amber-500/10 rounded-lg transition-all flex items-center gap-1 text-[10px] font-bold"
+                                  onClick={() => handleOpenEditSingle(item)}
+                                  className="px-2 py-1 text-purple-300 hover:bg-purple-500/10 rounded-lg flex items-center gap-1 font-bold text-[10px] transition-colors"
                                 >
-                                  <FileText className="w-3.5 h-3.5" />
-                                  <span>Audit Logs</span>
+                                  <Pencil className="w-3 h-3" /> Edit
                                 </button>
-                                {isAdminState && (
-                                  <button
-                                    onClick={() =>
-                                      setDeleteTarget({
-                                        type: 'single',
-                                        title: item.title,
-                                        itemIds: [item.id],
-                                        memberName: name || item.user_email,
-                                        isPaid: item.status === 'Paid',
-                                        amount: item.amount,
-                                      })
-                                    }
-                                    title="Delete record"
-                                    className="p-1.5 text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition-all"
-                                  >
-                                    <Trash2 className="w-3.5 h-3.5" />
-                                  </button>
+                              )}
+                              <button
+                                onClick={() => handleOpenAuditModal(item)}
+                                className="px-2 py-1 text-amber-400 hover:bg-amber-500/10 rounded-lg flex items-center gap-1 font-bold text-[10px] transition-colors"
+                              >
+                                <FileText className="w-3 h-3" /> Audit Logs
+                              </button>
+                              {isAdminState && (
+                                <button
+                                  onClick={() =>
+                                    setDeleteTarget({
+                                      type: 'single',
+                                      title: item.title,
+                                      itemIds: [item.id],
+                                      memberName: name || item.user_email,
+                                      isPaid: item.status === 'Paid',
+                                      amount: item.amount,
+                                    })
+                                  }
+                                  title="Delete record"
+                                  className="p-1 text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition-all"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Desktop View: Table */}
+                  <div className="hidden md:block border border-white/10 rounded-2xl overflow-x-auto custom-scrollbar bg-[#0a0314]/50">
+                    <table className="w-full text-left text-xs min-w-[760px]">
+                      <thead className="bg-[#180a2b] text-slate-400 font-semibold sticky top-0 border-b border-white/10 z-10">
+                        <tr>
+                          <th className="p-3.5 whitespace-nowrap min-w-[130px]">Member Name</th>
+                          <th className="p-3.5 whitespace-nowrap min-w-[110px]">Registration No</th>
+                          <th className="p-3.5 whitespace-nowrap min-w-[170px]">Email</th>
+                          <th className="p-3.5 whitespace-nowrap min-w-[105px]">Status</th>
+                          <th className="p-3.5 whitespace-nowrap min-w-[135px] text-right">Payment Ref / Date</th>
+                          <th className="p-3.5 whitespace-nowrap min-w-[175px] text-center">{isAdminState ? 'Action' : 'Audit Logs'}</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-white/5 font-mono text-slate-300">
+                        {filteredRosterItems.map((item) => {
+                          const email = item.user_email ? item.user_email.toLowerCase() : '';
+                          const member = membersMap.get(email);
+                          const name = member ? member.name : 'Unknown Member';
+                          const regNo = member ? member.regNo : 'N/A';
+
+                          return (
+                            <tr key={item.id} className="hover:bg-white/5 transition-colors">
+                              <td className="p-3.5 font-sans font-bold text-white whitespace-nowrap max-w-[150px] truncate" title={name}>
+                                {name}
+                              </td>
+                              <td className="p-3.5 text-purple-300 font-semibold whitespace-nowrap">
+                                {regNo}
+                              </td>
+                              <td className="p-3.5 text-slate-400 font-mono text-[11px] max-w-[190px] xl:max-w-[240px] truncate" title={email}>
+                                {email}
+                              </td>
+                              <td className="p-3.5 font-sans whitespace-nowrap">
+                                {renderStatusBadge(isInvoiceExpired(item) ? 'Expired' : paymentStatusToString(item.status))}
+                              </td>
+                              <td className="p-3.5 text-right whitespace-nowrap font-mono">
+                                {item.status === 'Paid' && item.paid_at ? (
+                                  <div className="text-[11px] text-emerald-400 font-mono">
+                                    <div className="truncate max-w-[140px] inline-block" title={item.razorpay_payment_id || 'Paid'}>
+                                      {item.razorpay_payment_id || 'Paid'}
+                                    </div>
+                                    <div className="text-[9px] text-slate-400">
+                                      {new Date(item.paid_at).toLocaleDateString('en-IN')}
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <span className="text-amber-400 text-[11px]">Unpaid</span>
                                 )}
-                              </div>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                  </tbody>
-                </table>
-              </div>
+                              </td>
+                              <td className="p-3.5 text-center whitespace-nowrap shrink-0">
+                                <div className="flex items-center justify-center gap-1.5 whitespace-nowrap shrink-0">
+                                  {isAdminState && (
+                                    <button
+                                      onClick={() => handleOpenEditSingle(item)}
+                                      title="Edit Invoice Details"
+                                      className="p-1.5 text-purple-300 hover:text-purple-200 hover:bg-purple-500/10 rounded-lg transition-all flex items-center gap-1 text-[10px] font-bold shrink-0"
+                                    >
+                                      <Pencil className="w-3.5 h-3.5 shrink-0" />
+                                      <span>Edit</span>
+                                    </button>
+                                  )}
+                                  <button
+                                    onClick={() => handleOpenAuditModal(item)}
+                                    title="View Audit & Attempt Logs"
+                                    className="p-1.5 text-amber-400 hover:text-amber-300 hover:bg-amber-500/10 rounded-lg transition-all flex items-center gap-1 text-[10px] font-bold shrink-0"
+                                  >
+                                    <FileText className="w-3.5 h-3.5 shrink-0" />
+                                    <span>Audit Logs</span>
+                                  </button>
+                                  {isAdminState && (
+                                    <button
+                                      onClick={() =>
+                                        setDeleteTarget({
+                                          type: 'single',
+                                          title: item.title,
+                                          itemIds: [item.id],
+                                          memberName: name || item.user_email,
+                                          isPaid: item.status === 'Paid',
+                                          amount: item.amount,
+                                        })
+                                      }
+                                      title="Delete record"
+                                      className="p-1.5 text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition-all shrink-0"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5 shrink-0" />
+                                    </button>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              )}
             </div>
 
             <div className="pt-2 flex justify-end">
