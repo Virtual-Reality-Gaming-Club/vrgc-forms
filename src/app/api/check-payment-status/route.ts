@@ -186,18 +186,26 @@ async function processRazorpaySync(docs: Array<any>, isSingleTarget: boolean = f
 
     let activeTx = matchingTx;
 
-    // Fallback: If not in recent 100 list, query Razorpay order directly by order_id if present
-    if (!activeTx && docOrderId) {
-      try {
-        const orderPayments = await razorpay.orders.fetchPayments(docOrderId);
-        const orderCaptured = (orderPayments?.items || []).find(
-          (p: any) => p.status === 'captured' || p.status === 'authorized'
-        );
-        if (orderCaptured) {
-          activeTx = orderCaptured;
+    // Fallback: If not in recent 100 list, query Razorpay order directly by order_id (and order_ids history)
+    const orderIdsToCheck = Array.from(new Set([
+      ...(docOrderId ? [docOrderId] : []),
+      ...(Array.isArray(pData.order_ids) ? pData.order_ids : []),
+    ]));
+
+    if (!activeTx && orderIdsToCheck.length > 0) {
+      for (const oId of orderIdsToCheck) {
+        if (activeTx) break;
+        try {
+          const orderPayments = await razorpay.orders.fetchPayments(oId);
+          const orderCaptured = (orderPayments?.items || []).find(
+            (p: any) => p.status === 'captured' || p.status === 'authorized'
+          );
+          if (orderCaptured) {
+            activeTx = orderCaptured;
+          }
+        } catch (e) {
+          // Silently skip if order lookup fails
         }
-      } catch (e) {
-        // Silently skip if order lookup fails
       }
     }
 

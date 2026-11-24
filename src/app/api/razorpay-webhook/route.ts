@@ -51,8 +51,7 @@ export async function POST(request: Request) {
 
       const razorpayPaymentId = paymentEntity.id || '';
       const razorpayOrderId = paymentEntity.order_id || orderEntity.id || '';
-      const email = (paymentEntity.email || paymentEntity.notes?.userEmail || '').toLowerCase().trim();
-      const amountPaise = Number(paymentEntity.amount) || Number(orderEntity.amount) || 0;
+      const docAmountPaise = Number(paymentEntity.amount) || Number(orderEntity.amount) || 0;
       const targetPaymentId = paymentEntity.notes?.paymentId || '';
 
       const allDocsSnap = await adminDb.collection('payments').get();
@@ -63,13 +62,12 @@ export async function POST(request: Request) {
 
         const docId = pDoc.id;
         const docEmail = (pData.user_email || '').toLowerCase().trim();
-        const docAmountPaise = Math.round((Number(pData.amount) || 0) * 100);
         const docOrderId = (pData.razorpay_order_id || '').trim();
 
         let isMatch = false;
         if (targetPaymentId && targetPaymentId === docId) isMatch = true;
-        if (docOrderId && docOrderId === razorpayOrderId) isMatch = true;
-        if (docEmail && email && docEmail === email && docAmountPaise === amountPaise) isMatch = true;
+        if (docOrderId && razorpayOrderId && docOrderId === razorpayOrderId) isMatch = true;
+        if (Array.isArray(pData.order_ids) && razorpayOrderId && pData.order_ids.includes(razorpayOrderId)) isMatch = true;
 
         if (isMatch) {
           const paidAtTime = paymentEntity.created_at
@@ -124,6 +122,62 @@ export async function POST(request: Request) {
             });
           } catch (e) {
             console.warn('Webhook attempt log warning:', e);
+          }
+        }
+      }
+    } else if (event === 'payment.failed') {
+      const paymentEntity = payload.payload?.payment?.entity || {};
+      const razorpayPaymentId = paymentEntity.id || '';
+      const razorpayOrderId = paymentEntity.order_id || '';
+      const targetPaymentId = paymentEntity.notes?.paymentId || '';
+      const errorDesc = paymentEntity.error_description || paymentEntity.error_reason || 'Payment attempt failed on Razorpay';
+
+      const allDocsSnap = await adminDb.collection('payments').get();
+
+      for (const pDoc of allDocsSnap.docs) {
+        const pData = pDoc.data();
+        if (pData.status === 'Paid') continue;
+
+        const docId = pDoc.id;
+        const docOrderId = (pData.razorpay_order_id || '').trim();
+
+        let isMatch = false;
+        if (targetPaymentId && targetPaymentId === docId) isMatch = true;
+        if (docOrderId && razorpayOrderId && docOrderId === razorpayOrderId) isMatch = true;
+        if (Array.isArray(pData.order_ids) && razorpayOrderId && pData.order_ids.includes(razorpayOrderId)) isMatch = true;
+
+        if (isMatch) {
+          const nowIso = new Date().toISOString();
+          await pDoc.ref.update({
+            status: 'Failed',
+            failed_at: nowIso,
+            error_description: errorDesc,
+            updated_at: FieldValue.serverTimestamp(),
+          });
+
+          // Log failed attempt subdocument
+          try {
+            const attemptsCol = adminDb.collection('payments').doc(docId).collection('attempts');
+            await attemptsCol.add({
+              payment_id: docId,
+              user_email: (pData.user_email || '').toLowerCase().trim(),
+              candidate_name: pData.candidate_name || '',
+              registration_number: pData.registration_number || '',
+              team: pData.team || '',
+              payment_title: pData.title || '',
+              amount: Number(pData.amount) || 0,
+              currency: pData.currency || 'INR',
+              status: 'Failed',
+              razorpay_order_id: razorpayOrderId,
+              razorpay_payment_id: razorpayPaymentId,
+              failed_at: nowIso,
+              error_description: errorDesc,
+              created_at: FieldValue.serverTimestamp(),
+              updated_at: FieldValue.serverTimestamp(),
+              source: 'razorpay-webhook',
+            });
+          } catch (e) {
+            console.warn('Webhook failed attempt log warning:', e);
           }
         }
       }

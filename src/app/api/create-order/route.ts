@@ -159,8 +159,16 @@ export async function POST(request: Request) {
     // 7. Update payment status to 'Processing' in Firestore only after authorization and order creation succeed
     if (paymentDocRef) {
       try {
+        const existingOrderIds = Array.isArray(paymentData.order_ids) ? paymentData.order_ids : [];
+        const updatedOrderIds = Array.from(new Set([
+          ...existingOrderIds,
+          order.id,
+          ...(paymentData.razorpay_order_id ? [paymentData.razorpay_order_id] : []),
+        ]));
+
         await paymentDocRef.update({
           razorpay_order_id: order.id,
+          order_ids: updatedOrderIds,
           status: 'Processing',
           updated_at: FieldValue.serverTimestamp(),
         });

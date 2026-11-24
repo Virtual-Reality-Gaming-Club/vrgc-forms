@@ -245,7 +245,12 @@ export async function POST(request: Request) {
     }
 
     // 5. Razorpay Order ID Verification
-    if (paymentData.razorpay_order_id && paymentData.razorpay_order_id !== razorpay_order_id) {
+    const isMatchingOrder =
+      (paymentData.razorpay_order_id && paymentData.razorpay_order_id === razorpay_order_id) ||
+      (Array.isArray(paymentData.order_ids) && paymentData.order_ids.includes(razorpay_order_id)) ||
+      !paymentData.razorpay_order_id;
+
+    if (!isMatchingOrder) {
       return NextResponse.json(
         { success: false, error: 'Razorpay order ID mismatch with invoice record.' },
         { status: 400 }

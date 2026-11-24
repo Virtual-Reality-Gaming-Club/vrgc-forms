@@ -362,6 +362,7 @@ const Payments: React.FC<PaymentsProps> = ({
   const [activeRosterCampaign, setActiveRosterCampaign] = useState<CampaignGroup | null>(null);
   const [rosterSearch, setRosterSearch] = useState<string>('');
   const [rosterStatusFilter, setRosterStatusFilter] = useState<string>('All');
+  const [isSyncingRoster, setIsSyncingRoster] = useState<boolean>(false);
 
   const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null);
   const [receiptModalPayment, setReceiptModalPayment] = useState<PaymentItem | null>(null);
@@ -745,6 +746,39 @@ const Payments: React.FC<PaymentsProps> = ({
       );
     }
   }, [payments.length]);
+
+  // Auto-sync when user returns to tab (crucial for mobile UPI app switching where browser is backgrounded)
+  useEffect(() => {
+    let lastSyncTime = 0;
+    const handleReturnToTab = () => {
+      const now = Date.now();
+      if (document.visibilityState === 'visible' && now - lastSyncTime > 5000) {
+        const hasProcessing = payments.some((p) => p.status === 'Processing');
+        if (hasProcessing) {
+          lastSyncTime = now;
+          syncPaymentStatusWithRazorpay(undefined, undefined, true).catch(() => {});
+        }
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleReturnToTab);
+    window.addEventListener('focus', handleReturnToTab);
+    return () => {
+      document.removeEventListener('visibilitychange', handleReturnToTab);
+      window.removeEventListener('focus', handleReturnToTab);
+    };
+  }, [payments]);
+
+  // Keep activeRosterCampaign synchronized with live payments state
+  useEffect(() => {
+    if (!activeRosterCampaign) return;
+    const matchingPayments = payments.filter(
+      (p) => p.title.trim().toLowerCase() === activeRosterCampaign.title.trim().toLowerCase()
+    );
+    if (matchingPayments.length > 0) {
+      setActiveRosterCampaign((prev) => (prev ? recalculateCampaignGroup(prev, matchingPayments) : null));
+    }
+  }, [payments]);
 
   // Load transaction logs from Firestore invoices collection
   const loadTransactionLogs = useCallback(async () => {
@@ -1202,6 +1236,44 @@ const Payments: React.FC<PaymentsProps> = ({
               : p
           )
         );
+        if (activeRosterCampaign) {
+          setActiveRosterCampaign((prev) =>
+            prev
+              ? recalculateCampaignGroup(
+                  prev,
+                  prev.items.map((item) =>
+                    item.id === editSinglePayment.id
+                      ? {
+                          ...item,
+                          title: cleanTitle,
+                          description: cleanDesc,
+                          due_date: finalIsoDueDate,
+                        }
+                      : item
+                  )
+                )
+              : null
+          );
+        }
+        if (editCampaignGroup) {
+          setEditCampaignGroup((prev) =>
+            prev
+              ? recalculateCampaignGroup(
+                  prev,
+                  prev.items.map((item) =>
+                    item.id === editSinglePayment.id
+                      ? {
+                          ...item,
+                          title: cleanTitle,
+                          description: cleanDesc,
+                          due_date: finalIsoDueDate,
+                        }
+                      : item
+                  )
+                )
+              : null
+          );
+        }
         logAdminAction({
           adminEmail: userEmail || 'admin',
           action: 'EDIT_INVOICE_SINGLE',
@@ -1300,6 +1372,7 @@ const Payments: React.FC<PaymentsProps> = ({
     if (statusFilter && statusFilter !== 'All') {
       exportItems = exportItems.filter((p) => {
         const isExp = isInvoiceExpired(p);
+        if (statusFilter === 'Unpaid') return (p.status === 'Pending' || p.status === 'Failed' || p.status === 'Processing') && !isExp;
         if (statusFilter === 'Paid') return p.status === 'Paid';
         if (statusFilter === 'Expired') return isExp;
         if (statusFilter === 'Pending') return p.status === 'Pending' && !isExp;
@@ -1489,9 +1562,13 @@ const Payments: React.FC<PaymentsProps> = ({
           razorpay_signature: string;
         }) => {
           try {
+            const authHeaders = await getAuthHeaders();
             const verifyRes = await fetch('/api/verify-payment', {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
+              headers: {
+                'Content-Type': 'application/json',
+                ...authHeaders,
+              },
               body: JSON.stringify({
                 paymentId: payment.id,
                 razorpay_order_id: response.razorpay_order_id,
@@ -1731,6 +1808,7 @@ const Payments: React.FC<PaymentsProps> = ({
       const isExp = isInvoiceExpired(item);
       const matchesStatus =
         rosterStatusFilter === 'All' ||
+        (rosterStatusFilter === 'Unpaid' && (item.status === 'Pending' || item.status === 'Failed' || item.status === 'Processing') && !isExp) ||
         (rosterStatusFilter === 'Paid' && item.status === 'Paid') ||
         (rosterStatusFilter === 'Expired' && isExp) ||
         (rosterStatusFilter === 'Pending' && item.status === 'Pending' && !isExp) ||
@@ -2593,6 +2671,7 @@ const Payments: React.FC<PaymentsProps> = ({
                     className="w-full appearance-none pl-3 pr-8 py-2 rounded-xl bg-black/60 border border-purple-500/30 text-xs font-bold text-white focus:outline-none focus:border-purple-400 cursor-pointer"
                   >
                     <option value="All" className="bg-[#0e0518] text-white">Status: All</option>
+                    <option value="Unpaid" className="bg-[#0e0518] text-amber-300">Status: Unpaid (Pending + Failed)</option>
                     <option value="Paid" className="bg-[#0e0518] text-emerald-400">Status: Paid</option>
                     <option value="Pending" className="bg-[#0e0518] text-amber-400">Status: Pending</option>
                     <option value="Processing" className="bg-[#0e0518] text-blue-400">Status: Processing</option>
@@ -2617,6 +2696,33 @@ const Payments: React.FC<PaymentsProps> = ({
                   </button>
                 )}
 
+                {/* Sync with Razorpay Button in Roster Modal */}
+                <button
+                  type="button"
+                  disabled={isSyncingRoster}
+                  onClick={async () => {
+                    setIsSyncingRoster(true);
+                    showToast('Syncing payment records with Razorpay API...', 'info');
+                    try {
+                      const res = await syncPaymentStatusWithRazorpay(undefined, undefined, true);
+                      if (res.success && res.correctedCount && res.correctedCount > 0) {
+                        showToast(`Razorpay Sync Complete! Updated ${res.correctedCount} record(s) to Paid. 🎉`, 'success');
+                      } else {
+                        showToast('Razorpay Sync complete. All records are up to date.', 'info');
+                      }
+                    } catch (err: any) {
+                      showToast(err?.message || 'Failed to sync with Razorpay', 'error');
+                    } finally {
+                      setIsSyncingRoster(false);
+                    }
+                  }}
+                  className="flex-1 sm:flex-initial px-3 py-2 rounded-xl bg-purple-600/20 hover:bg-purple-600/35 text-purple-300 border border-purple-500/40 text-xs font-bold transition-all flex items-center justify-center gap-1.5 shadow-[0_0_15px_rgba(168,85,247,0.2)] shrink-0 cursor-pointer disabled:opacity-50"
+                  title="Sync and verify payment statuses directly with Razorpay"
+                >
+                  <RotateCcw className={`w-3.5 h-3.5 text-purple-400 ${isSyncingRoster ? 'animate-spin' : ''}`} />
+                  <span>{isSyncingRoster ? 'Syncing...' : 'Sync Razorpay'}</span>
+                </button>
+
                 {/* Dynamic CSV Download Button based on current filter */}
                 {(() => {
                   const filter = rosterStatusFilter || 'All';
@@ -2624,7 +2730,11 @@ const Payments: React.FC<PaymentsProps> = ({
                   let iconColorClass = 'text-purple-400';
                   let btnLabel = 'Download All CSV';
 
-                  if (filter === 'Paid') {
+                  if (filter === 'Unpaid') {
+                    btnColorClass = 'bg-amber-600/25 hover:bg-amber-600/35 text-amber-300 border-amber-500/50';
+                    iconColorClass = 'text-amber-400';
+                    btnLabel = 'Download Unpaid CSV';
+                  } else if (filter === 'Paid') {
                     btnColorClass = 'bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border-emerald-500/40';
                     iconColorClass = 'text-emerald-400';
                     btnLabel = 'Download Paid CSV';
@@ -4409,7 +4519,7 @@ const Payments: React.FC<PaymentsProps> = ({
 
       {/* Admin Edit Single Payment Record Modal */}
       {editSinglePayment && isAdminState && (
-        <div className="fixed inset-0 z-[130] bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200">
+        <div className="fixed inset-0 z-[135] bg-black/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-200">
           <form
             onSubmit={handleSaveEditSingle}
             className="bg-[#0e0518] border border-purple-500/50 rounded-3xl max-w-md w-full p-6 md:p-8 space-y-5 shadow-[0_0_60px_rgba(168,85,247,0.3)] relative max-h-[90vh] overflow-y-auto custom-scrollbar"
@@ -4534,7 +4644,7 @@ const Payments: React.FC<PaymentsProps> = ({
 
       {/* Admin Individual Payment Audit Log Modal */}
       {auditModalPayment && (
-        <div className="fixed inset-0 z-[130] bg-black/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-200">
+        <div className="fixed inset-0 z-[135] bg-black/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-200">
           <div className="bg-[#0e0518] border border-amber-500/40 rounded-2xl sm:rounded-3xl max-w-xl w-full p-4 sm:p-6 md:p-8 space-y-4 sm:space-y-5 shadow-[0_0_60px_rgba(245,158,11,0.25)] relative max-h-[92vh] overflow-y-auto custom-scrollbar mx-2 sm:mx-auto">
             <button
               onClick={() => {
@@ -4574,10 +4684,15 @@ const Payments: React.FC<PaymentsProps> = ({
                       showToast('Syncing status with Razorpay API...', 'info');
                       const res = await syncPaymentStatusWithRazorpay(auditModalPayment.id, auditModalPayment.razorpay_order_id);
                       if (res.updated && res.status === 'Paid') {
+                        setAuditModalPayment((prev) => (prev ? { ...prev, status: 'Paid' } : null));
                         showToast('Payment confirmed and updated to Paid in Firestore! 🎉', 'success');
                       } else if (res.status === 'Paid') {
+                        setAuditModalPayment((prev) => (prev ? { ...prev, status: 'Paid' } : null));
                         showToast('Payment is verified as Paid on Razorpay.', 'success');
                       } else {
+                        if (res.status) {
+                          setAuditModalPayment((prev) => (prev ? { ...prev, status: res.status as PaymentStatus } : null));
+                        }
                         showToast(`Sync complete. Status: ${res.status || auditModalPayment.status}`, 'info');
                       }
                     }}
