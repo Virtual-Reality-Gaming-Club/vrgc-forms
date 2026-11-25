@@ -47,6 +47,7 @@ import {
   PlusCircle,
   ExternalLink,
   ChevronRight,
+  ChevronDown,
   Receipt,
   X,
   FileText,
@@ -446,7 +447,11 @@ const Payments: React.FC<PaymentsProps> = ({
   const [editSingleDescription, setEditSingleDescription] = useState<string>('');
   const [editSingleDueDate, setEditSingleDueDate] = useState<string>('');
   const [editSingleDueTime, setEditSingleDueTime] = useState<string>('23:59');
+  const [editSingleStatus, setEditSingleStatus] = useState<PaymentStatus>('Pending');
+  const [editSinglePaymentId, setEditSinglePaymentId] = useState<string>('');
+  const [fetchingRazorpayId, setFetchingRazorpayId] = useState<boolean>(false);
   const [savingSingleEdit, setSavingSingleEdit] = useState<boolean>(false);
+  const [updatingManualStatusId, setUpdatingManualStatusId] = useState<string | null>(null);
 
   // Non-blocking Custom Delete Modal State
   const [deleteTarget, setDeleteTarget] = useState<{
@@ -716,6 +721,7 @@ const Payments: React.FC<PaymentsProps> = ({
   }, [userEmail, isAdminState, adminViewAll, isFacultyState]);
 
   // Periodically check and auto-expire stale "Processing" sessions (> 12 minutes)
+  // CRITICAL: Queries Razorpay API first. If captured on Razorpay -> Paid. If not paid & > 12 min -> Failed.
   useEffect(() => {
     const interval = setInterval(() => {
       setPayments((prevPayments) => {
@@ -732,18 +738,43 @@ const Payments: React.FC<PaymentsProps> = ({
         });
         return hasChanges ? updated : prevPayments;
       });
+
+      // Active Razorpay status lookup for any processing items exceeding 12 minutes
+      payments.forEach((p) => {
+        if (p.status === 'Processing') {
+          const lastUpdatedMs = parseTimestampMs(p.updated_at) || parseTimestampMs(p.created_at);
+          if (lastUpdatedMs > 0 && Date.now() - lastUpdatedMs >= 12 * 60 * 1000) {
+            syncPaymentStatusWithRazorpay(p.id, p.razorpay_order_id).then((res) => {
+              if (res.success && res.status && res.status !== 'Processing') {
+                setPayments((prev) =>
+                  prev.map((item) => (item.id === p.id ? { ...item, status: res.status as PaymentStatus } : item))
+                );
+              }
+            }).catch((err) => console.warn('Periodic Razorpay sync check error:', err));
+          }
+        }
+      });
     }, 30000); // Run check every 30 seconds
 
     return () => clearInterval(interval);
-  }, []);
+  }, [payments]);
 
-  // Auto-sync non-Paid payments with Razorpay API on load to fix any erroneous status in Firestore
+  // Auto-sync any Processing payments with Razorpay API on load
   useEffect(() => {
-    const hasUnpaid = payments.some((p) => p.status !== 'Paid');
-    if (hasUnpaid) {
-      syncPaymentStatusWithRazorpay(undefined, undefined, true).catch((err) =>
-        console.warn('Auto-sync Razorpay scanner check warning:', err)
-      );
+    const processingPayments = payments.filter((p) => p.status === 'Processing');
+    if (processingPayments.length > 0) {
+      processingPayments.forEach((p) => {
+        const lastUpdatedMs = parseTimestampMs(p.updated_at) || parseTimestampMs(p.created_at);
+        if (lastUpdatedMs > 0 && Date.now() - lastUpdatedMs >= 12 * 60 * 1000) {
+          syncPaymentStatusWithRazorpay(p.id, p.razorpay_order_id).then((res) => {
+            if (res.success && res.status && res.status !== 'Processing') {
+              setPayments((prev) =>
+                prev.map((item) => (item.id === p.id ? { ...item, status: res.status as PaymentStatus } : item))
+              );
+            }
+          }).catch((err) => console.warn('Auto-sync processing payment check warning:', err));
+        }
+      });
     }
   }, [payments.length]);
 
@@ -1191,6 +1222,203 @@ const Payments: React.FC<PaymentsProps> = ({
     }
   };
 
+  // Manual Status Change by SuperAdmin (marks Paid, Pending, or Failed)
+  // When marking Paid, auto-verifies directly with Razorpay API first to capture authentic pay_... ID and method
+  const handleManualStatusChange = async (
+    item: PaymentItem,
+    newStatus: PaymentStatus,
+    explicitPaymentId?: string
+  ) => {
+    if (!isAdminState || !item) return;
+
+    // Don't no-op if already Paid but has a synthetic manual_ ID, because the user wants to auto-verify & fetch the real Razorpay pay_... ID!
+    if (
+      item.status === newStatus &&
+      !explicitPaymentId &&
+      !(newStatus === 'Paid' && (!item.razorpay_payment_id || item.razorpay_payment_id.startsWith('manual_')))
+    ) {
+      return;
+    }
+
+    setUpdatingManualStatusId(item.id);
+    const nowIso = new Date().toISOString();
+
+    let updates: Partial<PaymentItem> = {
+      status: newStatus,
+    };
+
+    if (newStatus === 'Paid') {
+      let resolvedPaymentId =
+        explicitPaymentId?.trim() ||
+        (item.razorpay_payment_id && !item.razorpay_payment_id.startsWith('manual_')
+          ? item.razorpay_payment_id
+          : '');
+      let resolvedMethod =
+        item.payment_method && !item.payment_method.includes('Manual')
+          ? item.payment_method
+          : '';
+      let resolvedPaidAt = item.paid_at || '';
+      let verifiedViaRazorpay = false;
+
+      // Auto-verify with Razorpay if not already confirmed pay_ ID, or if explicit ID was passed, or if it had a synthetic manual_ ID
+      if (
+        !resolvedPaymentId ||
+        explicitPaymentId ||
+        item.razorpay_payment_id?.startsWith('manual_') ||
+        item.status !== 'Paid'
+      ) {
+        try {
+          showToast(`Verifying payment with Razorpay for ${item.candidate_name || item.user_email}...`, 'info');
+          const syncRes = await syncPaymentStatusWithRazorpay(
+            item.id,
+            item.razorpay_order_id,
+            false,
+            explicitPaymentId?.trim() || undefined
+          );
+
+          if (syncRes.success && (syncRes.status === 'Paid' || syncRes.razorpay_payment_id)) {
+            if (syncRes.razorpay_payment_id) {
+              resolvedPaymentId = syncRes.razorpay_payment_id;
+              verifiedViaRazorpay = true;
+            }
+            if (syncRes.payment_method) {
+              resolvedMethod = syncRes.payment_method;
+            }
+            if (syncRes.paid_at) {
+              resolvedPaidAt = syncRes.paid_at;
+            }
+          }
+        } catch (syncErr) {
+          console.warn('Razorpay auto-verification query error:', syncErr);
+        }
+      }
+
+      if (resolvedPaymentId && verifiedViaRazorpay) {
+        updates = {
+          ...updates,
+          status: 'Paid',
+          paid_at: resolvedPaidAt || nowIso,
+          payment_method: resolvedMethod || 'Razorpay (Online)',
+          razorpay_payment_id: resolvedPaymentId,
+          error_description: '',
+        };
+        showToast(`Verified with Razorpay! Captured Txn ID: ${resolvedPaymentId} 🎉`, 'success');
+      } else if (resolvedPaymentId) {
+        updates = {
+          ...updates,
+          status: 'Paid',
+          paid_at: resolvedPaidAt || item.paid_at || nowIso,
+          payment_method: resolvedMethod || item.payment_method || 'Manual Verification (Admin)',
+          razorpay_payment_id: resolvedPaymentId,
+          error_description: '',
+        };
+        showToast(`Marked as Paid with ID: ${resolvedPaymentId} ✅`, 'success');
+      } else {
+        // Fallback when no Razorpay record exists (e.g. offline cash payment)
+        updates = {
+          ...updates,
+          status: 'Paid',
+          paid_at: resolvedPaidAt || item.paid_at || nowIso,
+          payment_method: resolvedMethod || item.payment_method || 'Manual Verification (Admin)',
+          razorpay_payment_id: `manual_${Date.now()}`,
+          error_description: '',
+        };
+        showToast(`No online Razorpay transaction found for candidate. Marked as Manually Verified.`, 'info');
+      }
+    } else if (newStatus === 'Pending') {
+      updates = {
+        ...updates,
+        paid_at: '',
+        error_description: '',
+      };
+    } else if (newStatus === 'Failed') {
+      updates = {
+        ...updates,
+        failed_at: item.failed_at || nowIso,
+        error_description: 'Marked as failed by admin',
+      };
+    } else if (newStatus === 'Processing') {
+      updates = {
+        ...updates,
+        error_description: '',
+      };
+    }
+
+    try {
+      const ok = await updatePaymentStatusInFirestore(item.id, updates);
+
+      if (ok) {
+        const txStatus: 'Paid' | 'Failed' | 'Pending' | 'Processing' | 'Cancelled' =
+          newStatus === 'Expired' ? 'Failed' : newStatus;
+
+        // Save transaction attempt log for audit trail
+        saveTransactionToFirestore({
+          payment_id: item.id,
+          user_email: item.user_email,
+          candidate_name: item.candidate_name,
+          registration_number: item.registration_number,
+          team: item.team,
+          payment_title: item.title,
+          amount: item.amount,
+          currency: item.currency || 'INR',
+          status: txStatus,
+          paid_at: updates.paid_at,
+          failed_at: updates.failed_at,
+          payment_method: updates.payment_method,
+          razorpay_payment_id: updates.razorpay_payment_id,
+          error_description: newStatus === 'Paid'
+            ? (updates.payment_method?.includes('Manual')
+                ? 'Manually verified and marked Paid by SuperAdmin'
+                : 'Auto-verified with Razorpay API and marked Paid by SuperAdmin')
+            : newStatus === 'Failed'
+            ? 'Marked as Failed by SuperAdmin'
+            : `Status changed to ${newStatus} by SuperAdmin`,
+        }).catch((e) => console.warn('Manual status tx log warning:', e));
+
+        // Optimistically update local payments state
+        setPayments((prev) =>
+          prev.map((p) => (p.id === item.id ? { ...p, ...updates } : p))
+        );
+
+        // Update activeRosterCampaign items if open
+        if (activeRosterCampaign) {
+          setActiveRosterCampaign((prev) =>
+            prev
+              ? recalculateCampaignGroup(
+                  prev,
+                  prev.items.map((p) => (p.id === item.id ? { ...p, ...updates } : p))
+                )
+              : null
+          );
+        }
+
+        // Update audit modal if open for this item
+        if (auditModalPayment && auditModalPayment.id === item.id) {
+          setAuditModalPayment((prev) => (prev ? { ...prev, ...updates } : null));
+        }
+
+        // Log admin audit action
+        logAdminAction({
+          adminEmail: userEmail || 'admin',
+          action: 'EDIT_INVOICE_SINGLE',
+          targetEmail: item.user_email,
+          details: `Manually changed invoice status to "${newStatus}" for ${item.candidate_name || item.user_email} (Campaign: ${item.title}, Ref: ${updates.razorpay_payment_id || 'N/A'})`,
+        });
+
+        if (newStatus !== 'Paid') {
+          showToast(`Status updated to "${newStatus}" for ${item.candidate_name || item.user_email}! ✅`, 'success');
+        }
+      } else {
+        showToast('Failed to update status in database.', 'error');
+      }
+    } catch (err: any) {
+      console.error('Error updating status manually:', err);
+      showToast(err.message || 'Error updating status', 'error');
+    } finally {
+      setUpdatingManualStatusId(null);
+    }
+  };
+
   // Open Edit Single Payment Modal
   const handleOpenEditSingle = (payment: PaymentItem) => {
     const { date, time } = splitDueDateTime(payment.due_date);
@@ -1199,6 +1427,37 @@ const Payments: React.FC<PaymentsProps> = ({
     setEditSingleDescription(payment.description || '');
     setEditSingleDueDate(date);
     setEditSingleDueTime(time);
+    setEditSingleStatus(payment.status || 'Pending');
+    setEditSinglePaymentId(payment.razorpay_payment_id || '');
+  };
+
+  // Auto-fetch authentic Razorpay payment ID for Edit Single Modal
+  const handleAutoFetchRazorpayId = async () => {
+    if (!editSinglePayment) return;
+    setFetchingRazorpayId(true);
+    showToast(`Checking Razorpay API for ${editSinglePayment.candidate_name || editSinglePayment.user_email}...`, 'info');
+    try {
+      const syncRes = await syncPaymentStatusWithRazorpay(
+        editSinglePayment.id,
+        editSinglePayment.razorpay_order_id,
+        false,
+        editSinglePaymentId.trim() || undefined
+      );
+
+      if (syncRes.success && (syncRes.status === 'Paid' || syncRes.razorpay_payment_id)) {
+        if (syncRes.razorpay_payment_id) {
+          setEditSinglePaymentId(syncRes.razorpay_payment_id);
+        }
+        setEditSingleStatus('Paid');
+        showToast(`Found captured payment on Razorpay! ID: ${syncRes.razorpay_payment_id || 'Captured'} 🎉`, 'success');
+      } else {
+        showToast('No captured Razorpay payment found for this member yet.', 'info');
+      }
+    } catch (err: any) {
+      showToast(err?.message || 'Error checking Razorpay API', 'error');
+    } finally {
+      setFetchingRazorpayId(false);
+    }
   };
 
   // Save Edit Single Payment
@@ -1216,6 +1475,7 @@ const Payments: React.FC<PaymentsProps> = ({
       const finalIsoDueDate = formatDueDateTimeToIso(editSingleDueDate, editSingleDueTime);
       const cleanTitle = editSingleTitle.trim();
       const cleanDesc = editSingleDescription.trim();
+      const cleanPaymentId = editSinglePaymentId.trim();
 
       const ok = await updateInvoiceDetailsInFirestore(editSinglePayment.id, {
         title: cleanTitle,
@@ -1224,6 +1484,14 @@ const Payments: React.FC<PaymentsProps> = ({
       });
 
       if (ok) {
+        // If status or payment ID was changed/entered, apply manual status update
+        if (
+          editSingleStatus !== editSinglePayment.status ||
+          cleanPaymentId !== (editSinglePayment.razorpay_payment_id || '')
+        ) {
+          await handleManualStatusChange(editSinglePayment, editSingleStatus, cleanPaymentId || undefined);
+        }
+
         setPayments((prev) =>
           prev.map((p) =>
             p.id === editSinglePayment.id
@@ -1232,6 +1500,7 @@ const Payments: React.FC<PaymentsProps> = ({
                   title: cleanTitle,
                   description: cleanDesc,
                   due_date: finalIsoDueDate,
+                  ...(cleanPaymentId ? { razorpay_payment_id: cleanPaymentId } : {}),
                 }
               : p
           )
@@ -1248,6 +1517,7 @@ const Payments: React.FC<PaymentsProps> = ({
                           title: cleanTitle,
                           description: cleanDesc,
                           due_date: finalIsoDueDate,
+                          ...(cleanPaymentId ? { razorpay_payment_id: cleanPaymentId } : {}),
                         }
                       : item
                   )
@@ -1267,6 +1537,7 @@ const Payments: React.FC<PaymentsProps> = ({
                           title: cleanTitle,
                           description: cleanDesc,
                           due_date: finalIsoDueDate,
+                          ...(cleanPaymentId ? { razorpay_payment_id: cleanPaymentId } : {}),
                         }
                       : item
                   )
@@ -1868,6 +2139,49 @@ const Payments: React.FC<PaymentsProps> = ({
     }
   };
 
+  // Interactive SuperAdmin Status Selector (Desktop + Mobile Responsive)
+  const renderAdminStatusSelect = (item: PaymentItem) => {
+    if (!isAdminState) {
+      return renderStatusBadge(isInvoiceExpired(item) ? 'Expired' : paymentStatusToString(item.status));
+    }
+
+    const isUpdating = updatingManualStatusId === item.id;
+    const currentStatus = item.status || 'Pending';
+    const expired = isInvoiceExpired(item);
+
+    return (
+      <div className="relative inline-flex items-center">
+        <select
+          value={currentStatus}
+          disabled={isUpdating}
+          onChange={(e) => handleManualStatusChange(item, e.target.value as PaymentStatus)}
+          className={`appearance-none cursor-pointer pl-2.5 pr-6 py-1 rounded-full text-[10px] sm:text-xs font-bold border transition-all focus:outline-none focus:ring-1 focus:ring-purple-400 disabled:opacity-50 select-none ${
+            currentStatus === 'Paid'
+              ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-400 hover:bg-emerald-500/25'
+              : currentStatus === 'Processing'
+              ? 'bg-blue-500/15 border-blue-500/40 text-blue-400 hover:bg-blue-500/25'
+              : currentStatus === 'Failed'
+              ? 'bg-rose-500/15 border-rose-500/40 text-rose-400 hover:bg-rose-500/25'
+              : expired
+              ? 'bg-rose-500/10 border-rose-500/30 text-rose-300 hover:bg-rose-500/20'
+              : 'bg-amber-500/15 border-amber-500/40 text-amber-400 hover:bg-amber-500/25'
+          }`}
+          title="SuperAdmin: Click to manually change status"
+        >
+          <option value="Paid" className="bg-[#180a2b] text-emerald-400">🟢 Paid</option>
+          <option value="Pending" className="bg-[#180a2b] text-amber-400">🟡 Pending</option>
+          <option value="Processing" className="bg-[#180a2b] text-blue-400">🔵 Processing</option>
+          <option value="Failed" className="bg-[#180a2b] text-rose-400">🔴 Failed</option>
+        </select>
+        {isUpdating ? (
+          <RotateCcw className="w-3 h-3 text-purple-400 animate-spin absolute right-1.5 pointer-events-none" />
+        ) : (
+          <ChevronDown className="w-3 h-3 text-slate-400 absolute right-1.5 pointer-events-none" />
+        )}
+      </div>
+    );
+  };
+
   return (
     <div className="flex-1 w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8 text-[#e2e8f0]">
       {/* Toast Notification */}
@@ -1983,11 +2297,16 @@ const Payments: React.FC<PaymentsProps> = ({
                 <button
                   onClick={async () => {
                     showToast('Syncing all payment records with Razorpay API...', 'info');
-                    const res = await syncPaymentStatusWithRazorpay(undefined, undefined, true);
-                    if (res.success && res.correctedCount && res.correctedCount > 0) {
-                      showToast(`Razorpay Sync Complete! Updated ${res.correctedCount} record(s) to Paid. 🎉`, 'success');
-                    } else {
-                      showToast('Razorpay Sync complete. All records are up to date.', 'info');
+                    try {
+                      const res = await syncPaymentStatusWithRazorpay(undefined, undefined, true);
+                      if (res.success && res.correctedCount && res.correctedCount > 0) {
+                        showToast(`Razorpay Sync Complete! Updated ${res.correctedCount} record(s) with authentic Razorpay details. 🎉`, 'success');
+                      } else {
+                        showToast('Razorpay Sync complete. All records are up to date.', 'info');
+                      }
+                      await loadPayments(userEmail, (isAdminState && adminViewAll) || isFacultyState);
+                    } catch (err: any) {
+                      showToast(err?.message || 'Error syncing with Razorpay', 'error');
                     }
                   }}
                   className="px-2.5 py-2 rounded-lg bg-purple-600/20 hover:bg-purple-600/35 text-purple-300 border border-purple-500/40 text-[11px] sm:text-xs font-bold transition-all flex items-center justify-center gap-1 shadow-[0_0_15px_rgba(168,85,247,0.2)] whitespace-nowrap"
@@ -2706,10 +3025,11 @@ const Payments: React.FC<PaymentsProps> = ({
                     try {
                       const res = await syncPaymentStatusWithRazorpay(undefined, undefined, true);
                       if (res.success && res.correctedCount && res.correctedCount > 0) {
-                        showToast(`Razorpay Sync Complete! Updated ${res.correctedCount} record(s) to Paid. 🎉`, 'success');
+                        showToast(`Razorpay Sync Complete! Updated ${res.correctedCount} record(s) with authentic Razorpay details. 🎉`, 'success');
                       } else {
                         showToast('Razorpay Sync complete. All records are up to date.', 'info');
                       }
+                      await loadPayments(userEmail, (isAdminState && adminViewAll) || isFacultyState);
                     } catch (err: any) {
                       showToast(err?.message || 'Failed to sync with Razorpay', 'error');
                     } finally {
@@ -2795,19 +3115,38 @@ const Payments: React.FC<PaymentsProps> = ({
                               <p className="text-[10px] text-slate-400 font-mono truncate" title={email}>{email}</p>
                             </div>
                             <div className="shrink-0">
-                              {renderStatusBadge(isInvoiceExpired(item) ? 'Expired' : paymentStatusToString(item.status))}
+                              {renderAdminStatusSelect(item)}
                             </div>
                           </div>
                           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-2.5 border-t border-white/5 text-[10px]">
                             <div className="font-mono min-w-0">
                               {item.status === 'Paid' && item.paid_at ? (
-                                <div className="flex items-center gap-1.5 flex-wrap text-[10px] text-emerald-400">
-                                  <span className="font-bold font-mono truncate max-w-[140px]" title={item.razorpay_payment_id || 'Paid'}>
-                                    {item.razorpay_payment_id || 'Paid'}
-                                  </span>
-                                  <span className="text-[9px] text-slate-500 shrink-0">
-                                    {new Date(item.paid_at).toLocaleDateString('en-IN')}
-                                  </span>
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <button
+                                    type="button"
+                                    onClick={() => setReceiptModalPayment(item)}
+                                    className="flex items-center gap-1.5 flex-wrap text-[10px] text-emerald-400 hover:underline cursor-pointer text-left"
+                                    title="Click to view & download official receipt"
+                                  >
+                                    <Receipt className="w-3 h-3 text-emerald-400 shrink-0" />
+                                    <span className="font-bold font-mono truncate max-w-[140px]" title={item.razorpay_payment_id || 'Paid'}>
+                                      {item.razorpay_payment_id || 'Paid'}
+                                    </span>
+                                    <span className="text-[9px] text-slate-500 shrink-0">
+                                      {new Date(item.paid_at).toLocaleDateString('en-IN')}
+                                    </span>
+                                  </button>
+                                  {isAdminState && item.razorpay_payment_id?.startsWith('manual_') && (
+                                    <button
+                                      type="button"
+                                      disabled={updatingManualStatusId === item.id}
+                                      onClick={() => handleManualStatusChange(item, 'Paid')}
+                                      className="p-1 rounded text-purple-300 hover:text-white bg-purple-500/20 hover:bg-purple-500/40 border border-purple-500/30 text-[9px] font-bold transition-all"
+                                      title="Auto-verify with Razorpay to fetch real pay_... transaction ID"
+                                    >
+                                      <RotateCcw className={`w-3 h-3 ${updatingManualStatusId === item.id ? 'animate-spin' : ''}`} />
+                                    </button>
+                                  )}
                                 </div>
                               ) : (
                                 <span className="text-amber-400 font-bold">Unpaid</span>
@@ -2885,17 +3224,39 @@ const Payments: React.FC<PaymentsProps> = ({
                                 {email}
                               </td>
                               <td className="p-3.5 font-sans whitespace-nowrap">
-                                {renderStatusBadge(isInvoiceExpired(item) ? 'Expired' : paymentStatusToString(item.status))}
+                                {renderAdminStatusSelect(item)}
                               </td>
                               <td className="p-3.5 text-right whitespace-nowrap font-mono">
                                 {item.status === 'Paid' && item.paid_at ? (
-                                  <div className="text-[11px] text-emerald-400 font-mono">
-                                    <div className="truncate max-w-[140px] inline-block" title={item.razorpay_payment_id || 'Paid'}>
-                                      {item.razorpay_payment_id || 'Paid'}
-                                    </div>
-                                    <div className="text-[9px] text-slate-400">
-                                      {new Date(item.paid_at).toLocaleDateString('en-IN')}
-                                    </div>
+                                  <div className="flex items-center justify-end gap-1.5">
+                                    <button
+                                      type="button"
+                                      onClick={() => setReceiptModalPayment(item)}
+                                      className="text-right group/receipt hover:bg-emerald-500/10 p-1.5 rounded-lg transition-colors cursor-pointer block"
+                                      title="Click to view & download official receipt"
+                                    >
+                                      <div className="flex items-center justify-end gap-1 text-[11px] text-emerald-400 font-mono">
+                                        <Receipt className="w-3 h-3 text-emerald-400 group-hover/receipt:scale-110 transition-transform shrink-0" />
+                                        <span className="truncate max-w-[130px] underline decoration-emerald-500/30 underline-offset-2" title={item.razorpay_payment_id || 'Paid'}>
+                                          {item.razorpay_payment_id || 'Paid'}
+                                        </span>
+                                      </div>
+                                      <div className="text-[9px] text-slate-400">
+                                        {new Date(item.paid_at).toLocaleDateString('en-IN')}
+                                      </div>
+                                    </button>
+                                    {isAdminState && item.razorpay_payment_id?.startsWith('manual_') && (
+                                      <button
+                                        type="button"
+                                        disabled={updatingManualStatusId === item.id}
+                                        onClick={() => handleManualStatusChange(item, 'Paid')}
+                                        className="p-1.5 rounded-lg text-purple-300 hover:text-white bg-purple-500/20 hover:bg-purple-500/40 border border-purple-500/30 text-[10px] font-bold transition-all inline-flex items-center gap-1"
+                                        title="Auto-verify with Razorpay to fetch real pay_... transaction ID"
+                                      >
+                                        <RotateCcw className={`w-3 h-3 ${updatingManualStatusId === item.id ? 'animate-spin' : ''}`} />
+                                        <span className="text-[9px]">Verify</span>
+                                      </button>
+                                    )}
                                   </div>
                                 ) : (
                                   <span className="text-amber-400 text-[11px]">Unpaid</span>
@@ -3313,155 +3674,210 @@ const Payments: React.FC<PaymentsProps> = ({
       {/* Helper type function */}
       {/* Premium Digital Receipt Modal */}
       <AnimatePresence>
-        {receiptModalPayment && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[120] bg-black/80 backdrop-blur-md flex items-center justify-center p-4"
-          >
+        {receiptModalPayment && (() => {
+          const isManualVerified = Boolean(
+            receiptModalPayment.payment_method?.includes('Manual') ||
+            receiptModalPayment.razorpay_payment_id?.startsWith('manual_')
+          );
+          const receiptCandidateName =
+            receiptModalPayment.candidate_name ||
+            membersMap.get(receiptModalPayment.user_email?.toLowerCase() || '')?.name;
+          const receiptRegNo =
+            receiptModalPayment.registration_number ||
+            membersMap.get(receiptModalPayment.user_email?.toLowerCase() || '')?.regNo;
+
+          return (
             <motion.div
-              initial={{ scale: 0.9, opacity: 0, y: 20 }}
-              animate={{ scale: 1, opacity: 1, y: 0 }}
-              exit={{ scale: 0.9, opacity: 0, y: 20 }}
-              transition={{ type: "spring", damping: 25, stiffness: 300 }}
-              className="bg-gradient-to-b from-[#1a0f2e] to-[#0e0518] border border-purple-500/30 rounded-[2rem] max-w-md w-full p-1 relative shadow-[0_0_80px_rgba(168,85,247,0.15)] overflow-hidden"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 z-[120] bg-black/80 backdrop-blur-md flex items-center justify-center p-4"
             >
-              {/* Background ambient glow */}
-              <div className="absolute top-0 left-1/2 -translate-x-1/2 w-full h-1/2 bg-emerald-500/20 blur-[80px] rounded-full pointer-events-none"></div>
+              <motion.div
+                initial={{ scale: 0.9, opacity: 0, y: 20 }}
+                animate={{ scale: 1, opacity: 1, y: 0 }}
+                exit={{ scale: 0.9, opacity: 0, y: 20 }}
+                transition={{ type: "spring", damping: 25, stiffness: 300 }}
+                className="bg-gradient-to-b from-[#1a0f2e] to-[#0e0518] border border-purple-500/30 rounded-[2rem] max-w-md w-full p-1 relative shadow-[0_0_80px_rgba(168,85,247,0.15)] overflow-hidden"
+              >
+                {/* Background ambient glow */}
+                <div className={`absolute top-0 left-1/2 -translate-x-1/2 w-full h-1/2 blur-[80px] rounded-full pointer-events-none ${
+                  isManualVerified ? 'bg-purple-500/20' : 'bg-emerald-500/20'
+                }`}></div>
 
-              <div className="bg-[#0e0518]/90 backdrop-blur-xl rounded-[1.8rem] p-8 relative z-10">
-                <button
-                  onClick={() => setReceiptModalPayment(null)}
-                  className="absolute top-4 right-4 p-2 text-slate-400 hover:text-white rounded-full hover:bg-white/10 transition-all"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-
-                {/* Success Header */}
-                <div className="text-center space-y-4 mb-8">
-                  <motion.div
-                    initial={{ scale: 0 }}
-                    animate={{ scale: 1 }}
-                    transition={{ type: "spring", damping: 15, stiffness: 200, delay: 0.2 }}
-                    className="w-20 h-20 rounded-full bg-emerald-500/10 border border-emerald-500/40 flex items-center justify-center mx-auto text-emerald-400 shadow-[0_0_30px_rgba(16,185,129,0.3)] relative"
-                  >
-                    <motion.div
-                      animate={{ opacity: [0.5, 1, 0.5], scale: [1, 1.2, 1] }}
-                      transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
-                      className="absolute inset-0 rounded-full bg-emerald-500/20 blur-md"
-                    ></motion.div>
-                    <CheckCircle2 className="w-10 h-10 relative z-10" />
-                  </motion.div>
-
-                  <div>
-                    <h3 className="text-3xl font-black text-transparent bg-clip-text bg-gradient-to-r from-emerald-400 to-teal-200">
-                      Payment Successful
-                    </h3>
-                    <p className="text-xs text-emerald-400/80 font-mono tracking-widest uppercase mt-2">
-                      Transaction Verified & Synced
-                    </p>
-                  </div>
-                </div>
-
-                {/* Digital Ticket / Receipt Details */}
-                <div className="relative">
-                  {/* Dashed line separator mimicking a ticket */}
-                  <div className="absolute -top-4 -left-8 -right-8 border-t-2 border-dashed border-white/10"></div>
-
-                  <div className="space-y-4 bg-black/40 border border-white/5 rounded-2xl p-5 text-sm mt-4 relative overflow-hidden">
-                    {/* Subtle watermark */}
-                    <div className="absolute -bottom-8 -right-8 opacity-5 rotate-12 pointer-events-none">
-                      <CheckCircle2 className="w-48 h-48 text-white" />
-                    </div>
-
-                    <div className="flex flex-col gap-1 pb-3 border-b border-white/5">
-                      <span className="text-[10px] text-slate-500 font-bold tracking-wider uppercase">Item / Campaign</span>
-                      <span className="text-white font-semibold">{receiptModalPayment.title}</span>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-4 pb-3 border-b border-white/5">
-                      <div className="flex flex-col gap-1">
-                        <span className="text-[10px] text-slate-500 font-bold tracking-wider uppercase">Amount Paid</span>
-                        <span className="text-emerald-400 font-black text-lg">
-                          ₹{Number(receiptModalPayment.amount).toLocaleString('en-IN')}
-                        </span>
-                      </div>
-                      <div className="flex flex-col gap-1 text-right">
-                        <span className="text-[10px] text-slate-500 font-bold tracking-wider uppercase">Category</span>
-                        <span className="text-purple-300 font-medium">{receiptModalPayment.category}</span>
-                      </div>
-                    </div>
-
-                    <div className="space-y-2 pt-1">
-                      <div className="flex justify-between items-center">
-                        <span className="text-[10px] text-slate-500 font-bold tracking-wider uppercase">Payer</span>
-                        <span className="text-slate-300 font-mono text-xs">{receiptModalPayment.user_email || 'N/A'}</span>
-                      </div>
-                      <div className="flex justify-between items-center">
-                        <span className="text-[10px] text-slate-500 font-bold tracking-wider uppercase">Txn ID</span>
-                        <span className="text-slate-400 font-mono text-[10px] bg-white/5 px-2 py-1 rounded">
-                          {receiptModalPayment.razorpay_payment_id || 'N/A'}
-                        </span>
-                      </div>
-                      <div className="flex justify-between items-center">
-                        <span className="text-[10px] text-slate-500 font-bold tracking-wider uppercase">Invoice Generated</span>
-                        <span className="text-slate-300 text-xs font-mono">
-                          {receiptModalPayment.created_at
-                            ? new Date(receiptModalPayment.created_at).toLocaleString('en-IN', {
-                              day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true
-                            })
-                            : 'N/A'}
-                        </span>
-                      </div>
-                      <div className="flex justify-between items-center">
-                        <span className="text-[10px] text-purple-300 font-bold tracking-wider uppercase">Payment Due Date</span>
-                        <span className="text-purple-200 text-xs font-mono">
-                          {receiptModalPayment.due_date
-                            ? new Date(receiptModalPayment.due_date).toLocaleDateString('en-IN', {
-                              day: 'numeric', month: 'short', year: 'numeric'
-                            })
-                            : 'No Due Date'}
-                        </span>
-                      </div>
-                      <div className="flex justify-between items-center">
-                        <span className="text-[10px] text-emerald-400 font-bold tracking-wider uppercase">Paid On</span>
-                        <span className="text-emerald-300 text-xs font-mono font-medium">
-                          {receiptModalPayment.paid_at
-                            ? new Date(receiptModalPayment.paid_at).toLocaleString('en-IN', {
-                              day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true
-                            })
-                            : 'N/A'}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Actions */}
-                <div className="flex gap-3 mt-8">
-                  <motion.button
-                    whileHover={{ scale: 1.02 }}
-                    whileTap={{ scale: 0.98 }}
-                    onClick={() => window.print()}
-                    className="flex-1 py-3.5 rounded-xl border border-white/10 hover:bg-white/5 text-white font-bold text-sm transition-colors flex items-center justify-center gap-2"
-                  >
-                    <Download className="w-4 h-4" />
-                    Download
-                  </motion.button>
-                  <motion.button
-                    whileHover={{ scale: 1.02 }}
-                    whileTap={{ scale: 0.98 }}
+                <div className="bg-[#0e0518]/90 backdrop-blur-xl rounded-[1.8rem] p-6 sm:p-8 relative z-10 max-h-[90vh] overflow-y-auto custom-scrollbar">
+                  <button
                     onClick={() => setReceiptModalPayment(null)}
-                    className="flex-1 py-3.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-white font-bold text-sm shadow-[0_0_20px_rgba(16,185,129,0.3)] transition-all"
+                    className="absolute top-4 right-4 p-2 text-slate-400 hover:text-white rounded-full hover:bg-white/10 transition-all cursor-pointer"
                   >
-                    Done
-                  </motion.button>
+                    <X className="w-5 h-5" />
+                  </button>
+
+                  {/* Success Header */}
+                  <div className="text-center space-y-4 mb-6">
+                    <motion.div
+                      initial={{ scale: 0 }}
+                      animate={{ scale: 1 }}
+                      transition={{ type: "spring", damping: 15, stiffness: 200, delay: 0.2 }}
+                      className={`w-20 h-20 rounded-full border flex items-center justify-center mx-auto relative ${
+                        isManualVerified
+                          ? 'bg-purple-500/10 border-purple-500/40 text-purple-400 shadow-[0_0_30px_rgba(168,85,247,0.3)]'
+                          : 'bg-emerald-500/10 border-emerald-500/40 text-emerald-400 shadow-[0_0_30px_rgba(16,185,129,0.3)]'
+                      }`}
+                    >
+                      <motion.div
+                        animate={{ opacity: [0.5, 1, 0.5], scale: [1, 1.2, 1] }}
+                        transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
+                        className={`absolute inset-0 rounded-full blur-md ${
+                          isManualVerified ? 'bg-purple-500/20' : 'bg-emerald-500/20'
+                        }`}
+                      ></motion.div>
+                      <CheckCircle2 className="w-10 h-10 relative z-10" />
+                    </motion.div>
+
+                    <div>
+                      <h3 className="text-2xl sm:text-3xl font-black text-transparent bg-clip-text bg-gradient-to-r from-emerald-400 via-teal-200 to-white">
+                        Payment Successful
+                      </h3>
+                      <p className={`text-xs font-mono tracking-widest uppercase mt-2 font-bold ${
+                        isManualVerified ? 'text-purple-300' : 'text-emerald-400/80'
+                      }`}>
+                        {isManualVerified ? '🛡️ Manually Verified by SuperAdmin' : '⚡ Automatic Gateway Verified'}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Digital Ticket / Receipt Details */}
+                  <div className="relative">
+                    {/* Dashed line separator mimicking a ticket */}
+                    <div className="absolute -top-3 -left-8 -right-8 border-t-2 border-dashed border-white/10"></div>
+
+                    <div className="space-y-3.5 bg-black/40 border border-white/5 rounded-2xl p-4 sm:p-5 text-sm mt-3 relative overflow-hidden">
+                      {/* Subtle watermark */}
+                      <div className="absolute -bottom-8 -right-8 opacity-5 rotate-12 pointer-events-none">
+                        <CheckCircle2 className="w-48 h-48 text-white" />
+                      </div>
+
+                      <div className="flex flex-col gap-0.5 pb-2.5 border-b border-white/5">
+                        <span className="text-[10px] text-slate-500 font-bold tracking-wider uppercase">Item / Campaign</span>
+                        <span className="text-white font-semibold text-xs sm:text-sm">{receiptModalPayment.title}</span>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-3 pb-2.5 border-b border-white/5">
+                        <div className="flex flex-col gap-0.5">
+                          <span className="text-[10px] text-slate-500 font-bold tracking-wider uppercase">Amount Paid</span>
+                          <span className="text-emerald-400 font-black text-lg">
+                            ₹{Number(receiptModalPayment.amount).toLocaleString('en-IN')}
+                          </span>
+                        </div>
+                        <div className="flex flex-col gap-0.5 text-right">
+                          <span className="text-[10px] text-slate-500 font-bold tracking-wider uppercase">Category</span>
+                          <span className="text-purple-300 font-medium text-xs">{receiptModalPayment.category}</span>
+                        </div>
+                      </div>
+
+                      <div className="space-y-2 text-xs">
+                        {receiptCandidateName && (
+                          <div className="flex justify-between items-center gap-2">
+                            <span className="text-[10px] text-slate-500 font-bold tracking-wider uppercase shrink-0">Member Name</span>
+                            <span className="text-white font-medium truncate max-w-[210px] text-right">{receiptCandidateName}</span>
+                          </div>
+                        )}
+                        {receiptRegNo && (
+                          <div className="flex justify-between items-center gap-2">
+                            <span className="text-[10px] text-slate-500 font-bold tracking-wider uppercase shrink-0">Reg No</span>
+                            <span className="text-purple-300 font-mono text-[11px]">{receiptRegNo}</span>
+                          </div>
+                        )}
+                        <div className="flex justify-between items-center gap-2">
+                          <span className="text-[10px] text-slate-500 font-bold tracking-wider uppercase shrink-0">Payer Email</span>
+                          <span className="text-slate-300 font-mono text-[11px] truncate max-w-[210px] text-right">{receiptModalPayment.user_email || 'N/A'}</span>
+                        </div>
+                        <div className="flex justify-between items-center gap-2">
+                          <span className="text-[10px] text-slate-500 font-bold tracking-wider uppercase shrink-0">Verification</span>
+                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded border ${
+                            isManualVerified
+                              ? 'bg-purple-500/20 text-purple-300 border-purple-500/40'
+                              : 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+                          }`}>
+                            {isManualVerified ? '🛡️ Manual Verification (SuperAdmin)' : '⚡ Automatic Gateway Verified'}
+                          </span>
+                        </div>
+                        <div className="flex justify-between items-center gap-2">
+                          <span className="text-[10px] text-slate-500 font-bold tracking-wider uppercase shrink-0">Payment Method</span>
+                          <span className="text-slate-300 text-[11px] font-mono truncate max-w-[210px] text-right">
+                            {receiptModalPayment.payment_method || (isManualVerified ? 'Manual Verification (Admin)' : 'Razorpay Online')}
+                          </span>
+                        </div>
+                        <div className="flex justify-between items-center gap-2">
+                          <span className="text-[10px] text-slate-500 font-bold tracking-wider uppercase shrink-0">Txn / Ref ID</span>
+                          <span className="text-slate-400 font-mono text-[10px] bg-white/5 px-2 py-0.5 rounded truncate max-w-[190px]">
+                            {receiptModalPayment.razorpay_payment_id || 'N/A'}
+                          </span>
+                        </div>
+                        <div className="flex justify-between items-center gap-2">
+                          <span className="text-[10px] text-slate-500 font-bold tracking-wider uppercase shrink-0">Invoice Issued</span>
+                          <span className="text-slate-300 text-[11px] font-mono text-right">
+                            {receiptModalPayment.created_at
+                              ? new Date(receiptModalPayment.created_at).toLocaleString('en-IN', {
+                                day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true
+                              })
+                              : 'N/A'}
+                          </span>
+                        </div>
+                        <div className="flex justify-between items-center gap-2">
+                          <span className="text-[10px] text-purple-300 font-bold tracking-wider uppercase shrink-0">Due Date</span>
+                          <span className="text-purple-200 text-[11px] font-mono text-right">
+                            {receiptModalPayment.due_date
+                              ? new Date(receiptModalPayment.due_date).toLocaleDateString('en-IN', {
+                                day: 'numeric', month: 'short', year: 'numeric'
+                              })
+                              : 'No Due Date'}
+                          </span>
+                        </div>
+                        <div className="flex justify-between items-center gap-2">
+                          <span className="text-[10px] text-emerald-400 font-bold tracking-wider uppercase shrink-0">Paid On</span>
+                          <span className="text-emerald-300 text-[11px] font-mono font-medium text-right">
+                            {receiptModalPayment.paid_at
+                              ? new Date(receiptModalPayment.paid_at).toLocaleString('en-IN', {
+                                day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true
+                              })
+                              : 'N/A'}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Actions */}
+                  <div className="flex gap-3 mt-6">
+                    <motion.button
+                      whileHover={{ scale: 1.02 }}
+                      whileTap={{ scale: 0.98 }}
+                      onClick={() => window.print()}
+                      className="flex-1 py-3 rounded-xl border border-white/10 hover:bg-white/5 text-white font-bold text-xs sm:text-sm transition-colors flex items-center justify-center gap-2 cursor-pointer"
+                    >
+                      <Download className="w-4 h-4" />
+                      Print / Download
+                    </motion.button>
+                    <motion.button
+                      whileHover={{ scale: 1.02 }}
+                      whileTap={{ scale: 0.98 }}
+                      onClick={() => setReceiptModalPayment(null)}
+                      className={`flex-1 py-3 rounded-xl font-bold text-xs sm:text-sm transition-all cursor-pointer ${
+                        isManualVerified
+                          ? 'bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white shadow-[0_0_20px_rgba(168,85,247,0.3)]'
+                          : 'bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-white shadow-[0_0_20px_rgba(16,185,129,0.3)]'
+                      }`}
+                    >
+                      Done
+                    </motion.button>
+                  </div>
                 </div>
-              </div>
+              </motion.div>
             </motion.div>
-          </motion.div>
-        )}
+          );
+        })()}
       </AnimatePresence>
 
       {/* Admin Assign Due to Single Member Modal */}
@@ -4567,6 +4983,50 @@ const Payments: React.FC<PaymentsProps> = ({
                 />
               </div>
 
+              {/* Payment Status Dropdown (SuperAdmin Manual Override) */}
+              <div>
+                <label className="block text-slate-300 font-semibold mb-1">Payment Status (Manual Override)</label>
+                <select
+                  value={editSingleStatus}
+                  onChange={(e) => setEditSingleStatus(e.target.value as PaymentStatus)}
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-surface-container-lowest border border-white/10 text-white focus:outline-none focus:border-amber-500 font-bold text-xs"
+                >
+                  <option value="Paid" className="bg-[#180a2b] text-emerald-400">🟢 Paid (Auto / Gateway Verified)</option>
+                  <option value="Pending" className="bg-[#180a2b] text-amber-400">🟡 Pending (Unpaid)</option>
+                  <option value="Processing" className="bg-[#180a2b] text-blue-400">🔵 Processing</option>
+                  <option value="Failed" className="bg-[#180a2b] text-rose-400">🔴 Failed</option>
+                </select>
+              </div>
+
+              {/* Razorpay Transaction ID (pay_...) with Auto-Fetch */}
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-slate-300 font-semibold">
+                    Razorpay Reference / Transaction ID
+                  </label>
+                  <button
+                    type="button"
+                    disabled={fetchingRazorpayId}
+                    onClick={handleAutoFetchRazorpayId}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-bold bg-purple-500/20 hover:bg-purple-500/35 text-purple-300 border border-purple-500/40 transition-all cursor-pointer disabled:opacity-50"
+                    title="Auto-fetch genuine Razorpay pay_... ID and payment details for this member"
+                  >
+                    <RotateCcw className={`w-3 h-3 ${fetchingRazorpayId ? 'animate-spin text-purple-400' : 'text-purple-300'}`} />
+                    <span>{fetchingRazorpayId ? 'Verifying...' : 'Auto-Fetch from Razorpay'}</span>
+                  </button>
+                </div>
+                <input
+                  type="text"
+                  placeholder="e.g. pay_Q8k39Xm... (or leave blank to auto-detect)"
+                  value={editSinglePaymentId}
+                  onChange={(e) => setEditSinglePaymentId(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-surface-container-lowest border border-white/10 text-white placeholder-slate-500 focus:outline-none focus:border-purple-500 font-mono text-xs"
+                />
+                <p className="text-[10px] text-slate-400 mt-1">
+                  Click <strong>Auto-Fetch from Razorpay</strong> to query Razorpay servers for this candidate&apos;s captured transaction and payment method.
+                </p>
+              </div>
+
               {/* Due Date & Time */}
               <div>
                 <div className="flex items-center justify-between mb-1">
@@ -4678,22 +5138,52 @@ const Payments: React.FC<PaymentsProps> = ({
                   </p>
                 </div>
                 <div className="flex flex-wrap items-center gap-2 shrink-0">
-                  {renderStatusBadge(auditModalPayment.status)}
+                  {renderAdminStatusSelect(auditModalPayment)}
+                  {auditModalPayment.status === 'Paid' && (
+                    <button
+                      type="button"
+                      onClick={() => setReceiptModalPayment(auditModalPayment)}
+                      className="px-2.5 py-1.5 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 text-[11px] sm:text-xs font-bold transition-all flex items-center gap-1 shrink-0 cursor-pointer"
+                      title="View & Download Official Receipt"
+                    >
+                      <Receipt className="w-3.5 h-3.5" />
+                      <span>Receipt</span>
+                    </button>
+                  )}
                   <button
                     onClick={async () => {
                       showToast('Syncing status with Razorpay API...', 'info');
-                      const res = await syncPaymentStatusWithRazorpay(auditModalPayment.id, auditModalPayment.razorpay_order_id);
-                      if (res.updated && res.status === 'Paid') {
-                        setAuditModalPayment((prev) => (prev ? { ...prev, status: 'Paid' } : null));
-                        showToast('Payment confirmed and updated to Paid in Firestore! 🎉', 'success');
-                      } else if (res.status === 'Paid') {
-                        setAuditModalPayment((prev) => (prev ? { ...prev, status: 'Paid' } : null));
-                        showToast('Payment is verified as Paid on Razorpay.', 'success');
-                      } else {
-                        if (res.status) {
-                          setAuditModalPayment((prev) => (prev ? { ...prev, status: res.status as PaymentStatus } : null));
+                      try {
+                        const res = await syncPaymentStatusWithRazorpay(auditModalPayment.id, auditModalPayment.razorpay_order_id);
+                        if (res.updated && res.status === 'Paid') {
+                          setAuditModalPayment((prev) => (prev ? {
+                            ...prev,
+                            status: 'Paid',
+                            razorpay_payment_id: res.razorpay_payment_id || prev.razorpay_payment_id,
+                            payment_method: res.payment_method || prev.payment_method,
+                            paid_at: res.paid_at || prev.paid_at,
+                          } : null));
+                          showToast(`Payment confirmed! Authentic Razorpay ID: ${res.razorpay_payment_id || 'Captured'} 🎉`, 'success');
+                          await loadPayments(userEmail, (isAdminState && adminViewAll) || isFacultyState);
+                        } else if (res.status === 'Paid') {
+                          setAuditModalPayment((prev) => (prev ? {
+                            ...prev,
+                            status: 'Paid',
+                            razorpay_payment_id: res.razorpay_payment_id || prev.razorpay_payment_id,
+                            payment_method: res.payment_method || prev.payment_method,
+                            paid_at: res.paid_at || prev.paid_at,
+                          } : null));
+                          showToast('Payment is verified as Paid on Razorpay.', 'success');
+                          await loadPayments(userEmail, (isAdminState && adminViewAll) || isFacultyState);
+                        } else {
+                          if (res.status) {
+                            setAuditModalPayment((prev) => (prev ? { ...prev, status: res.status as PaymentStatus } : null));
+                          }
+                          showToast(`Sync complete. Status: ${res.status || auditModalPayment.status}`, 'info');
+                          await loadPayments(userEmail, (isAdminState && adminViewAll) || isFacultyState);
                         }
-                        showToast(`Sync complete. Status: ${res.status || auditModalPayment.status}`, 'info');
+                      } catch (err: any) {
+                        showToast(err?.message || 'Error checking Razorpay API', 'error');
                       }
                     }}
                     title="Check status directly with Razorpay API"

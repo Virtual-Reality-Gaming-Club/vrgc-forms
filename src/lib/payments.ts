@@ -118,8 +118,18 @@ export const PROCESSING_TIMEOUT_MS = 12 * 60 * 1000; // 12 minutes
 export async function syncPaymentStatusWithRazorpay(
   paymentId?: string,
   razorpayOrderId?: string,
-  syncAll: boolean = false
-): Promise<{ success: boolean; status?: string; updated?: boolean; syncedCount?: number; correctedCount?: number }> {
+  syncAll: boolean = false,
+  razorpayPaymentId?: string
+): Promise<{
+  success: boolean;
+  status?: string;
+  updated?: boolean;
+  syncedCount?: number;
+  correctedCount?: number;
+  razorpay_payment_id?: string;
+  payment_method?: string;
+  paid_at?: string;
+}> {
   try {
     const authHeaders = await getAuthHeaders();
     const res = await fetch('/api/check-payment-status', {
@@ -132,6 +142,7 @@ export async function syncPaymentStatusWithRazorpay(
         paymentId,
         razorpay_order_id: razorpayOrderId,
         syncAll,
+        razorpay_payment_id: razorpayPaymentId,
       }),
     });
     if (res.ok) {
@@ -167,8 +178,7 @@ export function checkProcessingTimeout(item: PaymentItem): PaymentItem {
     return item;
   }
 
-  const lastUpdatedIso = item.updated_at || item.created_at;
-  const lastUpdatedMs = lastUpdatedIso ? new Date(lastUpdatedIso).getTime() : 0;
+  const lastUpdatedMs = parseTimestampMs(item.updated_at) || parseTimestampMs(item.created_at);
   const nowMs = Date.now();
 
   if (lastUpdatedMs > 0 && nowMs - lastUpdatedMs >= PROCESSING_TIMEOUT_MS) {
@@ -833,11 +843,17 @@ export async function fetchPaymentAttemptsFromFirestore(paymentId: string): Prom
 export function parseTimestampMs(ts: any): number {
   if (!ts) return 0;
   if (typeof ts === 'number') return ts;
+  if (typeof ts === 'object' && typeof ts.toMillis === 'function') {
+    return ts.toMillis();
+  }
   if (typeof ts === 'object' && typeof ts.toDate === 'function') {
     return ts.toDate().getTime();
   }
   if (typeof ts === 'object' && typeof ts.seconds === 'number') {
     return ts.seconds * 1000;
+  }
+  if (typeof ts === 'object' && typeof ts._seconds === 'number') {
+    return ts._seconds * 1000;
   }
   const parsed = new Date(ts).getTime();
   return isNaN(parsed) ? 0 : parsed;
