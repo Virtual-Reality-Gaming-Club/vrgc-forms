@@ -32,7 +32,7 @@ export interface TransactionLog {
   payment_title: string;
   amount: number;
   currency: string;
-  status: 'Pending' | 'Paid' | 'Failed' | 'Cancelled' | 'Processing';
+  status: 'Pending' | 'Paid' | 'Failed' | 'Cancelled' | 'Processing' | 'Expired';
   razorpay_order_id?: string;
   razorpay_payment_id?: string;
   razorpay_signature?: string;
@@ -160,7 +160,13 @@ export async function syncPaymentStatusWithRazorpay(
  * Does NOT alter the underlying database status.
  */
 export function isInvoiceExpired(item: { status?: string; due_date?: string } | null | undefined): boolean {
-  if (!item || !item.due_date || item.status === 'Paid') {
+  if (!item || item.status === 'Paid') {
+    return false;
+  }
+  if (item.status === 'Expired') {
+    return true;
+  }
+  if (!item.due_date) {
     return false;
   }
   const dueMs = new Date(item.due_date).getTime();
@@ -559,7 +565,7 @@ export async function updatePaymentStatusInFirestore(
     if (updates.status === 'Paid' && !updates.paid_at) {
       finalUpdates.paid_at = nowIso;
     }
-    if ((updates.status === 'Failed' || updates.status === 'Cancelled') && !updates.failed_at) {
+    if ((updates.status === 'Failed' || updates.status === 'Cancelled' || updates.status === 'Expired') && !updates.failed_at) {
       finalUpdates.failed_at = nowIso;
     }
     await updateDoc(docRef, finalUpdates);
@@ -654,7 +660,7 @@ export async function saveTransactionToFirestore(tx: {
   payment_title: string;
   amount: number;
   currency?: string;
-  status: 'Paid' | 'Failed' | 'Pending' | 'Processing' | 'Cancelled';
+  status: 'Paid' | 'Failed' | 'Pending' | 'Processing' | 'Cancelled' | 'Expired';
   razorpay_payment_id?: string;
   razorpay_order_id?: string;
   razorpay_signature?: string;

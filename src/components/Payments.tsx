@@ -1231,9 +1231,10 @@ const Payments: React.FC<PaymentsProps> = ({
   ) => {
     if (!isAdminState || !item) return;
 
+    const currentEffectiveStatus = item.status === 'Paid' ? 'Paid' : (isInvoiceExpired(item) || item.status === 'Expired') ? 'Expired' : (item.status || 'Pending');
     // Don't no-op if already Paid but has a synthetic manual_ ID, because the user wants to auto-verify & fetch the real Razorpay pay_... ID!
     if (
-      item.status === newStatus &&
+      currentEffectiveStatus === newStatus &&
       !explicitPaymentId &&
       !(newStatus === 'Paid' && (!item.razorpay_payment_id || item.razorpay_payment_id.startsWith('manual_')))
     ) {
@@ -1337,6 +1338,12 @@ const Payments: React.FC<PaymentsProps> = ({
         failed_at: item.failed_at || nowIso,
         error_description: 'Marked as failed by admin',
       };
+    } else if (newStatus === 'Expired') {
+      updates = {
+        ...updates,
+        failed_at: item.failed_at || nowIso,
+        error_description: 'Marked as expired by admin (payment deadline exceeded)',
+      };
     } else if (newStatus === 'Processing') {
       updates = {
         ...updates,
@@ -1348,9 +1355,6 @@ const Payments: React.FC<PaymentsProps> = ({
       const ok = await updatePaymentStatusInFirestore(item.id, updates);
 
       if (ok) {
-        const txStatus: 'Paid' | 'Failed' | 'Pending' | 'Processing' | 'Cancelled' =
-          newStatus === 'Expired' ? 'Failed' : newStatus;
-
         // Save transaction attempt log for audit trail
         saveTransactionToFirestore({
           payment_id: item.id,
@@ -1361,7 +1365,7 @@ const Payments: React.FC<PaymentsProps> = ({
           payment_title: item.title,
           amount: item.amount,
           currency: item.currency || 'INR',
-          status: txStatus,
+          status: newStatus,
           paid_at: updates.paid_at,
           failed_at: updates.failed_at,
           payment_method: updates.payment_method,
@@ -1372,6 +1376,8 @@ const Payments: React.FC<PaymentsProps> = ({
                 : 'Auto-verified with Razorpay API and marked Paid by SuperAdmin')
             : newStatus === 'Failed'
             ? 'Marked as Failed by SuperAdmin'
+            : newStatus === 'Expired'
+            ? 'Marked as Expired by SuperAdmin (payment deadline exceeded)'
             : `Status changed to ${newStatus} by SuperAdmin`,
         }).catch((e) => console.warn('Manual status tx log warning:', e));
 
@@ -1422,12 +1428,13 @@ const Payments: React.FC<PaymentsProps> = ({
   // Open Edit Single Payment Modal
   const handleOpenEditSingle = (payment: PaymentItem) => {
     const { date, time } = splitDueDateTime(payment.due_date);
+    const isExp = isInvoiceExpired(payment) || payment.status === 'Expired';
     setEditSinglePayment(payment);
     setEditSingleTitle(payment.title);
     setEditSingleDescription(payment.description || '');
     setEditSingleDueDate(date);
     setEditSingleDueTime(time);
-    setEditSingleStatus(payment.status || 'Pending');
+    setEditSingleStatus(payment.status === 'Paid' ? 'Paid' : isExp ? 'Expired' : payment.status || 'Pending');
     setEditSinglePaymentId(payment.razorpay_payment_id || '');
   };
 
@@ -1485,8 +1492,14 @@ const Payments: React.FC<PaymentsProps> = ({
 
       if (ok) {
         // If status or payment ID was changed/entered, apply manual status update
+        const origEffectiveStatus =
+          editSinglePayment.status === 'Paid'
+            ? 'Paid'
+            : isInvoiceExpired(editSinglePayment) || editSinglePayment.status === 'Expired'
+            ? 'Expired'
+            : editSinglePayment.status || 'Pending';
         if (
-          editSingleStatus !== editSinglePayment.status ||
+          editSingleStatus !== origEffectiveStatus ||
           cleanPaymentId !== (editSinglePayment.razorpay_payment_id || '')
         ) {
           await handleManualStatusChange(editSinglePayment, editSingleStatus, cleanPaymentId || undefined);
@@ -1642,7 +1655,7 @@ const Payments: React.FC<PaymentsProps> = ({
 
     if (statusFilter && statusFilter !== 'All') {
       exportItems = exportItems.filter((p) => {
-        const isExp = isInvoiceExpired(p);
+        const isExp = (isInvoiceExpired(p) || p.status === 'Expired') && p.status !== 'Paid';
         if (statusFilter === 'Unpaid') return (p.status === 'Pending' || p.status === 'Failed' || p.status === 'Processing') && !isExp;
         if (statusFilter === 'Paid') return p.status === 'Paid';
         if (statusFilter === 'Expired') return isExp;
@@ -2014,9 +2027,10 @@ const Payments: React.FC<PaymentsProps> = ({
       const matchesStatus =
         selectedStatus === 'All' ||
         (selectedStatus === 'Paid' && items.some((i) => i.status === 'Paid')) ||
-        (selectedStatus === 'Pending' && items.some((i) => i.status === 'Pending')) ||
-        (selectedStatus === 'Processing' && items.some((i) => i.status === 'Processing')) ||
-        (selectedStatus === 'Failed' && items.some((i) => i.status === 'Failed'));
+        (selectedStatus === 'Pending' && items.some((i) => (i.status === 'Pending' || !i.status) && !isInvoiceExpired(i))) ||
+        (selectedStatus === 'Processing' && items.some((i) => i.status === 'Processing' && !isInvoiceExpired(i))) ||
+        (selectedStatus === 'Failed' && items.some((i) => i.status === 'Failed' && !isInvoiceExpired(i))) ||
+        (selectedStatus === 'Expired' && items.some((i) => isInvoiceExpired(i) && i.status !== 'Paid'));
       const matchesSearch =
         !searchQuery.trim() ||
         title.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -2050,15 +2064,16 @@ const Payments: React.FC<PaymentsProps> = ({
   // Statistics calculation
   const stats = useMemo(() => {
     const totalPending = payments
-      .filter((p) => p.status === 'Pending' || p.status === 'Processing' || p.status === 'Failed')
+      .filter((p) => p.status !== 'Paid')
       .reduce((sum, p) => sum + Number(p.amount), 0);
     const totalPaid = payments
       .filter((p) => p.status === 'Paid')
       .reduce((sum, p) => sum + Number(p.amount), 0);
-    const pendingCount = payments.filter((p) => p.status === 'Pending' || p.status === 'Processing').length;
-    const failedCount = payments.filter((p) => p.status === 'Failed').length;
+    const pendingCount = payments.filter((p) => (p.status === 'Pending' || p.status === 'Processing' || !p.status) && !isInvoiceExpired(p)).length;
+    const failedCount = payments.filter((p) => p.status === 'Failed' && !isInvoiceExpired(p)).length;
+    const expiredCount = payments.filter((p) => isInvoiceExpired(p) && p.status !== 'Paid').length;
     const paidCount = payments.filter((p) => p.status === 'Paid').length;
-    return { totalPending, totalPaid, pendingCount, failedCount, paidCount, total: payments.length };
+    return { totalPending, totalPaid, pendingCount, failedCount, expiredCount, paidCount, total: payments.length };
   }, [payments]);
 
   // Filtered items for the Active Campaign Roster modal
@@ -2076,13 +2091,13 @@ const Payments: React.FC<PaymentsProps> = ({
         regNo.toLowerCase().includes(rosterSearch.toLowerCase()) ||
         email.includes(rosterSearch.toLowerCase());
 
-      const isExp = isInvoiceExpired(item);
+      const isExp = (isInvoiceExpired(item) || item.status === 'Expired') && item.status !== 'Paid';
       const matchesStatus =
         rosterStatusFilter === 'All' ||
         (rosterStatusFilter === 'Unpaid' && (item.status === 'Pending' || item.status === 'Failed' || item.status === 'Processing') && !isExp) ||
         (rosterStatusFilter === 'Paid' && item.status === 'Paid') ||
         (rosterStatusFilter === 'Expired' && isExp) ||
-        (rosterStatusFilter === 'Pending' && item.status === 'Pending' && !isExp) ||
+        (rosterStatusFilter === 'Pending' && (item.status === 'Pending' || !item.status) && !isExp) ||
         (rosterStatusFilter === 'Processing' && item.status === 'Processing' && !isExp) ||
         (rosterStatusFilter === 'Failed' && item.status === 'Failed' && !isExp);
 
@@ -2142,28 +2157,33 @@ const Payments: React.FC<PaymentsProps> = ({
   // Interactive SuperAdmin Status Selector (Desktop + Mobile Responsive)
   const renderAdminStatusSelect = (item: PaymentItem) => {
     if (!isAdminState) {
-      return renderStatusBadge(isInvoiceExpired(item) ? 'Expired' : paymentStatusToString(item.status));
+      return renderStatusBadge(isInvoiceExpired(item) || item.status === 'Expired' ? 'Expired' : paymentStatusToString(item.status));
     }
 
     const isUpdating = updatingManualStatusId === item.id;
-    const currentStatus = item.status || 'Pending';
-    const expired = isInvoiceExpired(item);
+    const expired = (isInvoiceExpired(item) || item.status === 'Expired') && item.status !== 'Paid';
+    const effectiveStatus: PaymentStatus =
+      item.status === 'Paid'
+        ? 'Paid'
+        : expired
+        ? 'Expired'
+        : item.status || 'Pending';
 
     return (
       <div className="relative inline-flex items-center">
         <select
-          value={currentStatus}
+          value={effectiveStatus}
           disabled={isUpdating}
           onChange={(e) => handleManualStatusChange(item, e.target.value as PaymentStatus)}
           className={`appearance-none cursor-pointer pl-2.5 pr-6 py-1 rounded-full text-[10px] sm:text-xs font-bold border transition-all focus:outline-none focus:ring-1 focus:ring-purple-400 disabled:opacity-50 select-none ${
-            currentStatus === 'Paid'
+            effectiveStatus === 'Paid'
               ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-400 hover:bg-emerald-500/25'
-              : currentStatus === 'Processing'
+              : effectiveStatus === 'Processing'
               ? 'bg-blue-500/15 border-blue-500/40 text-blue-400 hover:bg-blue-500/25'
-              : currentStatus === 'Failed'
+              : effectiveStatus === 'Failed'
               ? 'bg-rose-500/15 border-rose-500/40 text-rose-400 hover:bg-rose-500/25'
-              : expired
-              ? 'bg-rose-500/10 border-rose-500/30 text-rose-300 hover:bg-rose-500/20'
+              : effectiveStatus === 'Expired'
+              ? 'bg-rose-500/15 border-rose-500/40 text-rose-400 hover:bg-rose-500/25'
               : 'bg-amber-500/15 border-amber-500/40 text-amber-400 hover:bg-amber-500/25'
           }`}
           title="SuperAdmin: Click to manually change status"
@@ -2172,6 +2192,7 @@ const Payments: React.FC<PaymentsProps> = ({
           <option value="Pending" className="bg-[#180a2b] text-amber-400">🟡 Pending</option>
           <option value="Processing" className="bg-[#180a2b] text-blue-400">🔵 Processing</option>
           <option value="Failed" className="bg-[#180a2b] text-rose-400">🔴 Failed</option>
+          <option value="Expired" className="bg-[#180a2b] text-rose-400">🔴 Expired</option>
         </select>
         {isUpdating ? (
           <RotateCcw className="w-3 h-3 text-purple-400 animate-spin absolute right-1.5 pointer-events-none" />
@@ -2539,6 +2560,7 @@ const Payments: React.FC<PaymentsProps> = ({
               <option value="Processing" className="bg-[#0e0518] text-blue-400">Processing</option>
               <option value="Paid" className="bg-[#0e0518] text-emerald-400">Paid</option>
               <option value="Failed" className="bg-[#0e0518] text-rose-400">Failed</option>
+              <option value="Expired" className="bg-[#0e0518] text-rose-400">Expired</option>
             </select>
             <Filter className="absolute right-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-purple-400 pointer-events-none" />
           </div>
@@ -2995,7 +3017,7 @@ const Payments: React.FC<PaymentsProps> = ({
                     <option value="Pending" className="bg-[#0e0518] text-amber-400">Status: Pending</option>
                     <option value="Processing" className="bg-[#0e0518] text-blue-400">Status: Processing</option>
                     <option value="Failed" className="bg-[#0e0518] text-rose-400">Status: Failed</option>
-                    <option value="Expired" className="bg-[#0e0518] text-slate-400">Status: Expired</option>
+                    <option value="Expired" className="bg-[#0e0518] text-rose-400">Status: Expired</option>
                   </select>
                   <Filter className="absolute right-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-purple-400 pointer-events-none" />
                 </div>
@@ -4995,6 +5017,7 @@ const Payments: React.FC<PaymentsProps> = ({
                   <option value="Pending" className="bg-[#180a2b] text-amber-400">🟡 Pending (Unpaid)</option>
                   <option value="Processing" className="bg-[#180a2b] text-blue-400">🔵 Processing</option>
                   <option value="Failed" className="bg-[#180a2b] text-rose-400">🔴 Failed</option>
+                  <option value="Expired" className="bg-[#180a2b] text-rose-400">🔴 Expired</option>
                 </select>
               </div>
 
